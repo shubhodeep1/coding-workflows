@@ -969,6 +969,31 @@ def test_cancelled_gate_records_runner_wait_cause() -> None:
 		assert "gate_cancel_cause=unknown\n" in final["github_output"], state
 
 
+def test_cancelled_gate_cause_is_unknown_when_candidates_stay_unread() -> None:
+	# Seven cancelled watch-step jobs: the six-read budget leaves the seventh
+	# (the one carrying the self-cancel line) unread, so the cause is not
+	# proven foreign: unknown, not other.
+	jobs = {"jobs": [{"id": 70 + i, "name": f"e2e-{i}", "conclusion": "cancelled",
+		"steps": [{"name": f"Dispatch & watch — job {i}", "conclusion": "cancelled"}]} for i in range(7)]}
+	logs = {str(70 + i): "2026-11-28T13:06:54Z nothing here\n" for i in range(6)}
+	logs["76"] = "2026-11-28T13:06:54Z " + GATE_WAIT_LINE.format(gate=500) + "\n"
+	proc, final = _cancel_cause_run(gate_jobs=jobs, job_logs=logs)
+	assert "PROMOTE_CYCLE_SKIPPED reason=smoke_gate_cancelled run=500 cause=unknown\n" in proc.stdout
+	assert len(final["log_reads"]) == 6
+
+
+def test_gate_cancel_cause_watch_steps_exist_in_the_gate_workflow() -> None:
+	# A renamed watch step would silently turn every runner-wait cancel into
+	# cause=other; keep the names in gate_cancel_cause and the gate in step.
+	gate = (REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8")
+	names = [m.group(1) for m in re.finditer(r'^\s*- name:\s*"?(.*?)"?\s*$', gate, re.M)]
+	for exact in ("Phase 4: Wait for review & autofix to complete", "Dispatch internal-orchestrate.yml with multi-issue project",
+		"Dispatch internal-validate.yml standalone", ALT_MODEL_STEP):
+		assert exact in names, exact
+		assert exact in SCRIPT.read_text(encoding="utf-8"), exact
+	assert any(n.startswith("Dispatch & watch — ") for n in names)
+
+
 # --- pinned promote cycle (phase 3) -------------------------------------------
 
 PIN_REUSABLE = (
@@ -2218,12 +2243,18 @@ def test_retry_check_gate_cancel_cap_per_tip() -> None:
 	proc, final = _retry_check({"self_runs": three_on_tip, "self_run_jobs": {"883": _cancel_marker_jobs()}}, {"PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX": "4"})
 	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=883 age_min=120 reason=gate_runner_wait_cancel" in proc.stdout
 	assert len(final["dispatches"]) == 1
-	# Retries on another tip, or older than 24 h, do not count.
+	# Retries older than 24 h do not count.
 	other = "8" * 40
-	mixed = [retry(881, 26 * 60), retry(882, 250, head=other), retry(883, 120)]
+	mixed = [retry(880, 30 * 60), retry(881, 26 * 60), retry(882, 250), retry(883, 120)]
 	proc, final = _retry_check({"self_runs": mixed, "self_run_jobs": {"883": _cancel_marker_jobs()}})
 	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=883 age_min=120 reason=gate_runner_wait_cancel" in proc.stdout
 	assert len(final["dispatches"]) == 1
+	# Retries on other tips count: each retry runs on main's tip at dispatch,
+	# so a moving main must not restart the count.
+	moving = [retry(881, 400, head="7" * 40), retry(882, 250, head=other), retry(883, 120)]
+	proc, final = _retry_check({"self_runs": moving, "self_run_jobs": {"883": _cancel_marker_jobs()}})
+	assert f"PROMOTE_CYCLE_RETRY outcome=cap_reached reason=gate_runner_wait_cancel after_run=883 head={TIP[:12]} retries=3 max=3\n" in proc.stdout
+	assert not final.get("dispatches")
 	# The cap applies only to the gate-cancel path, not to runner_wait_long.
 	proc, final = _retry_check({"self_runs": three_on_tip, "self_run_jobs": {"883": _marker_jobs()}})
 	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=883 age_min=120\n" in proc.stdout
@@ -2231,10 +2262,10 @@ def test_retry_check_gate_cancel_cap_per_tip() -> None:
 	proc, final = _retry_check({"self_runs": three_on_tip, "self_run_jobs": {"883": _cancel_marker_jobs()}}, {"PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX": "0"})
 	assert "::warning::PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX must be an integer from 1 to 99; using 3." in proc.stdout
 	assert "outcome=cap_reached" in proc.stdout and "max=3" in proc.stdout
-	# An unusable head_sha on the newest cycle run fails closed.
+	# The head_sha only labels the cap line; an unusable one does not block.
 	proc, final = _retry_check({"self_runs": [_retry_run(head_sha="bad")], "self_run_jobs": {"880": _cancel_marker_jobs()}})
-	assert "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=head_sha run=880 reason=gate_runner_wait_cancel" in proc.stdout
-	assert not final.get("dispatches")
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=880 age_min=120 reason=gate_runner_wait_cancel" in proc.stdout
+	assert len(final["dispatches"]) == 1
 
 
 def test_promote_workflow_wires_the_gate_cancel_marker() -> None:

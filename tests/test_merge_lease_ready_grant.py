@@ -243,9 +243,11 @@ def _gate_cache(minutes_ago: float = 10, status: str = "in_progress") -> str:
 		"path": ".github/workflows/test-and-mark-stable.yml", "created_at": created}])
 
 
-def _ready_final_ci_call(prelude: str, env: dict[str, str] | None = None) -> tuple[_Harness, str]:
+def _ready_final_ci_call(prelude: str, env: dict[str, str] | None = None, active_runs: list[dict] | None = None) -> tuple[_Harness, str]:
 	st = _free([_pull(5)], [5])
 	_gates_ok(st, 5)
+	if active_runs is not None:
+		st["active_runs"] = active_runs
 	h = _Harness(st)
 	body = (f'{prelude}\nMERGE_LEASE_FINAL_CI_STATE=absent\n'
 		f'_mt_merge_lease_ready_final_ci 5 "{_sha(5)}" ai/issue-5 owner/repo; '
@@ -262,14 +264,27 @@ def test_ready_final_ci_passes_tick_run_cache_for_gate_hold() -> None:
 	assert "reason=release_gate_active" in out
 	assert _ci_dispatches(h) == []
 	held_api = [c for c in h.calls if c.startswith("gh api")]
-	# A cache that is not "ok" is never read: runs_unread, dispatch as before.
-	for prelude in ('_MT_LEASE_RUNS_STATE=failed; _MT_LEASE_RUNS_JSON="${GATE_CACHE}"', '_MT_LEASE_RUNS_STATE=""; _MT_LEASE_RUNS_JSON=""'):
-		h2, out2 = _ready_final_ci_call(prelude)
-		assert f"RELEASE_GATE_FINAL_CI_HOLD outcome=runs_unread pr=5 head={_sha(5)}" in out2, prelude
-		assert "rc=0 held=0 outcome=dispatched" in out2, prelude
-		assert len(_ci_dispatches(h2)) == 1, prelude
-		# No extra API read either way.
-		assert [c for c in h2.calls if c.startswith("gh api")] == held_api, prelude
+	# A failed cache is never read again: runs_unread, dispatch as before.
+	h2, out2 = _ready_final_ci_call('_MT_LEASE_RUNS_STATE=failed; _MT_LEASE_RUNS_JSON="${GATE_CACHE}"')
+	assert f"RELEASE_GATE_FINAL_CI_HOLD outcome=runs_unread pr=5 head={_sha(5)}" in out2
+	assert "rc=0 held=0 outcome=dispatched" in out2
+	assert len(_ci_dispatches(h2)) == 1
+	assert [c for c in h2.calls if c.startswith("gh api")] == held_api
+	# A cache nothing filled yet this tick is filled once, through the tick's
+	# active-run listing pass, so a free-lease tick is held too.
+	gate_run = json.loads(_gate_cache())[0]
+	h5, out5 = _ready_final_ci_call('_MT_LEASE_RUNS_STATE=""; _MT_LEASE_RUNS_JSON=""', active_runs=[gate_run])
+	assert "rc=1 held=1 outcome=deferred" in out5, out5
+	assert "RELEASE_GATE_FINAL_CI_HOLD outcome=deferred pr=5" in out5 and "runs_unread" not in out5
+	assert _ci_dispatches(h5) == []
+	assert any("actions/runs?status=" in c for c in h5.calls), h5.calls
+	h6, out6 = _ready_final_ci_call('_MT_LEASE_RUNS_STATE=""; _MT_LEASE_RUNS_JSON=""', active_runs=[])
+	assert "rc=0 held=0 outcome=dispatched" in out6 and "RELEASE_GATE_FINAL_CI_HOLD" not in out6, out6
+	assert len(_ci_dispatches(h6)) == 1
+	# With the hold off (0) the listing is not made.
+	h7, out7 = _ready_final_ci_call('_MT_LEASE_RUNS_STATE=""; _MT_LEASE_RUNS_JSON=""', {"RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES": "0"}, active_runs=[gate_run])
+	assert "rc=0 held=0 outcome=dispatched" in out7
+	assert not any("actions/runs?status=" in c for c in h7.calls), h7.calls
 	# An "ok" cache without an active gate dispatches unchanged, with no hold line.
 	h3, out3 = _ready_final_ci_call('_MT_LEASE_RUNS_STATE=ok; _MT_LEASE_RUNS_JSON="[]"')
 	assert "rc=0 held=0 outcome=dispatched" in out3
@@ -299,6 +314,19 @@ def test_seeded_tick_gate_hold_tries_no_later_waiter() -> None:
 	h, out = _tick(st, {**FCI, "GATE_CACHE": "[]"}, prelude=prelude)
 	assert "RELEASE_GATE_FINAL_CI_HOLD" not in out
 	assert len(_ci_dispatches(h)) == 1
+
+
+def test_unseeded_free_lease_tick_is_held_by_an_active_gate() -> None:
+	# Free lease, empty merge-train queue: nothing seeded the cache, so the
+	# step-3 dispatch fills it once and the active gate holds the run.
+	st = _free([_pull(5), _pull(6)], [5, 6])
+	_gates_ok(st, 5, 6)
+	st["active_runs"] = json.loads(_gate_cache())
+	h, out = _tick(st, FCI)
+	assert out.count("RELEASE_GATE_FINAL_CI_HOLD outcome=deferred") == 1, out
+	assert "runs_unread" not in out
+	assert _ci_dispatches(h) == []
+	assert not any(f"head_sha={_sha(6)}" in c and "ci.yml/runs" in c for c in h.calls), h.calls
 
 
 class ConflictRelease(unittest.TestCase):

@@ -3094,9 +3094,15 @@ _mt_merge_lease_tick_multi()
 # Release-gate hold (issue #10266): when this tick's lease run cache is filled
 # (_MT_LEASE_RUNS_STATE=ok) it is passed as PR_FINAL_CI_RELEASE_GATE_RUNS_JSON,
 # so a full final CI waits while a test-and-mark-stable.yml run is active
-# (outcome deferred, return 1: the next tick decides again). An unfilled cache
-# is never read here (no API call); it logs `RELEASE_GATE_FINAL_CI_HOLD
-# outcome=runs_unread pr= head=` and dispatches as before. Sets
+# (outcome deferred, return 1: the next tick decides again). A cache nothing
+# filled yet this tick (state "": no holder check, priority-lane check or
+# release pass listed) is filled here through the tick's one active-run
+# listing pass (_mt_inflight_review_branches + _mt_lease_runs_seed, as
+# _mt_lease_pr_runs_active does), only on this path right before a dispatch
+# and never while RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES is 0; later uses in
+# the tick read the cache. A failed listing (state "failed") logs
+# `RELEASE_GATE_FINAL_CI_HOLD outcome=runs_unread pr= head=` and dispatches
+# as before (fail-open). Sets
 # MT_LEASE_FINAL_CI_GATE_HELD=1 (0 otherwise, reset on every call) when the
 # gate held the dispatch, so both callers stop trying later waiters of that
 # base in this tick, as after a dispatch (no further reads).
@@ -3104,7 +3110,7 @@ MT_LEASE_FINAL_CI_GATE_HELD=0
 _mt_merge_lease_ready_final_ci()
 {
 	local rfc_pr="${1:-}" rfc_sha="${2:-}" rfc_ref="${3:-}" rfc_repo="${4:-}" rfc_wf="${REVIEW_FINAL_CI_WORKFLOW:-}" rfc_runs="" rfc_decision=""
-	local rfc_gate_runs=""
+	local rfc_gate_runs="" rfc_list_rc=0
 	MT_LEASE_FINAL_CI_GATE_HELD=0
 	[ -n "${rfc_wf}" ] || return 1
 	[ "${MERGE_LEASE_FINAL_CI_STATE:-}" = "absent" ] || return 1
@@ -3117,6 +3123,14 @@ _mt_merge_lease_ready_final_ci()
 	rfc_runs="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/actions/workflows/${rfc_wf}/runs?head_sha=${rfc_sha}&per_page=20" 2>/dev/null)" || return 1
 	rfc_decision="$(printf '%s' "${rfc_runs}" | jq -r --arg path ".github/workflows/${rfc_wf}" --arg sha "${rfc_sha}" "${PR_FINAL_CI_JQ_DECISION_DEF}"' _pr_final_ci_decision' 2>/dev/null | tail -n1)" || return 1
 	[ "${rfc_decision}" = "dispatch no_run" ] || return 1
+	# Issue #10266: a free-lease tick usually reaches this point with no
+	# listing made yet; fill the cache once (see the header) so the hold
+	# also covers it. Runs in this shell so the cache persists for the tick.
+	if [ -z "${_MT_LEASE_RUNS_STATE:-}" ] && ! [[ "${RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES:-300}" =~ ^0+$ ]] \
+		&& declare -F _mt_inflight_review_branches >/dev/null 2>&1; then
+		_mt_inflight_review_branches >/dev/null || rfc_list_rc=$?
+		_mt_lease_runs_seed "${rfc_list_rc}"
+	fi
 	if [ "${_MT_LEASE_RUNS_STATE:-}" = "ok" ] && [ -n "${_MT_LEASE_RUNS_JSON:-}" ]; then
 		rfc_gate_runs="${_MT_LEASE_RUNS_JSON}"
 	else

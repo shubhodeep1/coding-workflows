@@ -166,10 +166,11 @@
 #                                       skipped with smoke_gate_cancelled
 #                                       cause=runner_wait (reason=gate_runner_wait_cancel)
 #   PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX default 3 (issue #10266): at most this many
-#                                       poller retries per main tip (same head_sha,
-#                                       last 24 h) after a gate runner-wait
-#                                       self-cancel; 1-99, any other value warns and
-#                                       uses 3
+#                                       poller retries after a gate runner-wait
+#                                       self-cancel: [cycle-retry] runs created in
+#                                       the last 24 h on any main tip (retries run on
+#                                       the tip of their dispatch); 1-99, any other
+#                                       value warns and uses 3
 #                                       and when a release-blocker report is not delivered
 #   RELEASE_BLOCKER_HEAL_ENABLED        default true (kill switch for the
 #                                       release-blocker reporters below)
@@ -556,6 +557,8 @@ gate_cancel_cause()
 			*) continue ;;
 		esac
 		if [ "${checked}" -ge 6 ]; then
+			# Candidates left unread: not proven foreign, so unknown, not other.
+			read_failed="true"
 			break
 		fi
 		checked=$((checked + 1))
@@ -1848,11 +1851,13 @@ release_blocker_on_skip()
 # runner wait (its "Record runner-wait gate cancel for the poller retry"
 # marker step ran) is retried the same way, logged with
 # reason=gate_runner_wait_cancel. A cancel by a person or another run leaves
-# no marker (outcome=not_runner_wait). That path is also capped per main tip:
-# once PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX [cycle-retry] runs on the same
-# head_sha were created in the last 24 h (counted from the runs listing above,
-# no extra call) it logs outcome=cap_reached and dispatches nothing. The
-# runner_wait_long path is unchanged and uncapped.
+# no marker (outcome=not_runner_wait). That path is also capped: once
+# PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX [cycle-retry] runs were created in the
+# last 24 h, on any main tip (each retry runs on the tip of its dispatch, so a
+# per-head count would restart whenever main moves; runner_wait_long retries
+# count too), counted from the runs listing above (per_page=100, no extra
+# call), it logs outcome=cap_reached and dispatches nothing. The
+# runner_wait_long path itself is unchanged and uncapped.
 promote_cycle_retry_check()
 {
 	local rc_runs="" rc_active="" rc_fields="" rc_id="" rc_status="" rc_conclusion="" rc_updated="" rc_age="" rc_jobs="" rc_marker=""
@@ -1866,7 +1871,10 @@ promote_cycle_retry_check()
 		echo "PROMOTE_CYCLE_RETRY outcome=disabled reason=runner_wait_check_off"
 		return 0
 	fi
-	if ! rc_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_WORKFLOW_FILE}/runs?per_page=20" 2>/dev/null)" \
+	# per_page=100 (issue #10266): this one listing also counts the
+	# gate-cancel retries of the last 24 h, so it must hold more runs than
+	# the largest cap (99).
+	if ! rc_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_WORKFLOW_FILE}/runs?per_page=100" 2>/dev/null)" \
 		|| ! printf '%s' "${rc_runs}" | jq -e '(.workflow_runs | type) == "array"' >/dev/null 2>&1; then
 		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=runs"
 		return 0
@@ -1922,17 +1930,20 @@ promote_cycle_retry_check()
 			return 0
 		fi
 		rc_reason="gate_runner_wait_cancel"
-		if ! [[ "${rc_head:-}" =~ ^[0-9a-f]{40}$ ]]; then
-			echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=head_sha run=${rc_id} reason=${rc_reason}"
-			return 0
-		fi
-		rc_tip_retries="$(printf '%s' "${rc_runs}" | jq -r --arg retry_title "${PROMOTE_CYCLE_RETRY_TITLE}" --arg head "${rc_head}" '[.workflow_runs[]? | select(.event == "workflow_dispatch" and (.display_title // "") == $retry_title and (.head_sha // "") == $head) | select((((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0) > (now - 86400))] | length' 2>/dev/null || true)"
+		# Counted on any head: each retry runs on main's tip at dispatch, so a
+		# head_sha filter restarts the count whenever main moves, and a pool
+		# that never clears could start a gate every hour. Every [cycle-retry]
+		# run created in the last 24 h counts, the retries of runner_wait_long
+		# skips included (the listing carries no step data). head= in the
+		# cap line is the newest cycle run's head, for context only.
+		rc_head="$(printf '%s' "${rc_head:-}" | tr -cd '0-9a-f' | cut -c1-12)"
+		rc_tip_retries="$(printf '%s' "${rc_runs}" | jq -r --arg retry_title "${PROMOTE_CYCLE_RETRY_TITLE}" '[.workflow_runs[]? | select(.event == "workflow_dispatch" and (.display_title // "") == $retry_title) | select((((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0) > (now - 86400))] | length' 2>/dev/null || true)"
 		if ! [[ "${rc_tip_retries}" =~ ^[0-9]+$ ]]; then
 			echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=runs run=${rc_id} reason=${rc_reason}"
 			return 0
 		fi
 		if [ "${rc_tip_retries}" -ge "${PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX}" ]; then
-			echo "PROMOTE_CYCLE_RETRY outcome=cap_reached reason=${rc_reason} after_run=${rc_id} head=${rc_head:0:12} retries=${rc_tip_retries} max=${PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX}"
+			echo "PROMOTE_CYCLE_RETRY outcome=cap_reached reason=${rc_reason} after_run=${rc_id} head=${rc_head:-unknown} retries=${rc_tip_retries} max=${PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX}"
 			return 0
 		fi
 	fi
