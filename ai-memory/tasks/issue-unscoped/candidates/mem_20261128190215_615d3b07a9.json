@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "The merged runs frequently pair edits under `.github/workflows/` with targeted tests covering workflow wiring, checkout/ref behavior, step scripts, or CI behavior. When changing workflow behavior, look for and update the corresponding contract tests rather than relying only on general CI coverage.",
+  "fingerprint": "e5b3a0c67865e7ad5331dcb968602e677d7909df6862a5d193baefb151e0d240",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46177848082",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46177848082",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10124",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10229",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10240",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10270",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9342",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10126",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10237",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10244",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10271",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9359"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261128190215_615d3b07a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes are often validated through focused contract or integration tests.",
+  "timestamps": {
+    "created_at": "2026-11-28T19:02:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
