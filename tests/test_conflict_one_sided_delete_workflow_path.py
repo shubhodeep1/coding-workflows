@@ -14,11 +14,18 @@ fix cannot weaken it:
 - deleting it counts as touched, passes, and is staged into the
   two-parent `[ai-merge-resolve]` commit;
 - editing an unrelated file instead still fails.
+
+#10120 adds the verifier side: a must_contain fingerprint on the file is
+satisfied when the base branch deleted it after capture (logged as
+FINGERPRINT_BASE_DELETION_SUPERSEDED_V1), while a deletion before capture or
+by an `[ai-merge-resolve]` commit still fails.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -27,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PREPARE = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
 RESOLVE = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
 CHECK_DIFF = REPO_ROOT / "scripts" / "check_resolver_diff.sh"
+VERIFIER = REPO_ROOT / "scripts" / "verify_integration_fingerprints.py"
 WORKFLOW = ".github/workflows/x.yml"
 REPLACEMENT = ".github/workflows/y.yml"
 CONFLICTED_SET_CMD = "git ls-files --unmerged | awk '{print $4}' | sort -u >> \"${CONFLICTED_PATHS_FILE}\""
@@ -40,7 +48,7 @@ def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
 	return subprocess.run(["git", *args], cwd=repo, env=_env(), check=check, text=True, capture_output=True)
 
 
-def _conflict(repo: Path, *, reverse: bool = False) -> None:
+def _conflict(repo: Path, *, reverse: bool = False, delete_subject: str = "fold x.yml into y.yml") -> None:
 	"""`feat` (HEAD) edits the workflow and `main` deletes it; `reverse` swaps the sides."""
 	_git(repo, "init", "-q", "-b", "main")
 	_git(repo, "config", "user.name", "t")
@@ -65,7 +73,7 @@ def _conflict(repo: Path, *, reverse: bool = False) -> None:
 			encoding="utf-8",
 		)
 		_git(repo, "add", "-A")
-		_git(repo, "commit", "-qm", "fold x.yml into y.yml")
+		_git(repo, "commit", "-qm", delete_subject)
 
 	_git(repo, "checkout", "-q", "-b", "feat")
 	if reverse:
@@ -301,3 +309,209 @@ def test_unrelated_edit_does_not_satisfy_the_guard() -> None:
 		assert "RC=1" in result.stdout, result.stdout + result.stderr
 		assert "Conflict resolver edited files outside the conflicted set" in result.stderr
 		assert "check_resolver_diff: OK" not in result.stdout
+
+
+# --- #10120: the fingerprint verifier accepts a base deletion made after capture.
+
+BEFORE_ALL_COMMITS = "2000-01-01T00:00:00Z"
+AFTER_ALL_COMMITS = "2999-01-01T00:00:00Z"
+SUPERSEDED_MARKER = "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1"
+INVALID_FLAG_WARNING = "invalid INTEGRATION_FINGERPRINT_BASE_DELETION_SUPERSEDE_ENABLED"
+
+
+def _write_fingerprints(tmp: Path, captured_at: str, file: str = WORKFLOW) -> Path:
+	fp_path = tmp / "fingerprints.json"
+	fp_path.write_text(
+		json.dumps(
+			{
+				"9001": {
+					"issue": 9001,
+					"pr": 9002,
+					"captured_at": captured_at,
+					"must_contain": [{"file": file, "regex": re.escape("runs-on: ubuntu-24.04")}],
+					"must_not_contain": [],
+					"must_not_exist": [],
+				}
+			}
+		),
+		encoding="utf-8",
+	)
+	return fp_path
+
+
+def _run_verifier(
+	repo: Path,
+	tmp: Path,
+	fp_path: Path,
+	*args: str,
+	extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+	env = _env()
+	for key in (
+		"INTEGRATION_VERIFY_REF",
+		"INTEGRATION_FINGERPRINTS_FILE",
+		"INTEGRATION_FINGERPRINT_BASE_DELETION_SUPERSEDE_ENABLED",
+		"BASE_BRANCH",
+		"FINGERPRINT_QUARANTINE_RUNS_M",
+	):
+		env.pop(key, None)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env["RUNNER_TEMP"] = str(tmp)
+	env.update(extra_env or {})
+	return subprocess.run(
+		["python3", str(VERIFIER), *args, str(fp_path)],
+		check=False,
+		cwd=repo,
+		env=env,
+		text=True,
+		capture_output=True,
+	)
+
+
+def _main_tip(repo: Path) -> str:
+	return _git(repo, "rev-parse", "main").stdout.strip()
+
+
+def test_fingerprint_base_deletion_after_capture_passes() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS)
+		_git(repo, "rm", "-q", "--", WORKFLOW)
+		result = _run_verifier(repo, tmp, fp_path)
+		assert result.returncode == 0, result.stdout + result.stderr
+		expected = (
+			f"{SUPERSEDED_MARKER} issue=#9001 pr=#9002 file={WORKFLOW} "
+			f"commit={_main_tip(repo)[:12]} base_ref=MERGE_HEAD"
+		)
+		assert expected in result.stderr, result.stderr
+
+
+def test_fingerprint_base_deletion_after_capture_passes_compare_mode() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS)
+		baseline = tmp / "baseline.json"
+		capture = _run_verifier(repo, tmp, fp_path, "--baseline-fingerprints-state", str(baseline))
+		assert capture.returncode == 0, capture.stdout + capture.stderr
+		state = json.loads(baseline.read_text(encoding="utf-8"))
+		assert state["fingerprints"]["9001"]["must_contain"][0]["satisfied"] is True
+		_git(repo, "rm", "-q", "--", WORKFLOW)
+		result = _run_verifier(repo, tmp, fp_path, "--compare-against-baseline", str(baseline))
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert f"{SUPERSEDED_MARKER} issue=#9001 pr=#9002 file={WORKFLOW}" in result.stderr, result.stderr
+		assert "base_ref=MERGE_HEAD" in result.stderr
+
+
+def test_fingerprint_base_deletion_before_capture_still_fails() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, AFTER_ALL_COMMITS)
+		_git(repo, "rm", "-q", "--", WORKFLOW)
+		result = _run_verifier(repo, tmp, fp_path)
+		assert result.returncode == 1, result.stdout + result.stderr
+		assert SUPERSEDED_MARKER not in result.stderr
+		assert "file does not exist in post-resolve tree" in result.stdout
+
+
+def test_fingerprint_resolver_deletion_still_fails() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name, delete_subject="[ai-merge-resolve] drop x.yml")
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS)
+		_git(repo, "rm", "-q", "--", WORKFLOW)
+		result = _run_verifier(repo, tmp, fp_path)
+		assert result.returncode == 1, result.stdout + result.stderr
+		assert SUPERSEDED_MARKER not in result.stderr
+
+
+def test_fingerprint_edit_side_still_present_in_base_fails() -> None:
+	"""Reverse conflict: MERGE_HEAD still has the file, so a resolver deletion stays a violation."""
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name, reverse=True)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS)
+		_git(repo, "rm", "-q", "--", WORKFLOW)
+		result = _run_verifier(repo, tmp, fp_path)
+		assert result.returncode == 1, result.stdout + result.stderr
+		assert SUPERSEDED_MARKER not in result.stderr
+
+
+def test_fingerprint_base_deletion_supersede_off_switch() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS)
+		_git(repo, "rm", "-q", "--", WORKFLOW)
+		flag = "INTEGRATION_FINGERPRINT_BASE_DELETION_SUPERSEDE_ENABLED"
+
+		off = _run_verifier(repo, tmp, fp_path, extra_env={flag: "false"})
+		assert off.returncode == 1, off.stdout + off.stderr
+		assert SUPERSEDED_MARKER not in off.stderr
+		assert INVALID_FLAG_WARNING not in off.stdout + off.stderr
+
+		bogus = _run_verifier(repo, tmp, fp_path, extra_env={flag: "bogus"})
+		assert bogus.returncode == 1, bogus.stdout + bogus.stderr
+		assert SUPERSEDED_MARKER not in bogus.stderr
+		assert (bogus.stdout + bogus.stderr).count(INVALID_FLAG_WARNING) == 1, bogus.stderr
+
+		for on_value in ("TRUE", "", " true "):
+			on = _run_verifier(repo, tmp, fp_path, extra_env={flag: on_value})
+			assert on.returncode == 0, (on_value, on.stdout + on.stderr)
+			assert SUPERSEDED_MARKER in on.stderr
+
+
+def test_fingerprint_base_deletion_origin_base_branch_fallback() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS)
+		_git(repo, "merge", "--abort")
+		_git(repo, "checkout", "-q", "main")
+		_git(repo, "update-ref", "refs/remotes/origin/main", "main")
+		assert not (repo / WORKFLOW).exists()
+
+		no_base = _run_verifier(repo, tmp, fp_path)
+		assert no_base.returncode == 1, no_base.stdout + no_base.stderr
+
+		ok = _run_verifier(repo, tmp, fp_path, extra_env={"BASE_BRANCH": "main"})
+		assert ok.returncode == 0, ok.stdout + ok.stderr
+		assert f"commit={_main_tip(repo)[:12]} base_ref=origin/main" in ok.stderr, ok.stderr
+
+		for unsafe in ("../main", "-c", "main..feat", "main.lock"):
+			bad = _run_verifier(repo, tmp, fp_path, extra_env={"BASE_BRANCH": unsafe})
+			assert bad.returncode == 1, (unsafe, bad.stdout + bad.stderr)
+			assert SUPERSEDED_MARKER not in bad.stderr
+
+
+def test_fingerprint_base_deletion_ref_mode() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS)
+		_git(repo, "merge", "--abort")
+		result = _run_verifier(repo, tmp, fp_path, "--ref", "main")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert f"commit={_main_tip(repo)[:12]} base_ref=main" in result.stderr, result.stderr
+
+		late = _write_fingerprints(tmp, AFTER_ALL_COMMITS)
+		late_result = _run_verifier(repo, tmp, late, "--ref", "main")
+		assert late_result.returncode == 1, late_result.stdout + late_result.stderr
+		assert SUPERSEDED_MARKER not in late_result.stderr
+
+
+def test_fingerprint_base_deletion_glob_path_is_literal() -> None:
+	"""A glob-like fingerprint path must not match the deleted sibling `x.yml`."""
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS, file=".github/workflows/[x].yml")
+		_git(repo, "rm", "-q", "--", WORKFLOW)
+		result = _run_verifier(repo, tmp, fp_path)
+		assert result.returncode == 1, result.stdout + result.stderr
+		assert SUPERSEDED_MARKER not in result.stderr
+
+
+def test_fingerprint_base_deletion_invalid_flag_warns_without_missing_file() -> None:
+	"""An invalid off-switch value warns once even when every must_contain file is present."""
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS)
+		flag = "INTEGRATION_FINGERPRINT_BASE_DELETION_SUPERSEDE_ENABLED"
+		result = _run_verifier(repo, tmp, fp_path, extra_env={flag: "flase"})
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert SUPERSEDED_MARKER not in result.stderr
+		assert (result.stdout + result.stderr).count(INVALID_FLAG_WARNING) == 1, result.stderr
