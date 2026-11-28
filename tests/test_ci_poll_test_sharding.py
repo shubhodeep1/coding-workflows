@@ -2730,8 +2730,10 @@ class MovedRelease9966StepsContractTest(unittest.TestCase):
 # tests and about 173 subprocess or bash call sites together), not a
 # measurement. All three go to orchestrate-poll group 3: the poll job has the
 # only 30-minute budget, group 3 pinned only the single-file module step and
-# #10182's "Orchestrate lib unit tests" (its headroom is unmeasured), and
-# group 1 already took #9966's steps. The sharded "Promote cycle and
+# #10182's "Orchestrate lib unit tests" when this was planned (its headroom is
+# unmeasured), and group 1 already took #9966's steps. #10200 later also moved
+# three steps to group 3, so the merged group carries 8 guarded steps, more
+# than any other group; its combined time is unmeasured. The sharded "Promote cycle and
 # blocked-verdict unit tests" step stays in the source job.
 PROMOTE_10248_SOURCE_JOB_ID = "tests-promote-stall-and-review"
 PROMOTE_10248_TARGET_GROUP = 3

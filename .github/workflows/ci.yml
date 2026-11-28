@@ -4393,8 +4393,12 @@ jobs:
       # 173 subprocess or bash call sites. Group 3 was the target because this
       # job has the only 30-minute budget (budget-watch warns at 22m30s) and
       # group 3 pinned only "Orchestrate poll single-file module tests" and
-      # #10182's "Orchestrate lib unit tests" (its headroom is unmeasured);
-      # group 1 already took #9966's two steps. The modules need no checkout history
+      # #10182's "Orchestrate lib unit tests" when this was planned (its
+      # headroom is unmeasured); group 1 already took #9966's two steps.
+      # #10200 later also moved three steps to group 3 (below), so after the
+      # merge group 3 carries 8 guarded steps, more than any other group
+      # (3-6). Its combined time is unmeasured: if budget-watch flags
+      # orchestrate-poll (3), rebalance from its step timings. The modules need no checkout history
       # (both jobs check out at depth 1), Node or job-level env; the shared pip
       # install provides pytest and PyYAML. Names and bodies unchanged; each
       # step runs once per CI run.
