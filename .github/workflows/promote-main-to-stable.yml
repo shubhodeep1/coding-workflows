@@ -255,8 +255,70 @@ jobs:
             exit 1
           fi
 
+      # Stable rollback hold (issue #10076, follow-up to #9342): a promote run
+      # (manual, or poller-dispatched with target_sha) must not move `stable`
+      # while rollback-stable.yml holds it. `active <v>` and `unknown` skip
+      # with exit 0 (fail closed) and the later steps are skipped through
+      # `skip=true`. The reader is staged from origin/main, not from this
+      # `stable` checkout: `stable` may not carry scripts/stable_hold.sh yet,
+      # and a missing reader would read as `unknown` and skip every promotion
+      # (the reader could then never reach `stable`). It also matches the
+      # reader the `cycle` job runs from its `main` checkout.
+      # PROMOTE_STABLE_HOLD_GATE_ENABLED=false (any letter case) restores the
+      # ungated behaviour; any other value keeps the gate on.
+      - name: Check stable rollback hold
+        id: stable_hold_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTE_STABLE_HOLD_GATE_ENABLED: ${{ vars.PROMOTE_STABLE_HOLD_GATE_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          hold_gate_enabled="${PROMOTE_STABLE_HOLD_GATE_ENABLED:-true}"
+          if [ "${hold_gate_enabled,,}" = "false" ]; then
+            echo "stable rollback hold gate disabled; promoting without reading the hold"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          hold_reader_dir="$(mktemp -d)"
+          trap 'rm -rf "${hold_reader_dir}"' EXIT
+          hold_line="unknown"
+          if git show "origin/main:scripts/stable_hold.sh" >"${hold_reader_dir}/stable_hold.sh" 2>/dev/null; then
+            # Optional helpers: stable_hold.sh falls back without gh_helpers.sh,
+            # and gh_helpers.sh sources emit_event.sh only when it exists.
+            for hold_helper in gh_helpers.sh emit_event.sh; do
+              git show "origin/main:scripts/${hold_helper}" >"${hold_reader_dir}/${hold_helper}" 2>/dev/null \
+                || rm -f "${hold_reader_dir}/${hold_helper}"
+            done
+            hold_line="$(bash "${hold_reader_dir}/stable_hold.sh" read || true)"
+          else
+            echo "::warning::scripts/stable_hold.sh could not be read from origin/main; treating the stable rollback hold as unknown."
+          fi
+          hold_summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          case "${hold_line}" in
+            inactive)
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            "active "*)
+              hold_to="${hold_line#active }"
+              if [[ "${hold_to}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::warning::A stable rollback hold is active (stable rolled back to ${hold_to}); stable is left untouched. A deliberate release clears it."
+                echo "PROMOTE_SKIPPED reason=stable_hold_active to=${hold_to}"
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                echo "Promotion skipped: a stable rollback hold is active (stable rolled back to ${hold_to}); stable was not moved." >> "${hold_summary}"
+                exit 0
+              fi
+              ;;
+          esac
+          echo "::warning::The stable rollback hold could not be read; stable is left untouched (fail closed). Re-dispatch once the hold can be read."
+          echo "PROMOTE_SKIPPED reason=stable_hold_unknown"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "Promotion skipped: the stable rollback hold could not be read (fail closed); stable was not moved." >> "${hold_summary}"
+          exit 0
+
       - name: Fast-forward stable to main
         id: ff
+        if: steps.stable_hold_gate.outputs.skip != 'true'
         env:
           TARGET_SHA_INPUT: ${{ inputs.target_sha }}
           PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED: ${{ vars.PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED || 'true' }}
@@ -450,6 +512,7 @@ jobs:
 
       - name: Resolve version (compute next minor if not provided)
         id: resolve_version
+        if: steps.stable_hold_gate.outputs.skip != 'true'
         env:
           INPUT_VERSION: ${{ inputs.version_tag }}
         run: |
@@ -532,6 +595,7 @@ jobs:
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch test-and-mark-stable on stable
+        if: steps.stable_hold_gate.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           RESOLVED_VERSION: ${{ steps.resolve_version.outputs.version }}
@@ -577,6 +641,7 @@ jobs:
           echo "View runs: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml"
 
       - name: Summary
+        if: steps.stable_hold_gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           echo "Promotion summary:"
