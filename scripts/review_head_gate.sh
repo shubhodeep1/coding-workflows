@@ -286,6 +286,23 @@ review_head_gate_freshness_sync()
 		fs_log review ci_failed_on_head "from=${fs_from} sync=${fs_sync}"
 		return 1
 	fi
+	# The full final CI failed on this head (scripts/review_final_ci_failed.sh,
+	# ci.yml's `final-ci-failed` job, or the review-blocked judge's repair
+	# request, issue #10063). That hand-back is a different marker, posted by
+	# github-actions[bot] or the GH_PAT login: the same trust rule as the review
+	# gate's doc-only / small-diff check. Without this the update head was
+	# skipped and re-approved on every review run while its final CI stayed
+	# red (PR #10152, 2026-11-28).
+	if jq -e --arg login "${fs_login}" --arg pr "${fs_pr}" --arg head "${fs_head}" '
+		[ .[]? | select(type == "object")
+		  | select(((.author_login // "") | ascii_downcase) == ($login | ascii_downcase)
+		    or ((.author_login // "") == "github-actions[bot]" and (.author_type // "") == "Bot"))
+		  | (.body // "") | select(type == "string")
+		  | test("<!-- ai:(final-ci-failed|final-ci-repair-request):v1 pr=" + $pr + " head=" + $head + " -->\\s*$") ] | any' \
+		"${fs_comments}" >/dev/null 2>&1; then
+		fs_log review final_ci_failed_on_head "from=${fs_from} sync=${fs_sync}"
+		return 1
+	fi
 	if ! fs_commit="$(gh_retry gh api "repos/${fs_repo}/commits/${fs_head}" \
 		--jq '{parents: [.parents[]?.sha], verified: (.commit.verification.verified // false), committer: (.committer.login // "")}' 2>/dev/null)"; then
 		fs_log review commit_read_failed "from=${fs_from} sync=${fs_sync}"
