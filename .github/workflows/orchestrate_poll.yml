@@ -2147,7 +2147,10 @@ jobs:
       # (issue #10037, G2): scripts/promote_main_cycle.sh in check-only mode
       # dispatches promote-main-to-stable.yml with cycle_retry=true at most
       # once an hour. A step in this existing job, not a new job or cron (§26);
-      # this repository only.
+      # this repository only. Issue #10266: it also retries a cycle whose smoke
+      # gate cancelled itself for a long runner wait (reason=
+      # gate_runner_wait_cancel), at most PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX
+      # times per main tip. The step name is kept (§10).
       - name: Retry a promote cycle skipped for a long runner wait
         if: ${{ !cancelled() && github.repository == 'shubhodeep1/coding-workflows' }}
         continue-on-error: true
@@ -2156,6 +2159,7 @@ jobs:
           PROMOTE_CYCLE_RETRY_CHECK_ONLY: "true"
           PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}
           RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES: ${{ vars.RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES || '30' }}
+          PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX: ${{ vars.PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX || '3' }}
           ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |

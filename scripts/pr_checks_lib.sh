@@ -1217,9 +1217,23 @@ _pr_head_ci_runs_pending()
 # `REVIEW_FINAL_CI pr= head= outcome=deferred reason=ci_wiring_behind` line.
 # Any other result (not behind, switch off, comparison failed) dispatches as
 # before (fail-open).
+# Release-gate hold (issue #10266): optional PR_FINAL_CI_RELEASE_GATE_RUNS_JSON,
+# a JSON array of the repository's active runs the caller already read (set
+# only by the merge-lease tick from its run cache; empty for every other
+# caller, which then behaves as before). Right before the full-suite dispatch
+# (never the docs-only or sync-quick forms; a refused one that falls through to
+# the full suite is held), a queued or running test-and-mark-stable.yml run
+# younger than RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES (default 300; 0 turns
+# the hold off) defers it: PR_FINAL_CI_OUTCOME=deferred,
+# PR_FINAL_CI_REASON=release_gate_active, one `RELEASE_GATE_FINAL_CI_HOLD
+# outcome=deferred pr= head= gate_run= gate_age_min= max=` line and one
+# `REVIEW_FINAL_CI pr= head= outcome=deferred reason=release_gate_active` line.
+# A gate at or past the bound logs outcome=bound_reached and an unreadable
+# input logs outcome=runs_unreadable; both dispatch (fail-open). No API call.
 # Outputs: PR_FINAL_CI_OUTCOME = dispatched | exists | disabled | deferred |
 # dispatch_failed | invalid_input; PR_FINAL_CI_REASON = the decision's reason
-# token (in_flight, success, failure, no_run, ci_wiring_behind, ...; empty
+# token (in_flight, success, failure, no_run, ci_wiring_behind,
+# release_gate_active, ...; empty
 # when there was none);
 # PR_FINAL_CI_FAILED_AT = the newest failed full run's `updated_at` when the
 # reason is `failure` (empty otherwise); one `REVIEW_FINAL_CI pr= head= outcome=
@@ -1401,6 +1415,35 @@ _pr_ensure_final_ci()
 		fi
 		echo "::warning::REVIEW_FINAL_CI_SYNC_QUICK pr=${pr} head=${sha} outcome=dispatch_refused (retrying once with the full suite)"
 	fi
+	# Release-gate hold (issue #10266): a full run takes about 45 jobs of the
+	# account's runner pool, so while a release gate runs it waits for the
+	# next tick. Only the caller's own run listing is read (no API call).
+	if [ -n "${PR_FINAL_CI_RELEASE_GATE_RUNS_JSON:-}" ]; then
+		local final_ci_gate_max="${RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES:-300}" final_ci_gate_found="" final_ci_gate_rc=0
+		local final_ci_gate_run="" final_ci_gate_age=""
+		if ! [[ "${final_ci_gate_max}" =~ ^[0-9]{1,5}$ ]]; then
+			echo "::warning::RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES must be an integer from 0 to 99999; using 300."
+			final_ci_gate_max=300
+		fi
+		final_ci_gate_max=$((10#${final_ci_gate_max}))
+		if [ "${final_ci_gate_max}" -gt 0 ]; then
+			final_ci_gate_found="$(_pr_final_ci_release_gate_active "${PR_FINAL_CI_RELEASE_GATE_RUNS_JSON}")" || final_ci_gate_rc=$?
+			if [ "${final_ci_gate_rc}" -eq 0 ]; then
+				final_ci_gate_run="${final_ci_gate_found%% *}"
+				final_ci_gate_age="${final_ci_gate_found##* }"
+				if [[ "${final_ci_gate_age}" =~ ^[0-9]+$ ]] && [ "${final_ci_gate_age}" -lt "${final_ci_gate_max}" ]; then
+					PR_FINAL_CI_OUTCOME="deferred"
+					PR_FINAL_CI_REASON="release_gate_active"
+					echo "RELEASE_GATE_FINAL_CI_HOLD outcome=deferred pr=${pr} head=${sha} gate_run=${final_ci_gate_run} gate_age_min=${final_ci_gate_age} max=${final_ci_gate_max}"
+					echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=deferred reason=release_gate_active"
+					return 0
+				fi
+				echo "RELEASE_GATE_FINAL_CI_HOLD outcome=bound_reached pr=${pr} head=${sha} gate_run=${final_ci_gate_run} gate_age_min=${final_ci_gate_age:-?} max=${final_ci_gate_max}"
+			elif [ "${final_ci_gate_rc}" -ne 1 ]; then
+				echo "RELEASE_GATE_FINAL_CI_HOLD outcome=runs_unreadable pr=${pr} head=${sha}"
+			fi
+		fi
+	fi
 	# One attempt: a retry after a lost success response would start a
 	# second run; the review sweep's safety net retries a failed dispatch.
 	if gh workflow run "${wf}" --repo "${repo}" --ref "${ref}" -f pr_number="${pr}" -f head_sha="${sha}" >/dev/null 2>&1; then
@@ -1413,6 +1456,33 @@ _pr_ensure_final_ci()
 	# cannot be dispatched; updating the branch from its base fixes that.
 	PR_FINAL_CI_REASON="dispatch_refused"
 	echo "::warning::REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=dispatch_failed reason=dispatch_refused workflow=${wf} (if the branch predates the workflow's workflow_dispatch trigger, update it from its base branch)"
+	return 0
+}
+
+# _pr_final_ci_release_gate_active <runs_json> (issue #10266): <runs_json> is
+# a JSON array of workflow runs (or an object with a `workflow_runs` array).
+# Prints `<run id> <age minutes>` for the newest queued / in_progress /
+# requested / pending / waiting run whose `.path` (before any `@`) is
+# .github/workflows/test-and-mark-stable.yml and whose `created_at` parses.
+# Returns 0 when there is one, 1 when there is none, 2 when the input is not
+# such JSON. No API call.
+_pr_final_ci_release_gate_active()
+{
+	local rga_runs="${1:-}" rga_found=""
+	if ! printf '%s' "${rga_runs}" | jq -e 'type == "array" or (type == "object" and ((.workflow_runs // null) | type) == "array")' >/dev/null 2>&1; then
+		return 2
+	fi
+	rga_found="$(printf '%s' "${rga_runs}" | jq -r '(if type == "array" then . else .workflow_runs end)
+		| [.[]? | select(type == "object")
+			| select(((.path // "") | tostring | split("@")[0]) == ".github/workflows/test-and-mark-stable.yml")
+			| select(((.status // "") | tostring) as $s | ["queued", "in_progress", "requested", "pending", "waiting"] | index($s))
+			| select((.id // "") | tostring | test("^[0-9]{1,20}$"))
+			| {id: (.id | tostring), t: ((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?)}
+			| select(.t != null)]
+		| sort_by(.t) | last // empty
+		| "\(.id) \([((now - .t) / 60 | floor), 0] | max)"' 2>/dev/null)" || return 2
+	[ -n "${rga_found}" ] || return 1
+	printf '%s\n' "${rga_found}"
 	return 0
 }
 

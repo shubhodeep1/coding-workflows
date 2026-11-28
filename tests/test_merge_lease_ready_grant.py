@@ -11,6 +11,7 @@ through the stateful fake `gh` of tests/test_merge_lease.py.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import time
@@ -231,6 +232,73 @@ class ReadyGrantTick(unittest.TestCase):
 		h, out = _tick(st, {**FCI, "MERGE_LEASE_MAX_HOLDERS": "2"})
 		self.assertNotIn("ready_fallback", out)
 		self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+
+# Release-gate hold of the lease's own full final CI (issue #10266). Module
+# level so the plan's acceptance target `path::name` resolves under pytest.
+def _gate_cache(minutes_ago: float = 10, status: str = "in_progress") -> str:
+	created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - minutes_ago * 60))
+	return json.dumps([{"id": 46140903455, "status": status, "event": "workflow_dispatch", "head_branch": "main",
+		"head_sha": "c" * 40, "display_title": "Test & Mark Stable Release [cycle:1]",
+		"path": ".github/workflows/test-and-mark-stable.yml", "created_at": created}])
+
+
+def _ready_final_ci_call(prelude: str, env: dict[str, str] | None = None) -> tuple[_Harness, str]:
+	st = _free([_pull(5)], [5])
+	_gates_ok(st, 5)
+	h = _Harness(st)
+	body = (f'{prelude}\nMERGE_LEASE_FINAL_CI_STATE=absent\n'
+		f'_mt_merge_lease_ready_final_ci 5 "{_sha(5)}" ai/issue-5 owner/repo; '
+		'echo "rc=$? held=${MT_LEASE_FINAL_CI_GATE_HELD} outcome=${PR_FINAL_CI_OUTCOME:-}"')
+	res = h.train_fn(body, {**FCI, "GATE_CACHE": _gate_cache(), **(env or {})})
+	return h, res.stdout + res.stderr
+
+
+def test_ready_final_ci_passes_tick_run_cache_for_gate_hold() -> None:
+	# An "ok" cache with an active gate: deferred, rc 1, nothing dispatched.
+	h, out = _ready_final_ci_call('_MT_LEASE_RUNS_STATE=ok; _MT_LEASE_RUNS_JSON="${GATE_CACHE}"')
+	assert "rc=1 held=1 outcome=deferred" in out, out
+	assert f"RELEASE_GATE_FINAL_CI_HOLD outcome=deferred pr=5 head={_sha(5)} gate_run=46140903455 gate_age_min=10 max=300" in out, out
+	assert "reason=release_gate_active" in out
+	assert _ci_dispatches(h) == []
+	held_api = [c for c in h.calls if c.startswith("gh api")]
+	# A cache that is not "ok" is never read: runs_unread, dispatch as before.
+	for prelude in ('_MT_LEASE_RUNS_STATE=failed; _MT_LEASE_RUNS_JSON="${GATE_CACHE}"', '_MT_LEASE_RUNS_STATE=""; _MT_LEASE_RUNS_JSON=""'):
+		h2, out2 = _ready_final_ci_call(prelude)
+		assert f"RELEASE_GATE_FINAL_CI_HOLD outcome=runs_unread pr=5 head={_sha(5)}" in out2, prelude
+		assert "rc=0 held=0 outcome=dispatched" in out2, prelude
+		assert len(_ci_dispatches(h2)) == 1, prelude
+		# No extra API read either way.
+		assert [c for c in h2.calls if c.startswith("gh api")] == held_api, prelude
+	# An "ok" cache without an active gate dispatches unchanged, with no hold line.
+	h3, out3 = _ready_final_ci_call('_MT_LEASE_RUNS_STATE=ok; _MT_LEASE_RUNS_JSON="[]"')
+	assert "rc=0 held=0 outcome=dispatched" in out3
+	assert "RELEASE_GATE_FINAL_CI_HOLD" not in out3
+	assert len(_ci_dispatches(h3)) == 1
+	# The gate past the bound dispatches.
+	h4, out4 = _ready_final_ci_call('_MT_LEASE_RUNS_STATE=ok; _MT_LEASE_RUNS_JSON="${GATE_CACHE}"', {"RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES": "5"})
+	assert "RELEASE_GATE_FINAL_CI_HOLD outcome=bound_reached" in out4
+	assert "rc=0 held=0 outcome=dispatched" in out4
+
+
+def test_seeded_tick_gate_hold_tries_no_later_waiter() -> None:
+	st = _free([_pull(5), _pull(6)], [5, 6])
+	_gates_ok(st, 5, 6)
+	prelude = '_MT_LEASE_RUNS_SEEDED=1; _MT_LEASE_RUNS_STATE=ok; _MT_LEASE_RUNS_JSON="${GATE_CACHE}"'
+	h, out = _tick(st, {**FCI, "GATE_CACHE": _gate_cache()}, prelude=prelude)
+	assert "pr=5 base=main mode=tick outcome=skipped reason=final_ci_pending" in out
+	assert "pr=6 base=main mode=tick outcome=skipped reason=final_ci_pending" in out
+	assert out.count("RELEASE_GATE_FINAL_CI_HOLD outcome=deferred") == 1, out
+	assert _ci_dispatches(h) == []
+	# The second waiter's final-CI runs are not read once the gate held the first.
+	assert not any(f"head_sha={_sha(6)}" in c and "ci.yml/runs" in c for c in h.calls), h.calls
+	assert WAIT in h.state["labels"]["5"]
+	# With no gate in the seeded cache the tick dispatches once, as before.
+	st = _free([_pull(5), _pull(6)], [5, 6])
+	_gates_ok(st, 5, 6)
+	h, out = _tick(st, {**FCI, "GATE_CACHE": "[]"}, prelude=prelude)
+	assert "RELEASE_GATE_FINAL_CI_HOLD" not in out
+	assert len(_ci_dispatches(h)) == 1
 
 
 class ConflictRelease(unittest.TestCase):

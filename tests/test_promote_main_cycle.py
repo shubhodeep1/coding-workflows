@@ -902,14 +902,71 @@ def test_smoke_gate_failure_jobs_read_failure_logs_unknown() -> None:
 	assert len(final["dispatches"]) == 1
 
 
-def test_successful_or_cancelled_gate_makes_no_jobs_read() -> None:
-	cancelled = [[], [{"id": 500, "status": "completed", "conclusion": "cancelled", "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}]]
-	for seq in (GATE_SUCCESS, cancelled):
-		with tempfile.TemporaryDirectory() as tmp:
-			proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq})
-		assert proc.returncode == 0, proc.stderr + proc.stdout
-		assert not final.get("jobs_reads")
-		assert not any("/jobs" in a for call in final["calls"] for a in call)
+def test_successful_gate_makes_no_jobs_read() -> None:
+	# Issue #10266: a cancelled gate now makes the cause reads
+	# (test_cancelled_gate_records_runner_wait_cause); a successful one none.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS})
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert not final.get("jobs_reads")
+	assert not any("/jobs" in a for call in final["calls"] for a in call)
+
+
+# --- Cause of a cancelled smoke gate (issue #10266) ---------------------------
+
+GATE_CANCELLED = [[], [{"id": 500, "status": "completed", "conclusion": "cancelled", "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}]]
+ALT_MODEL_STEP = "Wait for clarify\u2192plan\u2192implement (alt-model)"
+GATE_WAIT_LINE = "RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run={gate} watched_run=46144400003 reason=late_assigned display_name=alt-model"
+
+
+def _cancelled_gate_jobs(step: str = ALT_MODEL_STEP) -> dict:
+	return {"jobs": [
+		{"id": 60, "name": "source", "conclusion": "success", "steps": [{"name": "Checkout", "conclusion": "success"}]},
+		{"id": 61, "name": "e2e-alt-model-test", "conclusion": "cancelled", "steps": [{"name": "Checkout", "conclusion": "success"}, {"name": step, "conclusion": "cancelled"}]},
+		{"id": 62, "name": "e2e-smoke-test", "conclusion": "cancelled", "steps": [{"name": "Phase 4: Wait for review & autofix to complete", "conclusion": "cancelled"}]},
+	]}
+
+
+def _cancel_cause_run(**state):
+	base = {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_CANCELLED}
+	base.update(state)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _run(Path(tmp), base, env={"GH_RETRY_MAX_ATTEMPTS": "1"})
+		assert not env_out.exists()
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "PROMOTE_CYCLE_FAILED" not in proc.stdout
+	assert "outcome=skipped:smoke_gate_cancelled" in final["github_output"]
+	return proc, final
+
+
+def test_cancelled_gate_records_runner_wait_cause() -> None:
+	# The 2026-11-28 replay: the alt-model job's watch step logged the
+	# self-cancel line (ANSI colour and CRLF included).
+	logs = {"61": "2026-11-28T13:06:51.1Z other line\r\n2026-11-28T13:06:54.2Z \x1b[36m" + GATE_WAIT_LINE.format(gate=500) + "\x1b[0m\r\n"}
+	proc, final = _cancel_cause_run(gate_jobs=_cancelled_gate_jobs(), job_logs=logs)
+	assert "PROMOTE_CYCLE_SKIPPED reason=smoke_gate_cancelled run=500 cause=runner_wait\n" in proc.stdout
+	assert "gate_cancel_cause=runner_wait\n" in final["github_output"]
+	assert final["jobs_reads"] == ["repos/owner/repo/actions/runs/500/jobs?per_page=100"]
+	# It stops at the first match.
+	assert final["log_reads"] == ["repos/owner/repo/actions/jobs/61/logs"]
+	# No self-cancel line (a person or another run cancelled the gate): other.
+	proc, final = _cancel_cause_run(gate_jobs=_cancelled_gate_jobs(), job_logs={"61": "2026-11-28T13:06:54Z nothing here\n"})
+	assert "PROMOTE_CYCLE_SKIPPED reason=smoke_gate_cancelled run=500 cause=other\n" in proc.stdout
+	assert "gate_cancel_cause=other\n" in final["github_output"]
+	assert len(final["log_reads"]) == 2
+	# A line naming another gate run, or not at the start of the line, does not count.
+	for line in ("2026-11-28T13:06:54Z " + GATE_WAIT_LINE.format(gate=5000), "2026-11-28T13:06:54Z echo: " + GATE_WAIT_LINE.format(gate=500)):
+		proc, _ = _cancel_cause_run(gate_jobs=_cancelled_gate_jobs(), job_logs={"61": line + "\n"})
+		assert "cause=other\n" in proc.stdout, line
+	# A job cancelled outside a watch step is never read.
+	proc, final = _cancel_cause_run(gate_jobs={"jobs": [_cancelled_gate_jobs("Some other step")["jobs"][1]]}, job_logs={"61": "x " + GATE_WAIT_LINE.format(gate=500)})
+	assert "cause=other\n" in proc.stdout
+	assert not final.get("log_reads")
+	# A failed jobs read or log read gives unknown; no marker output.
+	for state in ({"gate_jobs_error": True}, {"gate_jobs": _cancelled_gate_jobs(), "job_logs_error": True}):
+		proc, final = _cancel_cause_run(**state)
+		assert "PROMOTE_CYCLE_SKIPPED reason=smoke_gate_cancelled run=500 cause=unknown\n" in proc.stdout, state
+		assert "gate_cancel_cause=unknown\n" in final["github_output"], state
 
 
 # --- pinned promote cycle (phase 3) -------------------------------------------
@@ -2103,6 +2160,94 @@ def test_retry_check_dispatch_failure_still_exits_zero() -> None:
 	assert "::warning::PROMOTE_CYCLE_RETRY outcome=dispatch_failed after_run=880" in proc.stdout
 	# One attempt only: a retried dispatch is not idempotent.
 	assert len([c for c in final["calls"] if c[:2] == ["workflow", "run"]]) == 1
+
+
+GATE_CANCEL_MARKER_STEP = "Record runner-wait gate cancel for the poller retry"
+
+
+def _cancel_marker_jobs() -> dict:
+	return {"jobs": [{"id": 1, "name": "cycle", "steps": [{"name": "Run the promote cycle", "conclusion": "success"},
+		{"name": MARKER_STEP, "conclusion": "skipped"}, {"name": GATE_CANCEL_MARKER_STEP, "conclusion": "success"}]}]}
+
+
+def test_retry_check_dispatches_after_a_gate_runner_wait_cancel() -> None:
+	# Replay of 2026-11-28: the cycle skipped smoke_gate_cancelled
+	# cause=runner_wait 2 h ago and the runner wait is clear now.
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": _cancel_marker_jobs()}})
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=880 age_min=120 reason=gate_runner_wait_cancel\n" in proc.stdout
+	assert final["dispatches"] == [["promote-main-to-stable.yml", "--repo", "owner/repo", "--ref", "main", "-f", "cycle_retry=true"]]
+	assert "PROMOTE_CYCLE_SKIPPED" not in proc.stdout
+	# The same reads as a runner_wait_long retry: runs listing, jobs, runner wait.
+	api_paths = [c for c in final["calls"] if c[:1] == ["api"]]
+	assert len(api_paths) == 3, api_paths
+	# Hourly limit: a cancel skip younger than 60 minutes is not due.
+	proc, final = _retry_check({"self_runs": [_retry_run(updated_at=_rw_minutes_ago(30))], "self_run_jobs": {"880": _cancel_marker_jobs()}})
+	assert "PROMOTE_CYCLE_RETRY outcome=not_due run=880 age_min=30" in proc.stdout
+	assert not final.get("dispatches")
+	# A long runner wait holds it, as for runner_wait_long.
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": _cancel_marker_jobs()}, "window_runs": [_rw_queued(1, 70)]})
+	assert "PROMOTE_CYCLE_RETRY outcome=wait_long after_run=880 oldest_queued_min=70 max=30 reason=gate_runner_wait_cancel\n" in proc.stdout
+	assert not final.get("dispatches")
+	# The runner_wait_long path keeps its lines byte for byte.
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": _marker_jobs()}})
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=880 age_min=120\n" in proc.stdout
+
+
+def test_retry_check_ignores_a_foreign_gate_cancel() -> None:
+	# A gate cancelled by a person or another run: the cycle wrote cause=other,
+	# so neither marker step ran.
+	jobs = {"jobs": [{"id": 1, "name": "cycle", "steps": [{"name": "Run the promote cycle", "conclusion": "success"},
+		{"name": MARKER_STEP, "conclusion": "skipped"}, {"name": GATE_CANCEL_MARKER_STEP, "conclusion": "skipped"}]}]}
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": jobs}})
+	assert "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=880\n" in proc.stdout
+	assert not final.get("dispatches")
+	assert not final.get("window_reads")
+
+
+def test_retry_check_gate_cancel_cap_per_tip() -> None:
+	def retry(run_id: int, minutes_ago: float, head: str = TIP) -> dict:
+		return _retry_run(id=run_id, event="workflow_dispatch", display_title=RETRY_TITLE, head_sha=head,
+			created_at=_rw_minutes_ago(minutes_ago + 10), updated_at=_rw_minutes_ago(minutes_ago))
+	three_on_tip = [_retry_run(id=870, created_at=_rw_minutes_ago(500), updated_at=_rw_minutes_ago(490)),
+		retry(881, 400), retry(882, 250), retry(883, 120)]
+	proc, final = _retry_check({"self_runs": three_on_tip, "self_run_jobs": {"883": _cancel_marker_jobs()}})
+	assert f"PROMOTE_CYCLE_RETRY outcome=cap_reached reason=gate_runner_wait_cancel after_run=883 head={TIP[:12]} retries=3 max=3\n" in proc.stdout
+	assert not final.get("dispatches")
+	assert not final.get("window_reads")
+	# A higher cap lets the fourth one through.
+	proc, final = _retry_check({"self_runs": three_on_tip, "self_run_jobs": {"883": _cancel_marker_jobs()}}, {"PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX": "4"})
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=883 age_min=120 reason=gate_runner_wait_cancel" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	# Retries on another tip, or older than 24 h, do not count.
+	other = "8" * 40
+	mixed = [retry(881, 26 * 60), retry(882, 250, head=other), retry(883, 120)]
+	proc, final = _retry_check({"self_runs": mixed, "self_run_jobs": {"883": _cancel_marker_jobs()}})
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=883 age_min=120 reason=gate_runner_wait_cancel" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	# The cap applies only to the gate-cancel path, not to runner_wait_long.
+	proc, final = _retry_check({"self_runs": three_on_tip, "self_run_jobs": {"883": _marker_jobs()}})
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=883 age_min=120\n" in proc.stdout
+	# A bad cap warns and uses 3.
+	proc, final = _retry_check({"self_runs": three_on_tip, "self_run_jobs": {"883": _cancel_marker_jobs()}}, {"PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX": "0"})
+	assert "::warning::PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX must be an integer from 1 to 99; using 3." in proc.stdout
+	assert "outcome=cap_reached" in proc.stdout and "max=3" in proc.stdout
+	# An unusable head_sha on the newest cycle run fails closed.
+	proc, final = _retry_check({"self_runs": [_retry_run(head_sha="bad")], "self_run_jobs": {"880": _cancel_marker_jobs()}})
+	assert "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=head_sha run=880 reason=gate_runner_wait_cancel" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_promote_workflow_wires_the_gate_cancel_marker() -> None:
+	text = PROMOTE_WORKFLOW.read_text(encoding="utf-8")
+	marker = text.index(f"      - name: {MARKER_STEP}\n")
+	cancel = text.index(f"      - name: {GATE_CANCEL_MARKER_STEP}\n")
+	assert marker < cancel < text.index("  promote:\n")
+	block = text[cancel:cancel + 400]
+	assert "        if: steps.cycle.outputs.outcome == 'skipped:smoke_gate_cancelled' && steps.cycle.outputs.gate_cancel_cause == 'runner_wait'\n" in block
+	assert 'run: echo "PROMOTE_CYCLE_RETRY_MARKER cause=gate_runner_wait_cancel run=${GITHUB_RUN_ID}"' in block
+	script = SCRIPT.read_text(encoding="utf-8")
+	assert f'PROMOTE_CYCLE_GATE_CANCEL_MARKER_STEP="{GATE_CANCEL_MARKER_STEP}"' in script
+	assert 'PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX="${PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX:-3}"' in script
 
 
 def test_promote_workflow_routes_the_cycle_retry() -> None:

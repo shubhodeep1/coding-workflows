@@ -1825,3 +1825,94 @@ def test_sweep_unmarked_head_is_not_handed_back_when_syncing_is_off(fake_gh, tmp
 		assert f"REVIEW_FINAL_CI_BASE_SYNC pr=1 head={SHA} outcome=skipped reason={reason}" in result.stdout, result.stdout + result.stderr
 		assert "stale_workflow=" not in result.stdout and "REVIEW_FINAL_CI_FAILED" not in result.stdout
 		assert _puts(calls) == [] and _dispatches(calls) == [] and _posted_bodies(calls) == []
+
+
+# --- Release-gate hold of a full final CI (issue #10266) ---
+
+GATE_PATH = ".github/workflows/test-and-mark-stable.yml"
+
+
+def _gate_run(minutes_ago: float, status: str = "in_progress", run_id: int = 46140903455, path: str = GATE_PATH + "@refs/heads/main") -> dict:
+	created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - minutes_ago * 60))
+	return {"id": run_id, "status": status, "path": path, "created_at": created, "head_sha": "c" * 40}
+
+
+def _hold_env(runs, **extra) -> dict:
+	env = {"PR_FINAL_CI_RELEASE_GATE_RUNS_JSON": runs if isinstance(runs, str) else json.dumps(runs)}
+	env.update(extra)
+	return env
+
+
+def test_full_final_ci_deferred_while_release_gate_active(fake_gh) -> None:
+	no_run = {RUNS_KEY: {"body": {"workflow_runs": []}}}
+	other_run = {"id": 9, "status": "in_progress", "path": ".github/workflows/review_autofix.yml", "created_at": "2026-11-28T12:00:00Z"}
+	# An active gate younger than the bound defers the full-suite dispatch.
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env([other_run, _gate_run(87)]))
+	out = result.stdout + result.stderr
+	assert "rc=0 outcome=deferred" in result.stdout, out
+	assert f"RELEASE_GATE_FINAL_CI_HOLD outcome=deferred pr=7 head={SHA} gate_run=46140903455 gate_age_min=87 max=300" in result.stdout, out
+	assert f"REVIEW_FINAL_CI pr=7 head={SHA} outcome=deferred reason=release_gate_active" in result.stdout, out
+	assert _dispatches(calls) == []
+	# A queued gate holds too; the newest active gate is named.
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env([_gate_run(200, run_id=1), _gate_run(5, status="queued", run_id=2)]))
+	assert "gate_run=2 gate_age_min=5 max=300" in result.stdout, result.stdout
+	assert _dispatches(calls) == []
+	# Docs-only and sync-quick dispatches are never held.
+	docs = {**no_run, f"repos/{REPO}/pulls/7/files": {"body": [{"filename": "docs/plans/x-plan.md"}]}}
+	result, calls = _ensure(fake_gh, docs, env=_hold_env([_gate_run(10)]))
+	assert "RELEASE_GATE_FINAL_CI_HOLD" not in result.stdout, result.stdout + result.stderr
+	assert [d[-1] for d in _dispatches(calls)] == ["docs_only=true"]
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env([_gate_run(10)], PR_FINAL_CI_SYNC_QUICK="true"))
+	assert "RELEASE_GATE_FINAL_CI_HOLD" not in result.stdout, result.stdout + result.stderr
+	assert [d[-1] for d in _dispatches(calls)] == ["sync_quick=true"]
+	# A refused sync-quick dispatch that falls through to the full suite is held.
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env([_gate_run(10)], PR_FINAL_CI_SYNC_QUICK="true", FAKE_GH_DISPATCH_RC="1"))
+	assert "RELEASE_GATE_FINAL_CI_HOLD outcome=deferred" in result.stdout, result.stdout
+	assert len(_dispatches(calls)) == 1
+	# A gate at or past the bound dispatches.
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env([_gate_run(301)]))
+	assert f"RELEASE_GATE_FINAL_CI_HOLD outcome=bound_reached pr=7 head={SHA} gate_run=46140903455 gate_age_min=301 max=300" in result.stdout, result.stdout
+	assert "rc=0 outcome=dispatched" in result.stdout
+	assert len(_dispatches(calls)) == 1
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env([_gate_run(30)], RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES="20"))
+	assert "outcome=bound_reached" in result.stdout and "max=20" in result.stdout, result.stdout
+	assert len(_dispatches(calls)) == 1
+	# 0 turns the hold off; a bad bound warns and uses 300.
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env([_gate_run(10)], RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES="0"))
+	assert "RELEASE_GATE_FINAL_CI_HOLD" not in result.stdout
+	assert len(_dispatches(calls)) == 1
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env([_gate_run(10)], RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES="abc"))
+	assert "::warning::RELEASE_GATE_FINAL_CI_HOLD_MAX_MINUTES must be an integer from 0 to 99999; using 300." in result.stdout
+	assert "outcome=deferred" in result.stdout and _dispatches(calls) == []
+	# Invalid JSON fails open and dispatches.
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env("not json"))
+	assert f"RELEASE_GATE_FINAL_CI_HOLD outcome=runs_unreadable pr=7 head={SHA}" in result.stdout, result.stdout
+	assert len(_dispatches(calls)) == 1
+	# No active gate (completed gate, other workflows): unchanged dispatch, no line.
+	for runs in ([], [other_run], [_gate_run(10, status="completed")], [_gate_run(10, path=".github/workflows/ci.yml")]):
+		result, calls = _ensure(fake_gh, no_run, env=_hold_env(runs))
+		assert "RELEASE_GATE_FINAL_CI_HOLD" not in result.stdout, runs
+		assert "rc=0 outcome=dispatched" in result.stdout, runs
+		assert len(_dispatches(calls)) == 1
+	# With the input empty, every caller behaves as before (no extra call).
+	result, calls = _ensure(fake_gh, no_run)
+	baseline = calls
+	assert "RELEASE_GATE_FINAL_CI_HOLD" not in result.stdout and len(_dispatches(calls)) == 1
+	result, calls = _ensure(fake_gh, no_run, env=_hold_env([_gate_run(10)]))
+	assert [c for c in calls if c[:1] == ["api"]] == [c for c in baseline if c[:1] == ["api"]]
+
+
+def test_release_gate_hold_helper_return_codes(fake_gh) -> None:
+	body = 'out="$(_pr_final_ci_release_gate_active "$RUNS")"; echo "rc=$? out=${out}"'
+	for runs, expected in (
+		(json.dumps([_gate_run(3, run_id=5)]), "rc=0 out=5 3"),
+		(json.dumps({"workflow_runs": [_gate_run(3, run_id=6, path=GATE_PATH)]}), "rc=0 out=6 3"),
+		(json.dumps([dict(_gate_run(3), created_at="bad")]), "rc=1 out="),
+		(json.dumps([dict(_gate_run(3), id="x;y")]), "rc=1 out="),
+		("[]", "rc=1 out="),
+		("{}", "rc=2 out="),
+		("oops", "rc=2 out="),
+	):
+		result, calls = fake_gh(LIB_PRELUDE + body, {}, {"RUNS": runs})
+		assert expected in result.stdout, (runs, result.stdout, result.stderr)
+		assert calls == []
