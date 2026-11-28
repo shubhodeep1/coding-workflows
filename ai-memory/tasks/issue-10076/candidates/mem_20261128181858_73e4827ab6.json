@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10076,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10076\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10277\",\"pr_number\":10277,\"branch\":\"ai/issue-10076\",\"run_id\":\"46171741011\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/46171741011\",\"changed_files\":[\".github/workflows/promote-main-to-stable.yml\",\"README.md\",\"agents.d/10076-promote-hold-gate.md\",\"agents.d/9342-stable-rollback.md\",\"changelog.d/10076-promote-hold-gate.md\",\"tests/test_promote_main_to_stable_push_retry.py\"]}",
+  "fingerprint": "458c6449d4618dcd89b454e4e930020d3eb28f5aab62790d397b68128d7a18a0",
+  "lineage": {
+    "issue_number": 10076,
+    "parent_ids": [],
+    "pr_number": 10277,
+    "run_id": "46171741011",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46171741011",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10277"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261128181858_73e4827ab6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10076,
+    "level": "run",
+    "pr_number": 10277,
+    "run_id": "46171741011"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10076: https://github.com/shubhodeep1/coding-workflows/pull/10277",
+  "timestamps": {
+    "created_at": "2026-11-28T18:18:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
