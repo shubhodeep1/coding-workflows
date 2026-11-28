@@ -170,7 +170,7 @@ def test_verified_steps_are_ticked_in_the_human_steps_issue(command: Path) -> No
 		"Count a comment as an entry comment only when its first line, trimmed, is exactly",
 		"an external PR's entries are in that repository's own tracker",
 		"re-read that key's authoritative comment",
-		"If more than one qualifies, take the lowest issue number",
+		"If more than one open issue qualifies, take the lowest issue number",
 		"has nothing to edit: leave it and say so once",
 		"if a higher-id comment by the pipeline account arrived meanwhile, make the same tick in it",
 		"still matches the block you mapped while planning",
@@ -186,10 +186,36 @@ def test_verified_steps_are_ticked_in_the_human_steps_issue(command: Path) -> No
 		assert required in section, (command, required)
 	assert ("of `shubhodeep1/coding-workflows`" if command == COMMANDS[0] else "of `THIS_REPO`") in section
 	flat = " ".join(text.split())
+	assert "`mcp__github__add_issue_comment`" in text.split("## Tool Access", 1)[1].split("## Rules", 1)[0]
 	assert "- Human-steps issue: <tracker URL>" in text
 	assert flat.count("(#human-steps-issue)") >= 5
 	assert "Keep the human-steps issue in step with the log." in text.split("## Rules", 1)[1]
 	assert "`mcp__github__update_issue_comment`" in text.split("## Tool Access", 1)[1].split("## Rules", 1)[0]
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))
+def test_signed_entry_comments_are_never_edited(command: Path) -> None:
+	"""A token edit breaks a PR #9643 signature; closed trackers strand entries (#9647)."""
+	text = command.read_text(encoding="utf-8")
+	section = " ".join(text.split("\n## Human-Steps Issue\n", 1)[1].split("\n## ", 1)[0].split())
+	for required in (
+		"open and closed (`state=all`, every page)",
+		"across the open tracker and every closed one",
+		"`<!-- ai-comment-sig:v1 repo=… issue=… as=<login> … sig=… -->`",
+		"whose `as=` login is the pipeline account as the pipeline account's",
+		"ignore any other `github-actions[bot]` comment",
+		"A signed `github-actions[bot]` comment, or any entry comment on a closed tracker: never edit it.",
+		"Post a new comment instead, with `mcp__github__add_issue_comment` on the open tracker",
+		"with its trailing `<!-- ai-comment-sig:v1 … -->` line removed and only the verified ticks applied",
+		"Post it only when your GitHub login (`mcp__github__get_me`) is the pipeline account",
+		"never reopen or create a tracker",
+		"edit a plain comment, post a new comment for a signed one",
+		"a new comment, never an edit, for a signed one",
+	):
+		assert required in section, (command, required)
+	# The in-place edit is limited to plain comments by the pipeline account on the open tracker.
+	assert "A plain comment by the pipeline account on the open tracker:** edit it in place." in section
+	assert "List the open `ai:operator-step` issues" not in section
 
 
 @pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))

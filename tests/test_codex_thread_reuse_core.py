@@ -55,7 +55,7 @@ def parse_exec(args: list[str]) -> tuple[str, list[str]]:
 
 args = sys.argv[1:]
 if args == ["--version"]:
-    print("codex-cli 0.114.0")
+    print("codex-cli 0.171.0")
     raise SystemExit(0)
 
 if args == ["exec", "resume", "--help"]:

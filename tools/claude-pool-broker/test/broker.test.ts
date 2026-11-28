@@ -505,19 +505,93 @@ describe("workflow identity", () => {
 		["an unknown status", { status: 200, body: { status: "weird" } }],
 	];
 	for (const [name, answer] of unavailable) {
-		it(`fails closed on ${name}`, async () => {
+		it(`checks stable when main is unavailable: ${name}`, async () => {
 			const s = stub();
 			s.compare[`main...${SHA}`] = answer;
 			s.compare[`stable...${SHA}`] = { status: 200, body: { status: "behind" } };
+			const { status } = await call(s, request(await sign(pinned())));
+			expect(status).toBe(200);
+			expect(compareCalls(s).length).toBe(2);
+		});
+
+		it(`fails closed when main and stable are both unavailable: ${name}`, async () => {
+			const s = stub();
+			s.compare[`main...${SHA}`] = answer;
+			s.compare[`stable...${SHA}`] = { status: 503, body: {} };
 			const { status, body } = await call(s, request(await sign(pinned())));
 			expect([status, body.error]).toEqual([403, "workflow_sha_unverifiable"]);
-			expect(compareCalls(s).length).toBe(1);
+			expect(compareCalls(s).length).toBe(2);
+		});
+	}
+
+	it("fails closed when main and stable are unavailable (503 / 429)", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 503, body: {} };
+		s.compare[`stable...${SHA}`] = { status: 429, body: {} };
+		const { status, body } = await call(s, request(await sign(pinned())));
+		expect([status, body.error]).toEqual([403, "workflow_sha_unverifiable"]);
+		expect(compareCalls(s).length).toBe(2);
+	});
+
+	it("main unavailable plus stable diverged is never granted", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 503, body: {} };
+		s.compare[`stable...${SHA}`] = { status: 200, body: { status: "diverged" } };
+		const { status, body } = await call(s, request(await sign(pinned())));
+		expect([status, body.error]).toEqual([403, "workflow_sha_unverifiable"]);
+		expect(compareCalls(s).length).toBe(2);
+	});
+
+	it("BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED=false keeps the old 1-call refusal", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 503, body: {} };
+		s.compare[`stable...${SHA}`] = { status: 200, body: { status: "behind" } };
+		const env = { ...ENV, BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED: "false" };
+		const { status, body } = await call(s, request(await sign(pinned())), env);
+		expect([status, body.error]).toEqual([403, "workflow_sha_unverifiable"]);
+		expect(compareCalls(s).length).toBe(1);
+		expect(s.logs.some((line) => line.includes("workflow_sha_check_all_branches"))).toBe(false);
+	});
+
+	it("an invalid BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED turns the new path off and warns", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 503, body: {} };
+		s.compare[`stable...${SHA}`] = { status: 200, body: { status: "behind" } };
+		const env = { ...ENV, BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED: "maybe" };
+		const { status, body } = await call(s, request(await sign(pinned())), env);
+		expect([status, body.error]).toEqual([403, "workflow_sha_unverifiable"]);
+		expect(compareCalls(s).length).toBe(1);
+		expect(s.logs).toContain("CLAUDE_POOL broker workflow_sha_check_all_branches flag=invalid fallback=off");
+		expect(s.logs.join("\n")).not.toContain("maybe");
+	});
+
+	it("a boolean BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED=false (wrangler [vars]) keeps the old 1-call refusal", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 503, body: {} };
+		s.compare[`stable...${SHA}`] = { status: 200, body: { status: "behind" } };
+		const env = { ...ENV, BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED: false as unknown as string };
+		const { status, body } = await call(s, request(await sign(pinned())), env);
+		expect([status, body.error]).toEqual([403, "workflow_sha_unverifiable"]);
+		expect(compareCalls(s).length).toBe(1);
+		expect(s.logs.some((line) => line.includes("workflow_sha_check_all_branches"))).toBe(false);
+	});
+
+	for (const value of ["TRUE", "", " true "]) {
+		it(`BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED=${JSON.stringify(value)} keeps the new path on`, async () => {
+			const s = stub();
+			s.compare[`main...${SHA}`] = { status: 503, body: {} };
+			s.compare[`stable...${SHA}`] = { status: 200, body: { status: "behind" } };
+			const env = { ...ENV, BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED: value };
+			expect((await call(s, request(await sign(pinned())), env)).status).toBe(200);
+			expect(compareCalls(s).length).toBe(2);
+			expect(s.logs.some((line) => line.includes("workflow_sha_check_all_branches"))).toBe(false);
 		});
 	}
 
 	it("does not cache an unverifiable result", async () => {
 		const s = stub();
 		s.compare[`main...${SHA}`] = { status: 503, body: {} };
+		s.compare[`stable...${SHA}`] = { status: 503, body: {} };
 		expect((await call(s, request(await sign(pinned())))).body.error).toBe("workflow_sha_unverifiable");
 		s.compare[`main...${SHA}`] = { status: 200, body: { status: "behind" } };
 		expect((await call(s, request(await sign(pinned())))).status).toBe(200);
@@ -1226,8 +1300,9 @@ describe("durable SHA cache", () => {
 			store.mapFor(WORKFLOW_SHA_CACHE_OBJECT).set("verified_shas", { [SHA]: at });
 			const s = stub();
 			s.compare[`main...${SHA}`] = { status: 503, body: {} };
+			s.compare[`stable...${SHA}`] = { status: 503, body: {} };
 			expect((await call(s, request(await sign(pinned())), chatgptEnv(store))).body.error).toBe("workflow_sha_unverifiable");
-			expect(compareCalls(s).length).toBe(1);
+			expect(compareCalls(s).length).toBe(2);
 		});
 	}
 
@@ -1274,6 +1349,7 @@ describe("durable SHA cache", () => {
 		expect((await call(untrusted, request(await sign(pinned())), chatgptEnv(store))).body.error).toBe("workflow_sha_unverified");
 		const unavailable = stub();
 		unavailable.compare[`main...${SHA}`] = { status: 503, body: {} };
+		unavailable.compare[`stable...${SHA}`] = { status: 503, body: {} };
 		expect((await call(unavailable, request(await sign(pinned())), chatgptEnv(store))).body.error).toBe("workflow_sha_unverifiable");
 		expect(shaMap(store)).toBeUndefined();
 	});
