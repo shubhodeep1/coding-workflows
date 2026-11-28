@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, selection of the five steps moved from tests-heal-plan-and-validation into orchestrate-poll (lines 4394-4486; steps at 4418, 4436, 4462, 4468, 4474)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: ci.yml comments (lines 1740-1750, 4396, 4425-4427, 4433, 4449-4459) and changelog.d/10200-ci-heal-job-steps-to-poll-groups.md state run 45931627782 step timings could not be read, so the steps were picked by test and subprocess counts, not measured timings; the diff does not show they are the slowest. Severity disagreement: NIT (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) vs MAJOR (google_gemini-3_1-flash-lite, openai_gpt-6-luna); highest is MAJOR. Other constraints met (names preserved, timeouts unchanged, no new required jobs); the gap is documented and cannot be closed without timing data.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of steps moved from `tests-heal-plan-and-validation` into `orchestrate-poll`.\nEvidence of absence: Comments in `ci.yml` and the changelog fragment say run 45931627782's step timings could not be read. The five steps were picked by test and subprocess counts, not measured duration. Other constraints met. Documented in three places. Sharded heal step stays in the job. Gap cannot be closed without timing data.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml, selection of the five steps moved from tests-heal-plan-and-validation into orchestrate-poll (lines 4394-4482)\nEvidence of absence: Workflow comments (line 4396) state step timings could not be read, so the five steps were picked by test and subprocess counts; the timing-based selection was deferred to future runs.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\" (issue #10200 body)\nExpected change site: .github/workflows/ci.yml \u2014 the selection of the five steps moved from tests-heal-plan-and-validation into orchestrate-poll (lines 4394-4486 on the merge-resolved head)\nEvidence of absence: Heal-job comment (around lines 1729-1739 in the original PR diff) and per-step comments at lines 4396, 4433 and 4459 state run 45931627782's step timings could not be read; steps were picked by test and subprocess counts. Other constraints met (names preserved, timeouts 20/30, no new required jobs). Deferral documented in three places, including changelog.d/10200-ci-heal-job-steps-to-poll-groups.md. Cannot be closed in this rollout.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings)\" into the CI job with the most headroom.\nExpected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` to `orchestrate-poll`.\nEvidence of absence: Workflow comments at lines 1740\u20131750 and 4394\u20134454 state the step timings could not be read and the moved steps were selected using test and subprocess counts. The diff does not establish these were the slowest steps by the requested timings.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #10200 body)\nExpected change site: `.github/workflows/ci.yml`, the five steps moved from `tests-heal-plan-and-validation` into `orchestrate-poll` (lines 4418, 4436, 4462, 4468, 4474 on the merge-resolved head)\nEvidence of absence: Comments (ci.yml lines 4425-4427, 4449-4452) and changelog.d/10200-ci-heal-job-steps-to-poll-groups.md state timings could not be read; steps selected by test and subprocess counts. Carry-over from prior rounds, documented as an estimate and accepted as residual. The last-run comment-only edit in `tests/test_ci_poll_test_sharding.py:2242-2244` is accurate and does not change this. Verified: all five steps exist once in `orchestrate-poll` with strategy.job-index guards, timeouts unchanged (20/30), GROUP_PINNED_STEPS matches.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c3abd579591a40d65316a64f0c1bdf52f4a630ba2f9cae24367e6328cf6a896c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10202,
+    "run_id": "46114416055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46114416055",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128063854_c816d0aa3b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10202,
+    "run_id": "46114416055"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T06:38:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
