@@ -505,7 +505,11 @@ def test_workflows_do_not_interpolate_secrets_into_remote_urls() -> None:
 	assert isinstance(implement_push_env, dict)
 	assert implement_push_env.get("GH_TOKEN") == "${{ secrets.GH_PAT }}"
 	review_push = _step("review_autofix.yml", "codex-agent", "Push all pending commits")
-	assert ENV_BOUND_PUSH_URL in str(review_push.get("run"))
+	# The step sources its body from scripts/ (moved for the workflow size guard).
+	assert "review_autofix_step_push_pending_commits.sh" in str(review_push.get("run"))
+	review_push_body = (REPO_ROOT / "scripts" / "review_autofix_step_push_pending_commits.sh").read_text(encoding="utf-8")
+	assert ENV_BOUND_PUSH_URL in review_push_body
+	assert not (SECRET_IN_REMOTE_URL.search(review_push_body) or SECRET_IN_URL_AUTHORITY.search(review_push_body))
 	review_push_env = review_push.get("env")
 	assert isinstance(review_push_env, dict)
 	assert review_push_env.get("GH_TOKEN") == "${{ secrets.GH_PAT }}"

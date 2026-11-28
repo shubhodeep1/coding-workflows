@@ -136,6 +136,8 @@ jobs:
     # It then took 14m21s of its 15 minutes on main (run 43139141266,
     # budget-watch issue #9362), so "Validation self-test unit tests" now runs
     # its module commands in four concurrent lanes in place (see that step).
+    # #10206 added "Prompt template parity (quick)" (tests/test_assemble_prompt.py,
+    # about 6 seconds), so prompt/template drift is red on CI quick.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Explicit since #9939: ci_pr_quick.yml grants `statuses: write` for
@@ -616,6 +618,17 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py
+
+      # #10206: PRs #10066 and #10067 edited prompts/mode-judge-review-blocked.txt
+      # without its prompts/_templates/ twin; CI quick passed and the drift was
+      # first reported by the final CI runs 45964653558 and 45974744375. Run the
+      # parity test here so CI quick is red while the review can still fix it.
+      # The full-CI copy in tests-release-and-log-analysis ("Review/judge/conflict
+      # strict-render contract test") is kept unchanged.
+      - name: Prompt template parity (quick)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
 
       - name: Prompt forbidden-token soft lint
         run: |
@@ -1737,6 +1750,17 @@ jobs:
     # `Merge probe unit tests`, so no further steps were moved.
     # If budget-watch flags this job again, read that run's step timings
     # before moving anything.
+    # Budget-watch issue #10200: this job took 18m44s of its 20 minutes on
+    # main (run 45931627782). That run's step timings could not be read, so
+    # five steps were picked by test and subprocess counts, an estimate:
+    # `Tracking issue comment cap tests` and `Workflow log analysis contract
+    # tests` moved on to orchestrate-poll group 2, and the three review
+    # conflict-resolve / review-blocked judge steps (#9363) to group 3. The
+    # heal module tests/test_workflow_failure_heal.py has grown to about 602
+    # test functions (297 tests when #7387 sharded it), so most of what is
+    # left is the sharded heal step. If budget-watch flags this job again,
+    # moving the remaining small steps will not help: read the step timings
+    # first.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1965,22 +1989,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_healthcheck_test_strings.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_test_script_prologue.py
 
-      # Moved from tests-hooks-and-orchestrator, which took 15m09s of its 20
-      # minutes on main (run 38508333607, budget-watch issue #7366). Step
-      # timings were not readable when this was planned; these are the hooks
-      # job's heaviest subprocess-driven steps. None needs git history, the
-      # prepared .claude/ live copies or Node, which only the hooks job has.
-      # Three of those six steps (the Claude-engine judges, the validation
-      # harness sandbox and the check-failure triage security tests) moved on
-      # to tests-release-and-log-analysis after this job took 15m19s of its
-      # 20 minutes on main (run 38564033998, budget-watch issue #7383).
-      # The activation verification step moved on to
-      # tests-release-and-log-analysis in #8279.
-      - name: Tracking issue comment cap tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py tests/test_tg_helpers_cleanup.py tests/test_tg_tracking_write_status.py
-
+      # `Tracking issue comment cap tests` moved on to orchestrate-poll group 2 in #10200.
       - name: Daily consumer health check tests
         run: |
           set -euo pipefail
@@ -2008,16 +2017,8 @@ jobs:
       # tests/claude_template_drift.py and the Prepare step). Names and bodies
       # unchanged.
       # The Node pair moved on to tests-release-and-log-analysis in #9018.
-      - name: Workflow log analysis contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stage_workflow_log_bundle.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_workflow_analysis_report.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_log_analysis_purge_safety.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_log_analysis_since_last_report.py
-
+      # `Workflow log analysis contract tests` moved on to orchestrate-poll
+      # group 2 in #10200; only `Semantic cache unit tests` stays here.
       - name: Semantic cache unit tests
         run: |
           set -euo pipefail
@@ -2025,29 +2026,11 @@ jobs:
           python3 -m coverage run tests/test_semantic_cache.py
           python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
 
-      # Moved from tests-promote-stall-and-review, which took 21m25s of its 20
-      # minutes on main (run 43138350536, budget-watch issue #9363). The run's
-      # step timings were not readable; the pick is an estimate from test and
-      # subprocess counts. These three ran on that job's depth-1 checkout, the
-      # same as this job's. Names and bodies unchanged.
-      - name: Review conflict-resolve sandbox-only tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_conflict_resolve_sandbox_only.py
-
-      - name: Review conflict-resolve retry-prelude rendering contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
-
-      - name: Review-blocked judge security-pass helper tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_security_pass.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_head_binding.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_enable_auto_merge_cdpath.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_draft_skip.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_rb_judge_incomplete_comment_context.py
+      # `Review conflict-resolve sandbox-only tests`, `Review conflict-resolve
+      # retry-prelude rendering contract test` and `Review-blocked judge
+      # security-pass helper tests` (moved here from
+      # tests-promote-stall-and-review in #9363) moved on to orchestrate-poll
+      # group 3 in #10200.
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -2198,19 +2181,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
 
-      - name: Review autofix step-script contract and workflow file size guard tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_step_scripts_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_step_scripts_contract.py
-
-      - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_claude_fixer_mode.py tests/test_validate_target_ref_input.py
-
       - name: Review autofix iteration count tests
         run: |
           set -euo pipefail
@@ -2344,15 +2314,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_summarize_reviewer_consensus_sandbox_pin.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_summarize_reviewer_consensus_prompt.py
-
-      - name: Standalone clarify auto-decide tests (port P3)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_auto_decisions.py \
-            tests/test_clarify_respond_standalone.py \
-            tests/test_clarify_github_facts.py \
-            tests/test_clarify_sandbox_base_image_preseed.py
 
       # Moved from tests-release-and-log-analysis, which took 15m10s of its 20
       # minutes on main (run 40625105162, budget-watch issue #8245). The run's
@@ -3235,6 +3196,9 @@ jobs:
     # from group 3).
     # Since #9895, the pre-push affected-test gate step runs in
     # tests-hooks-and-orchestrator instead of group 0.
+    # Since #10248, group 3 also pins the step-script/file-size guard,
+    # Claude-fixer/target_ref and clarify auto-decide steps (moved from
+    # tests-promote-stall-and-review).
     # Since #10182, group 3 also pins the orchestrate lib step and group 0
     # the post-Codex recovery step (moved from tests-release-and-log-analysis).
     # On 2026-11-21, after #9641 moved the pre-push gate step out of group
@@ -3247,6 +3211,9 @@ jobs:
     # `timeout-minutes`, for this job only; budget-watch still warns at
     # 0.75 of the limit (22m30s). tests/test_ci_job_split_contract.py pins
     # this job as the only exception to the 20-minute cap.
+    # Since #10200, group 2 also pins the tracking comment cap and workflow
+    # log analysis steps, and group 3 the three review conflict-resolve /
+    # review-blocked judge steps (moved from tests-heal-plan-and-validation).
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
@@ -4418,6 +4385,138 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_transient_rerun.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_owned_failures.py
 
+      # Moved from tests-promote-stall-and-review, which took 15m57s of its 20
+      # minutes on main (run 46098026068, budget-watch issue #10248), to group
+      # 3. The run's step timings could not be read (step statuses only), so
+      # the pick is an estimate from test and subprocess counts, not a
+      # measurement: together these three steps run about 207 tests and about
+      # 173 subprocess or bash call sites. Group 3 was the target because this
+      # job has the only 30-minute budget (budget-watch warns at 22m30s) and
+      # group 3 pinned only "Orchestrate poll single-file module tests" and
+      # #10182's "Orchestrate lib unit tests" when this was planned (its
+      # headroom is unmeasured); group 1 already took #9966's two steps.
+      # #10200 later also moved three steps to group 3 (below), so after the
+      # merge group 3 carries 8 guarded steps, more than any other group
+      # (3-6). Its combined time is unmeasured: if budget-watch flags
+      # orchestrate-poll (3), rebalance from its step timings. The modules need no checkout history
+      # (both jobs check out at depth 1), Node or job-level env; the shared pip
+      # install provides pytest and PyYAML. Names and bodies unchanged; each
+      # step runs once per CI run.
+      - name: Review autofix step-script contract and workflow file size guard tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_step_scripts_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_step_scripts_contract.py
+
+      - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_claude_fixer_mode.py tests/test_validate_target_ref_input.py
+
+      - name: Standalone clarify auto-decide tests (port P3)
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_auto_decisions.py \
+            tests/test_clarify_respond_standalone.py \
+            tests/test_clarify_github_facts.py \
+            tests/test_clarify_sandbox_base_image_preseed.py
+
+      # Moved on from tests-heal-plan-and-validation, which took 18m44s of its
+      # 20 minutes on main (run 45931627782, budget-watch issue #10200), to
+      # group 2. The run's step timings were not readable, so the pick is an
+      # estimate from test and subprocess counts (about 65 tests and 45
+      # subprocess sites), not timings. This job has the only 30-minute
+      # budget. Group choice: groups 3 and 2 pinned the least load when this
+      # was planned (group 3 only the single-file module step, group 2 four
+      # steps); the three review steps of the same move went to group 3, so
+      # this one and the workflow log analysis step went to group 2. Name and
+      # body unchanged; only the group guard is new. This job also checks out
+      # at depth 1, like the heal job.
+      # In the older text below, "the hooks job" is tests-hooks-and-orchestrator
+      # and "this job" is tests-heal-plan-and-validation.
+      # Moved from tests-hooks-and-orchestrator, which took 15m09s of its 20
+      # minutes on main (run 38508333607, budget-watch issue #7366). Step
+      # timings were not readable when this was planned; these are the hooks
+      # job's heaviest subprocess-driven steps. None needs git history, the
+      # prepared .claude/ live copies or Node, which only the hooks job has.
+      # Three of those six steps (the Claude-engine judges, the validation
+      # harness sandbox and the check-failure triage security tests) moved on
+      # to tests-release-and-log-analysis after this job took 15m19s of its
+      # 20 minutes on main (run 38564033998, budget-watch issue #7383).
+      # The activation verification step moved on to
+      # tests-release-and-log-analysis in #8279.
+      - name: Tracking issue comment cap tests
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py tests/test_tg_helpers_cleanup.py tests/test_tg_tracking_write_status.py
+
+      # Moved on from tests-heal-plan-and-validation to group 2 in #10200
+      # (run 45931627782, 18m44s of 20 minutes; see the step above). The pick
+      # is an estimate from test and subprocess counts (about 67 tests and 40
+      # subprocess sites). Name and body unchanged; only the group guard is
+      # new. Its #8268 partner `Semantic cache unit tests` stays in the heal
+      # job.
+      # In the older text below, "this job" means tests-heal-plan-and-validation.
+      # Moved from tests-release-and-log-analysis, which took 15m13s of its 20
+      # minutes on main (run 40716905879, budget-watch issue #8268). That run's
+      # step timings were not readable, so these steps were chosen by estimated
+      # cost, not measured. None of them needs git history, so this job's
+      # default depth-1 checkout is enough. Names and bodies unchanged.
+      - name: Workflow log analysis contract tests
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stage_workflow_log_bundle.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_workflow_analysis_report.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_log_analysis_purge_safety.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_log_analysis_since_last_report.py
+
+      # Moved on from tests-heal-plan-and-validation, which took 18m44s of its
+      # 20 minutes on main (run 45931627782, budget-watch issue #10200), to
+      # group 3. The run's step timings were not readable, so the pick is an
+      # estimate from test and subprocess counts (the security-pass helper
+      # step about 154 tests and 73 subprocess sites, the sandbox-only step
+      # about 76 and 40), not timings. Group 3 pinned only the single-file
+      # module step when this was planned; the three steps of the #9363 move
+      # stay together. Names and bodies unchanged; only the group guard is
+      # new.
+      # In the older text below, "this job" means tests-heal-plan-and-validation.
+      # Moved from tests-promote-stall-and-review, which took 21m25s of its 20
+      # minutes on main (run 43138350536, budget-watch issue #9363). The run's
+      # step timings were not readable; the pick is an estimate from test and
+      # subprocess counts. These three ran on that job's depth-1 checkout, the
+      # same as this job's. Names and bodies unchanged.
+      - name: Review conflict-resolve sandbox-only tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_conflict_resolve_sandbox_only.py
+
+      - name: Review conflict-resolve retry-prelude rendering contract test
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
+
+      - name: Review-blocked judge security-pass helper tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_security_pass.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_head_binding.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_enable_auto_merge_cdpath.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_draft_skip.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_rb_judge_incomplete_comment_context.py
+
       # Moved again from tests-release-and-log-analysis, which took 18m23s of
       # its 20 minutes on main (run 45766722607, budget-watch issue #10182,
       # re-issued from #10162). The run's step timings could not be read, so
@@ -5069,9 +5168,14 @@ jobs:
     # head passed a full final CI run), then runs the PR's own test files and
     # the CI-structure tests. Skipped in every other run; `lint` accepts that
     # skip only when sync_quick is not "true".
+    # Delta overlap (merge-lease short critical section, Phase 2, D1): an
+    # overlap with other files also passes verify when
+    # MERGE_BASE_SYNC_DELTA_CI_ENABLED is on and the pre-push selector picks at
+    # most MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES tests for it; run-tests then
+    # adds those tests. The full suite still runs on main after the merge.
     if: inputs.mode != 'quick' && github.event_name == 'workflow_dispatch' && inputs.sync_quick == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
       # full-ci-green reads the approved head's ci.yml runs.
@@ -5118,11 +5222,15 @@ jobs:
           CI_SYNC_QUICK_REPOSITORY: ${{ github.repository }}
           CI_SYNC_QUICK_PR_NUMBER: ${{ inputs.pr_number }}
           CI_SYNC_QUICK_DOCS_ONLY: ${{ inputs.docs_only }}
+          MERGE_BASE_SYNC_DELTA_CI_ENABLED: ${{ vars.MERGE_BASE_SYNC_DELTA_CI_ENABLED || 'true' }}
+          MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES: ${{ vars.MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES || '60' }}
         run: bash scripts/ci_sync_quick.sh verify
 
       - name: Run the PR's own tests and the CI-structure tests
         env:
           CI_SYNC_QUICK_HEAD_SHA: ${{ github.sha }}
+          MERGE_BASE_SYNC_DELTA_CI_ENABLED: ${{ vars.MERGE_BASE_SYNC_DELTA_CI_ENABLED || 'true' }}
+          MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES: ${{ vars.MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES || '60' }}
         run: bash scripts/ci_sync_quick.sh run-tests
 
   budget-watch:

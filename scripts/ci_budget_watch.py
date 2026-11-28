@@ -12,7 +12,18 @@ default branch, after the test jobs. It checks:
   CI_BUDGET_JOB_WARN_RATIO (default 0.75) of its `timeout-minutes`. The
   duration runs from the job's first started step to its completion, so time
   spent waiting for a runner is not counted, and a job that ran no step (for
-  example one cancelled while queued) is not reported (#9559).
+  example one cancelled while queued) is not reported (#9559);
+* release-gate job duration (#10220): any job of the latest completed
+  `.github/workflows/test-and-mark-stable.yml` run whose duration reached the
+  same ratio of the `timeout-minutes` in that file, measured the same way.
+  Its finding subject is `test-and-mark-stable.yml/<job>` so it cannot share
+  a dedup marker with a `ci.yml` job of the same name. Matrix legs
+  (`validate-scripts (orchestrate-poll)`) use the base job's timeout. A job
+  reported under the bare id of a job that now defines `strategy.matrix` is
+  never measured. Unless its conclusion is `skipped` (a post-split matrix job
+  skipped at job level by a failed `needs:`, listed under its bare name), it
+  comes from a run before the split and is counted as stale (`stale_jobs=N` on
+  the `CI_BUDGET_GATE outcome=read` line). A gate issue links the measured run.
 
 For every finding it prints a `::warning::` and makes sure exactly one open
 issue labelled `ai:ci-budget` exists for it (deduplicated by a hidden marker
@@ -31,7 +42,11 @@ CI_BUDGET_REFILE_URGENT_RATIO (default 0.9) of the limit. The `::warning::`
 line is printed either way.
 
 API calls (CLAUDE.md §15): one `actions/runs/{run_id}/jobs` read (skipped when
-no run id), one open-issue listing for the label, one label create when a
+no run id), one listing of the latest completed `test-and-mark-stable.yml` run
+and one `actions/runs/{gate_run_id}/jobs` read for it (skipped when no repo,
+when the gate workflow file is absent, or when no completed run exists; a
+failed read logs `CI_BUDGET_GATE outcome=read_failed` and skips gate jobs),
+one open-issue listing for the label, one label create when a
 new finding needs an issue (HTTP 422 when it exists), one listing of the 50
 most recently updated closed issues for the label (only when a finding has no
 open issue and the cooldown is on), and one create per new finding.
@@ -56,6 +71,8 @@ HARD_WORKFLOW_GUARD_BYTES = 480_000
 DEFAULT_JOB_WARN_RATIO = 0.75
 DEFAULT_REFILE_COOLDOWN_DAYS = 7
 DEFAULT_REFILE_URGENT_RATIO = 0.9
+# The release gate whose jobs the budget watch also checks (#10220).
+GATE_WORKFLOW = "test-and-mark-stable.yml"
 
 
 def marker(kind: str, subject: str) -> str:
@@ -137,11 +154,14 @@ def _job_run_start(job: dict[str, Any]) -> str | None:
 	return min(_parsed_starts).isoformat()
 
 
-def job_duration_findings(jobs: list[dict[str, Any]], timeouts: dict[str, int], ratio: float) -> list[dict[str, Any]]:
+def job_duration_findings(jobs: list[dict[str, Any]], timeouts: dict[str, int], ratio: float, *, workflow: str = "ci.yml") -> list[dict[str, Any]]:
 	"""Jobs whose duration reached ratio * timeout. Matrix jobs `name (x)` use the base name's timeout.
 
 	The duration runs from the first started step to the job's completion; jobs
 	that ran no step are not reported (they hit no timeout while running).
+	For a workflow other than ci.yml the subject is `<workflow>/<base>` and the
+	finding carries a `workflow` key; ci.yml findings keep the bare base name so
+	existing `ai:ci-budget` markers still deduplicate.
 	"""
 	findings = []
 	for job in jobs:
@@ -171,13 +191,97 @@ def job_duration_findings(jobs: list[dict[str, Any]], timeouts: dict[str, int], 
 				print(f"::notice::ci_budget_watch: job {unmeasured_name} has no usable start or completion time (conclusion={job.get('conclusion')}); duration not checked.")
 			continue
 		if took >= ratio * minutes * 60:
-			findings.append({"kind": "job_duration", "subject": base, "value": took, "limit": minutes * 60, "job": name})
+			if workflow == "ci.yml":
+				findings.append({"kind": "job_duration", "subject": base, "value": took, "limit": minutes * 60, "job": name})
+			else:
+				findings.append({"kind": "job_duration", "subject": f"{workflow}/{base}", "value": took, "limit": minutes * 60, "job": name, "workflow": workflow})
 	return findings
+
+
+def _escape_command_data(text: str) -> str:
+	"""Escape workflow-command data so API text cannot end a `::` command line."""
+	return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _matrix_job_keys(workflow_path: Path) -> set[str]:
+	"""Job ids and display names of jobs that define `strategy.matrix` (#10220)."""
+	import yaml
+
+	data = yaml.safe_load(workflow_path.read_text(encoding="utf-8")) or {}
+	keys: set[str] = set()
+	for job_id, job in (data.get("jobs") or {}).items():
+		strategy = job.get("strategy") if isinstance(job, dict) else None
+		if isinstance(strategy, dict) and strategy.get("matrix"):
+			keys.add(str(job_id))
+			name = job.get("name")
+			if isinstance(name, str) and name:
+				keys.add(name)
+	return keys
+
+
+def gate_job_findings(repo: str, root: Path, ratio: float) -> list[dict[str, Any]]:
+	"""Duration findings for the latest completed release-gate run (#10220).
+
+	Fail-open: a missing workflow file, no completed run or any API/parse error
+	returns [] with a `CI_BUDGET_GATE outcome=...` line.
+	"""
+	gate_path = root / ".github" / "workflows" / GATE_WORKFLOW
+	if not gate_path.is_file():
+		print("CI_BUDGET_GATE outcome=no_workflow")
+		return []
+	try:
+		# §14 audit: the only other run read here is
+		# `actions/runs/{GITHUB_RUN_ID}/jobs`, which covers the current CI run;
+		# no existing call returns release-gate jobs, so one runs listing and one
+		# jobs read are added per budget-watch run (pushes to main only).
+		runs = _gh([f"repos/{repo}/actions/workflows/{GATE_WORKFLOW}/runs?status=completed&per_page=1"]) or {}
+		workflow_runs = runs.get("workflow_runs") if isinstance(runs, dict) else None
+		if not isinstance(workflow_runs, list) or not workflow_runs or not isinstance(workflow_runs[0], dict):
+			print("CI_BUDGET_GATE outcome=no_run")
+			return []
+		gate_run_id = workflow_runs[0].get("id")
+		# Only a plain integer goes into the API path.
+		if not isinstance(gate_run_id, int) or isinstance(gate_run_id, bool):
+			raise ValueError(f"unexpected run id type {type(gate_run_id).__name__}")
+		jobs_payload = _gh([f"repos/{repo}/actions/runs/{gate_run_id}/jobs?per_page=100"]) or {}
+		gate_jobs = jobs_payload.get("jobs", []) if isinstance(jobs_payload, dict) else []
+		if not isinstance(gate_jobs, list):
+			raise ValueError("jobs is not a list")
+		gate_jobs = [job for job in gate_jobs if isinstance(job, dict)]
+		# A run from before a job became a matrix (for example the serial
+		# `validate-scripts` measured on the push that merged #10220) reports
+		# the bare job name; measuring it against the split layout would file
+		# an issue asking for a split already made, so it is skipped as stale.
+		matrix_keys = _matrix_job_keys(gate_path)
+		measured_jobs = [job for job in gate_jobs if job.get("name") not in matrix_keys]
+		# A post-split matrix job skipped at job level (a failed `needs:`) is
+		# also listed under its bare name; it is left out of the measurement
+		# but is not a pre-split job, so it is not counted as stale.
+		stale_jobs = sum(1 for job in gate_jobs if job.get("name") in matrix_keys and job.get("conclusion") != "skipped")
+		found = job_duration_findings(measured_jobs, job_timeouts(gate_path), ratio, workflow=GATE_WORKFLOW)
+		gate_run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{gate_run_id}"
+		for gate_finding in found:
+			gate_finding["run_id"] = gate_run_id
+			gate_finding["run_url"] = gate_run_url
+	except Exception as exc:  # noqa: BLE001 - fail-open by contract
+		print(f"::warning::ci_budget_watch: could not read the latest {GATE_WORKFLOW} run ({_escape_command_data(str(exc))}); gate job durations not checked.")
+		print("CI_BUDGET_GATE outcome=read_failed")
+		return []
+	print(f"CI_BUDGET_GATE outcome=read run_id={gate_run_id} jobs={len(gate_jobs)} findings={len(found)} stale_jobs={stale_jobs}")
+	return found
+
+
+def _is_gate_finding(finding: dict[str, Any]) -> bool:
+	workflow = finding.get("workflow")
+	return isinstance(workflow, str) and bool(workflow) and workflow != "ci.yml"
 
 
 def issue_title(finding: dict[str, Any]) -> str:
 	if finding["kind"] == "workflow_size":
 		return f"CI budget: {finding['subject']} is {finding['value']:,} bytes (guard {finding['limit']:,})"
+	if _is_gate_finding(finding):
+		job = finding.get("job", finding["subject"])
+		return f"CI budget: release gate job {job} ({finding['workflow']}) took {finding['value'] // 60}m{finding['value'] % 60:02d}s of its {finding['limit'] // 60}-minute timeout"
 	return f"CI budget: CI job {finding['subject']} took {finding['value'] // 60}m{finding['value'] % 60:02d}s of its {finding['limit'] // 60}-minute timeout"
 
 
@@ -193,6 +297,17 @@ def issue_body(finding: dict[str, Any], run_url: str) -> str:
 			"and `continue-on-error:`, and switch tests that read moved bodies to `expanded_review_autofix_text()`. "
 			"Never raise the guard."
 		)
+	elif _is_gate_finding(finding):
+		job = finding.get("job", finding["subject"])
+		task = (
+			f"Release gate job `{job}` in `.github/workflows/{finding['workflow']}` took {finding['value'] // 60}m{finding['value'] % 60:02d}s "
+			f"of its {finding['limit'] // 60}-minute `timeout-minutes` (latest completed run). A gate job that reaches its timeout "
+			"is cancelled and fails the release with no code fault.\n\n"
+			"Split the job's longest steps into parallel legs (a small matrix, keeping the job id and every step name) or move "
+			"them, unchanged, to the gate job with the most headroom. Do not raise `timeout-minutes`."
+		)
+		if finding.get("run_url"):
+			task += f"\n\nMeasured run: {finding['run_url']} (see its step timings)."
 	else:
 		job = finding.get("job", finding["subject"])
 		task = (
@@ -293,9 +408,12 @@ def main(argv: list[str] | None = None) -> int:
 				findings += job_duration_findings(jobs, job_timeouts(root / ".github" / "workflows" / "ci.yml"), ratio)
 			except Exception as exc:  # noqa: BLE001 - fail-open by contract
 				print(f"::warning::ci_budget_watch: could not read job timeouts from ci.yml ({exc}); job durations not checked.")
+	if args.repo:
+		# Independent of --run-id: the latest completed release-gate run.
+		findings += gate_job_findings(args.repo, root, ratio)
 
 	for f in findings:
-		print(f"::warning::CI_BUDGET kind={f['kind']} subject={f['subject']} value={f['value']} limit={f['limit']}")
+		print(f"::warning::CI_BUDGET kind={f['kind']} subject={_escape_command_data(str(f['subject']))} value={f['value']} limit={f['limit']}")
 	print(f"CI_BUDGET findings={len(findings)} warn_bytes={warn_bytes} job_ratio={ratio}")
 	if not findings or args.dry_run or not args.repo:
 		return 0

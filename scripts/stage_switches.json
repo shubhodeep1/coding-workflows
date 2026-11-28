@@ -416,9 +416,21 @@
 			"stage": "Merge-base freshness gate (scripts/pr_checks_lib.sh)."
 		},
 		{
+			"name": "MERGE_BASE_SYNC_DELTA_CI_ENABLED",
+			"default": "true",
+			"stage": "Delta final CI after a clean merge-base update (scripts/ci_sync_quick.sh verify/run-tests; scripts/pr_checks_lib.sh _pr_base_sync_dispatch_final_ci).",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "MERGE_BASE_SYNC_FAST_PATH_ENABLED",
 			"default": "true",
 			"stage": "When the head is exactly the merge commit a workflow-authored ai:merge-base-sync marker records, with parents [from, base], signed by web-flow and with its base parent contained in the base, the review gate skips the..."
+		},
+		{
+			"name": "MERGE_LEASE_CONFLICT_RELEASE_ENABLED",
+			"default": "true",
+			"stage": "Merge-lease conflict release (issue #10098, Phase 1 of docs/plans/merge-lease-short-critical-section-plan.md): the merge-train tick releases a holder that conflicts with its base once per PR while another waiter is ready (released_conflict); only false turns it off.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "MERGE_LEASE_ENABLED",
@@ -426,14 +438,31 @@
 			"stage": "Merge lease (scripts/pr_checks_lib.sh \"Merge lease\")."
 		},
 		{
+			"name": "MERGE_LEASE_INLINE_SYNC_ENABLED",
+			"default": "true",
+			"stage": "Merge-lease Phase 4 inline update-and-merge (scripts/pr_checks_lib.sh _pr_base_sync_inline_merge): the review job that updated a holder's branch merges the update head itself, and the pushed run's gate leaves a head whose marker names a live owner run (lease_inline_owner_active); only false turns it off.",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "MERGE_LEASE_METRICS_ENABLED",
 			"default": "true",
 			"stage": "Merge-lease Phase 1: one MERGE_LEASE_METRIC event=... base=... pr=... mode=... reason=... holder=... hold_s=... waiters=... ts=... line after each lease gate and tick decision; the tick's released lines end with merge..."
 		},
 		{
+			"name": "MERGE_LEASE_READY_GRANT_ENABLED",
+			"default": "true",
+			"stage": "Merge-lease ready-first grant (issue #10098, Phase 1 of docs/plans/merge-lease-short-critical-section-plan.md): the merge-train tick grants a lease slot only to a waiter that can merge now (ready_fallback); only false turns it off.",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "MERGE_LEASE_REVOKE_ENABLED",
 			"default": "true",
 			"stage": "Merge-lease Phase 2: the merge-train tick revokes the lease from a holder that can no longer merge (draft, [skip ai] title, pipeline ai-review/head-gate failure, failed final CI, or idle; reasons revoked_*), grants a..."
+		},
+		{
+			"name": "MERGE_RESOLVE_DELTA_REVIEW_ENABLED",
+			"default": "true",
+			"stage": "A verified [ai-merge-resolve] commit on an approved head is reviewed on its resolution (git show --remerge-diff) instead of the whole PR, gets a delta security audit since that head and, when the head passed a full final CI run, a [sync-quick] final CI run (merge-lease short critical section plan, Phase 3; review_autofix.yml); false reviews resolution heads in full."
 		},
 		{
 			"name": "MERGE_TRAIN_CONFLICT_CHECK_ENABLED",
@@ -998,6 +1027,11 @@
 			"default": "true",
 			"stage": "Turns on heal alert triage kind (added by open pull request #9396; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
 			"pending": true
+		},
+		{
+			"name": "ISSUE_PR_AUDIT_ENABLED",
+			"default": "true",
+			"stage": "Daily issue/PR audit in workflow-log-analysis.yml (collect-logs, 06:00 UTC): audits every issue and PR the pipeline account can reach, writes analysis/issue-pr-audit-<date>.md and one blocked-items Telegram report (#10153)."
 		},
 		{
 			"name": "JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED",

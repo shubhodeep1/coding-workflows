@@ -32,6 +32,22 @@
 #                                  then be empty)
 #   WLA_DELIVER_SECTIONS_BASE_SHA  target-branch tip that run branch forks
 #                                  from (sections-only mode; 40 hex chars)
+#   WLA_DELIVER_BRANCH_PREFIX      run-branch prefix (issue #10153; default
+#                                  auto/workflow-log-analysis-report; must
+#                                  match ^auto/[a-z0-9-]+$). The run branch is
+#                                  <prefix>-<run_id>-<run_attempt>, and the
+#                                  collision check covers that stream only.
+#   WLA_DELIVER_DOC_PATTERN        ERE every report / purged doc path must
+#                                  match (default: the workflow-optimization
+#                                  pattern; must start ^analysis/ and end \.md$)
+#   WLA_DELIVER_EXTRA_FILES        space-separated analysis/<name>.json files
+#                                  the run branch may add or modify as regular
+#                                  files, never delete (default empty)
+#
+# A bad value of any of the three fails closed with
+# reason=delivery_config_invalid. The defaults keep the workflow-log-analysis
+# delivery unchanged; the daily issue/PR audit (scripts/issue_pr_audit_run.sh)
+# passes its own prefix, pattern and cursor file.
 #
 # Sections-only mode (issue #9503, project #9116 P1b): commit_report already
 # delivered the report (pushed or pr_merged), and the deep-audit and
@@ -64,8 +80,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 
 WLA_DELIVER_PREFIX="WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY"
-WLA_DELIVER_BRANCH_RE='^auto/workflow-log-analysis-report-[0-9]+-[0-9]+$'
-WLA_DELIVER_DOC_RE='^analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\.md$'
+WLA_DELIVER_DEFAULT_BRANCH_PREFIX="auto/workflow-log-analysis-report"
+WLA_DELIVER_DEFAULT_DOC_RE='^analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\.md$'
+WLA_DELIVER_BRANCH_PREFIX="${WLA_DELIVER_BRANCH_PREFIX:-${WLA_DELIVER_DEFAULT_BRANCH_PREFIX}}"
+WLA_DELIVER_DOC_PATTERN="${WLA_DELIVER_DOC_PATTERN:-${WLA_DELIVER_DEFAULT_DOC_RE}}"
+WLA_DELIVER_EXTRA_FILES="${WLA_DELIVER_EXTRA_FILES:-}"
+# Derived from the inputs above; validated in section 1 before any use.
+WLA_DELIVER_BRANCH_RE="^${WLA_DELIVER_BRANCH_PREFIX}-[0-9]+-[0-9]+\$"
+WLA_DELIVER_DOC_RE="${WLA_DELIVER_DOC_PATTERN}"
+WLA_DELIVER_EXTRA_FILE_RE='^analysis/[a-z0-9_.-]+\.json$'
 WLA_DELIVER_RULESET_RE='GH006|GH013|protected branch|push declined|repository rule'
 WLA_DELIVER_MAX_PURGED_LISTED=50
 WLA_DELIVER_SECTIONS_FETCH_DEPTH=200
@@ -92,6 +115,30 @@ wla_deliver_fail()
 }
 
 # --- 1. Validate inputs -----------------------------------------------------
+if ! [[ "${WLA_DELIVER_BRANCH_PREFIX}" =~ ^auto/[a-z0-9-]+$ ]] \
+	|| [[ "${WLA_DELIVER_DOC_PATTERN}" != '^analysis/'* ]] \
+	|| [[ "${WLA_DELIVER_DOC_PATTERN}" != *'\.md$' ]]; then
+	wla_deliver_fail delivery_config_invalid
+fi
+wla_extra_files=()
+for wla_extra_file in ${WLA_DELIVER_EXTRA_FILES}; do
+	if ! [[ "${wla_extra_file}" =~ ${WLA_DELIVER_EXTRA_FILE_RE} ]] || [[ "${wla_extra_file}" == *..* ]]; then
+		wla_deliver_fail delivery_config_invalid
+	fi
+	wla_extra_files+=("${wla_extra_file}")
+done
+wla_default_stream="false"
+if [ "${WLA_DELIVER_BRANCH_PREFIX}" = "${WLA_DELIVER_DEFAULT_BRANCH_PREFIX}" ]; then
+	wla_default_stream="true"
+fi
+wla_deliver_is_extra_file()
+{
+	local wla_candidate
+	for wla_candidate in ${wla_extra_files[@]+"${wla_extra_files[@]}"}; do
+		[ "${wla_candidate}" = "$1" ] && return 0
+	done
+	return 1
+}
 if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
 	echo "Report delivery needs a branch ref (got ref_type='${GITHUB_REF_TYPE:-unknown}')."
 	wla_deliver_fail run_context_invalid
@@ -108,6 +155,10 @@ fi
 if [ -n "${DEFAULT_BRANCH:-}" ] && [ "${DEFAULT_BRANCH}" != "${TARGET_BRANCH}" ]; then
 	echo "Report delivery runs only on the default branch (ref '${TARGET_BRANCH}' is not the default branch)."
 	wla_deliver_fail run_context_invalid
+fi
+if [ "${wla_sections_only}" = "true" ] && { [ "${wla_default_stream}" != "true" ] || [ "${#wla_extra_files[@]}" -gt 0 ]; }; then
+	# Sections exist only for the workflow-log-analysis report.
+	wla_deliver_fail delivery_config_invalid
 fi
 if [ "${wla_sections_only}" = "true" ]; then
 	# The two modes are exclusive: a full-report run branch is never a
@@ -186,6 +237,10 @@ else
 fi
 if [ "${wla_sections_only}" != "true" ]; then
 	echo "INFO: ${#other_branches[@]} other open report pull request branch(es) to check for collisions."
+	if [ "${#other_branches[@]}" -gt 0 ]; then
+		# An earlier run's report PR of this stream is still open (#10153 D10).
+		echo "INFO: earlier_report_open=true"
+	fi
 fi
 
 # --- 4. Fetch the base, the run branch and other report branches -----------
@@ -278,6 +333,16 @@ if [ "${wla_sections_only}" = "true" ] && ! [ -s "${changed_paths_file}" ]; then
 	wla_deliver_fail no_section_changes "branch=${REPORT_BRANCH}"
 fi
 while IFS= read -r changed_path; do
+	if [ "${wla_sections_only}" != "true" ] && wla_deliver_is_extra_file "${changed_path}"; then
+		# An extra file (e.g. the audit cursor) may only be added or
+		# modified as a regular file, never deleted or turned into a link.
+		changed_mode="$(git ls-tree --full-tree "${run_ref}" -- "${changed_path}" | awk '{print $1}')" || changed_mode="unreadable"
+		if [ "${changed_mode}" != "100644" ]; then
+			echo "Run branch changes extra file '${changed_path}' to a deletion or non-regular file (mode ${changed_mode:-none})."
+			wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
+		fi
+		continue
+	fi
 	if ! [[ "${changed_path}" =~ ${WLA_DELIVER_DOC_RE} ]]; then
 		echo "Run branch changes a path outside the analysis docs: ${changed_path}"
 		wla_deliver_fail unexpected_paths "branch=${REPORT_BRANCH}"
@@ -326,7 +391,10 @@ renamed_from=""
 # Sections-only mode: the report is on the target branch by design, so
 # finding its path there must not create a -2 copy.
 if [ "${wla_sections_only}" != "true" ] && wla_deliver_path_taken "${REPORT_FILE}"; then
-	[[ "${REPORT_FILE}" =~ ^(analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2})(-[0-9]+)?\.md$ ]]
+	# The stem comes from the report path itself, so any dated stream works.
+	if ! [[ "${REPORT_FILE}" =~ ^(analysis/[a-z0-9-]+-[0-9]{4}-[0-9]{2}-[0-9]{2})(-[0-9]+)?\.md$ ]]; then
+		wla_deliver_fail report_file_invalid "branch=${REPORT_BRANCH}"
+	fi
 	report_base="${BASH_REMATCH[1]}"
 	next_suffix=2
 	while wla_deliver_path_taken "${report_base}-${next_suffix}.md" \
@@ -334,6 +402,9 @@ if [ "${wla_sections_only}" != "true" ] && wla_deliver_path_taken "${REPORT_FILE
 		next_suffix=$((next_suffix + 1))
 	done
 	new_report_file="${report_base}-${next_suffix}.md"
+	if ! [[ "${new_report_file}" =~ ${WLA_DELIVER_DOC_RE} ]]; then
+		wla_deliver_fail report_file_invalid "branch=${REPORT_BRANCH}"
+	fi
 	git -C "${worktree_dir}" mv -- "${REPORT_FILE}" "${new_report_file}"
 	git -C "${worktree_dir}" \
 		-c user.name="github-actions[bot]" \
@@ -401,6 +472,34 @@ body_file="${work_tmp}/body.md"
 	echo ""
 	echo "The default branch requires status checks and has no bypass actors, so the workflow opens this pull request instead of pushing the report directly. CI and the review workflow merge it."
 } >"${body_file}"
+if [ "${wla_default_stream}" != "true" ]; then
+	# Another report stream (#10153): no deep-audit or API-redundancy sections.
+	{
+		echo "Issue/PR audit report from run ${run_url}."
+		echo ""
+		echo "- Report: \`${REPORT_FILE}\`"
+		if [ -n "${renamed_from}" ]; then
+			echo "- Renamed from \`${renamed_from}\`, which is already taken on \`${TARGET_BRANCH}\` or another open report branch."
+		fi
+		for wla_extra_file in ${wla_extra_files[@]+"${wla_extra_files[@]}"}; do
+			echo "- State: \`${wla_extra_file}\`"
+		done
+		echo ""
+		if [ "${#purged_listed[@]}" -gt 0 ]; then
+			echo "Older reports deleted by the retention purge (each one is already listed in \`analysis/recommendation-processing-report.md\`):"
+			for purged_doc in "${purged_listed[@]}"; do
+				echo "- \`${purged_doc}\`"
+			done
+			if [ "${purged_extra}" -gt 0 ]; then
+				echo "- and ${purged_extra} more"
+			fi
+		else
+			echo "No older reports were deleted by the retention purge."
+		fi
+		echo ""
+		echo "The default branch requires status checks and has no bypass actors, so the workflow opens this pull request instead of pushing the report directly. CI and the review workflow merge it."
+	} >"${body_file}"
+fi
 if [ "${wla_sections_only}" = "true" ]; then
 	# The purge landed with the report (push mode) or did not run (PR mode).
 	{
@@ -447,6 +546,8 @@ fi
 pr_title="chore: add workflow log analysis report ($(basename "${REPORT_FILE}"))"
 if [ "${wla_sections_only}" = "true" ]; then
 	pr_title="chore: add workflow log analysis report sections ($(basename "${REPORT_FILE}"))"
+elif [ "${wla_default_stream}" != "true" ]; then
+	pr_title="chore: add issue/PR audit report ($(basename "${REPORT_FILE}"))"
 fi
 create_err="${work_tmp}/create.err"
 pr_number=""

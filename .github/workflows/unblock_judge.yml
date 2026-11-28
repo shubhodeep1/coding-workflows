@@ -183,6 +183,8 @@ jobs:
           # a hold is judged again after this many days.
           UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
           UNBLOCK_JUDGE_WAIT_MAX_DAYS: ${{ vars.UNBLOCK_JUDGE_WAIT_MAX_DAYS || '14' }}
+          # #10149: show the judge an issue's open ai/issue-<n> PR and refuse re-implementing it.
+          UNBLOCK_JUDGE_LINKED_PR_ENABLED: ${{ vars.UNBLOCK_JUDGE_LINKED_PR_ENABLED || 'true' }}
           # #9967 (hold re-evaluation): a pr_on_branch hold is met by a patch-equivalent
           # commit on the branch, and a placeholder_retired hold on a heal issue whose
           # failure did not come back closes it; `false` restores today's holds. The
