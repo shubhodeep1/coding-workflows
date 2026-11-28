@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Across the supplied merged runs, changes to workflows, scripts, prompts, and tests were consistently accompanied by a `changelog.d/` entry named with the issue number and a short topic. When planning a repository change, check whether its changelog fragment should be included.",
+  "fingerprint": "9adf490283e13bf3381cfa510a604309b2c8af54b1f827f9684ce82935ce347a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46177848082",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46177848082",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10124",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10229",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10240",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10270",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9342",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10126",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10237",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10244",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10271",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9359"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261128190051_513a5b7389",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Merged changes commonly include a numbered `changelog.d/` fragment.",
+  "timestamps": {
+    "created_at": "2026-11-28T19:00:51Z",
+    "promoted_at": "2026-11-28T19:01:34Z",
+    "superseded_at": null
+  }
+}
