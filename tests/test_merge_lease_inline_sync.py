@@ -244,6 +244,7 @@ review_head_gate_post_status() {
 }
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	echo "FRESHNESS_SYNC $*" >> "${CALL_LOG}"
+	[ -z "${FS_SAVE_COMMENTS:-}" ] || cp "$7" "${FS_SAVE_COMMENTS}"
 	exit "${FS_RC:-0}"
 fi
 '''
@@ -286,7 +287,7 @@ _safe_gh_jq() {{
   echo "SAFE_GH $*" >> "${{CALL_LOG}}"
   case "$*" in
     user) printf '%s' '{{"login":"pipeline-bot"}}' ;;
-    *comments*) printf '%s' '[[{{"user":{{"login":"pipeline-bot"}},"body":"x"}}]]' ;;
+    *comments*) if [ -n "${{INLINE_COMMENTS_JSON:-}}" ]; then printf '%s' "${{INLINE_COMMENTS_JSON}}"; else printf '%s' '[[{{"user":{{"login":"pipeline-bot"}},"body":"x"}}]]'; fi ;;
     *) return 1 ;;
   esac
 }}
@@ -376,6 +377,27 @@ def test_each_failing_step_dispatches_the_review_once(tmp_path: Path, kwargs: di
 	assert len(dispatches) == 1, calls
 	assert dispatches[0] == "GH workflow run ai-review.yml --repo o/r -f pr_number=7 -f allow_workflow_edits=true"
 	assert re.search(r"^rc=1 inline_head=$", out, re.M), out
+
+
+def test_inline_comments_keep_the_author_type_for_a_final_ci_failed_marker(tmp_path: Path) -> None:
+	# PR #10152: the verifier trusts a github-actions[bot] final-CI marker only
+	# with author_type "Bot", so the inline projection must keep .user.type.
+	saved = tmp_path / "saved_comments.json"
+	raw = [[
+		{"user": {"login": "pipeline-bot", "type": "User"}, "body": _golden_marker()},
+		{"user": {"login": "github-actions[bot]", "type": "Bot"},
+			"body": f"Final CI failed.\n\n<!-- ai:final-ci-failed:v1 pr=7 head={UPDATE} -->"},
+	]]
+	_inline(tmp_path, INLINE_COMMENTS_JSON=json.dumps(raw), FS_SAVE_COMMENTS=str(saved))
+	projected = json.loads(saved.read_text(encoding="utf-8"))
+	assert projected[1] == {"author_login": "github-actions[bot]", "author_type": "Bot", "body": raw[0][1]["body"]}
+	bin_dir = _fake_gh_bin(tmp_path)
+	env = {**os.environ, **_base_env(tmp_path), "PATH": f"{bin_dir}:{os.environ['PATH']}", "GH_RETRY_MAX_ATTEMPTS": "1",
+		"FAKE_FROM": APPROVED, "FAKE_BASE": BASE_TIP}
+	res = subprocess.run(["bash", str(HEAD_GATE), "freshness-sync", "o/r", "7", UPDATE, "main", "pipeline-bot", str(saved)],
+		env=env, capture_output=True, text=True, check=False)
+	assert res.returncode == 1, res.stdout + res.stderr
+	assert "outcome=review reason=final_ci_failed_on_head" in res.stdout
 
 
 def test_failed_first_post_stops_before_the_checks_wait(tmp_path: Path) -> None:
