@@ -2115,6 +2115,8 @@ _mt_merge_lease_tick()
 	# Issue #9983: the held reason, three-field skip entries (tick_skip3), and
 	# whether the candidate has a soft skip entry on its head.
 	local tick_held_why="holder_open" tick_skip3=0 tick_first_soft=0 tick_cand_head="" tick_runs_rc=0
+	# Issue #10241 (G4): waiters whose `ai/issue-<n>` source issue is closed as not planned.
+	local tick_not_planned=""
 	declare -F _merge_lease_skips_hard >/dev/null 2>&1 && declare -F _merge_lease_skips_soft >/dev/null 2>&1 && tick_skip3=1
 	# Issue #10044: the staged library un-parks expired/revoked_idle entries
 	# once per head (tick_unpark_lib), and the candidate's un-parked reason.
@@ -2391,6 +2393,13 @@ _mt_merge_lease_tick()
 		# feed the lease queue's forward-merge priority (merge-lease-parallel
 		# Phase 3, Refs #9781). Do not trim them from the projection.
 		tick_base_prs="$(printf '%s\n' "${tick_prs_json}" | jq -sc --arg b "${tick_base}" '[ .[] | select(type == "object" and .base == $b) ]' 2>/dev/null || echo '[]')"
+		# Issue #10241 (G4): one batched source-issue read per base (fail open);
+		# an older staged library without the helper keeps today's grant.
+		tick_not_planned=""
+		if [ "${tick_p2}" = 1 ] && declare -F _merge_lease_not_planned_source_prs >/dev/null 2>&1 \
+			&& declare -F _merge_lease_source_issue_guard_enabled >/dev/null 2>&1 && _merge_lease_source_issue_guard_enabled; then
+			tick_not_planned="$(_merge_lease_not_planned_source_prs "${tick_base_prs}" "${tick_base}")" || tick_not_planned=""
+		fi
 		tick_excluded=""
 		# Per lease ref: waiters this base handed back to the sweep.
 		tick_q_gone=""
@@ -2464,7 +2473,12 @@ _mt_merge_lease_tick()
 					esac
 				fi
 			fi
-			if _merge_lease_pr_eligible "${tick_first}" "${tick_cand_head}" \
+			# Issue #10241 (G4): an orphan of an unblock re-issue (its source issue
+			# closed as not planned) takes the ineligible path below, unlabelled.
+			if [ -n "${tick_not_planned}" ] && grep -qx -- "${tick_first}" <<< "${tick_not_planned}"; then
+				MERGE_LEASE_INELIGIBLE_REASON="source_issue_not_planned"
+				tick_first_soft=0
+			elif _merge_lease_pr_eligible "${tick_first}" "${tick_cand_head}" \
 				"$(jq -r '.title // ""' <<< "${tick_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tick_first_row}" 2>/dev/null)" \
 				"${tick_base}" "${tick_login}" "" "${tick_first_labels}"; then
 				tick_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"
@@ -2669,6 +2683,8 @@ _mt_merge_lease_tick_multi()
 	declare -F _merge_lease_skips_hard >/dev/null 2>&1 && declare -F _merge_lease_skips_soft >/dev/null 2>&1 && tm_skip3=1
 	# Issue #10044: as the single-holder tick's tick_unpark_lib.
 	local tm_unpark_lib=0 tm_unpark_why="" tm_rel_token=""
+	# Issue #10241 (G4): waiters whose `ai/issue-<n>` source issue is closed as not planned.
+	local tm_not_planned=""
 	[ "${tm_skip3}" = 1 ] && declare -F _merge_lease_skip_release_token >/dev/null 2>&1 \
 		&& declare -F _merge_lease_skip_reason_is_soft >/dev/null 2>&1 && tm_unpark_lib=1
 	# Issue #10098: as the single-holder tick's tick_ready_on/tick_conflict_on.
@@ -2842,6 +2858,11 @@ _mt_merge_lease_tick_multi()
 	done
 	[ "${tm_count}" -lt "${tm_max}" ] || return 0
 	tm_base_prs="$(printf '%s\n' "${tm_prs_json}" | jq -sc --arg b "${tm_base}" '[ .[] | select(type == "object" and .base == $b) ]' 2>/dev/null || echo '[]')"
+	# Issue #10241 (G4): one batched source-issue read for this base (fail open).
+	if [ "${tm_p2}" = 1 ] && declare -F _merge_lease_not_planned_source_prs >/dev/null 2>&1 \
+		&& declare -F _merge_lease_source_issue_guard_enabled >/dev/null 2>&1 && _merge_lease_source_issue_guard_enabled; then
+		tm_not_planned="$(_merge_lease_not_planned_source_prs "${tm_base_prs}" "${tm_base}")" || tm_not_planned=""
+	fi
 	tm_queue_skips=""
 	if [ "${tm_p2}" = 1 ] && [ -n "${MERGE_LEASE_SKIPS:-}" ]; then
 		tm_queue_skips="${MERGE_LEASE_SKIPS}"
@@ -2930,6 +2951,15 @@ _mt_merge_lease_tick_multi()
 					*) tm_unpark_why="" ;;
 				esac
 			fi
+		fi
+		# Issue #10241 (G4): an orphan of an unblock re-issue is unlabelled and skipped.
+		if [ "${tm_p2}" = 1 ] && [ -n "${tm_not_planned}" ] && grep -qx -- "${tm_first}" <<< "${tm_not_planned}"; then
+			tm_skipped_any=1
+			_merge_lease_unlabel_wait "${tm_first}"
+			_MT_LEASE_QUEUE_GONE="${_MT_LEASE_QUEUE_GONE},${tm_first}"
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=skipped reason=source_issue_not_planned"
+			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tm_base}" "${tm_first}" tick source_issue_not_planned "" "${tm_waiters}" - || true
+			continue
 		fi
 		# #9983 G5: a soft entry clears only on a confirmed head-gate success.
 		if [ "${tm_fb_take}" = 0 ] && [ "${tm_p2}" = 1 ] && { ! _merge_lease_pr_eligible "${tm_first}" "${tm_first_head}" \

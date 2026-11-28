@@ -75,6 +75,20 @@
 # label instead of posting `/approved`, which implement.yml refuses with
 # `existing_pr`; `false` keeps today's reset; any other value is treated as
 # false and logged. Also read by scripts/unblock_actions.py.
+# UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED (default true; #10241; only `false`
+# turns it off, any other value keeps the guard): for an issue item one GraphQL
+# read (shared with the #9809 lookup, unblock_resolve_own_prs) lists its own
+# open `ai/issue-<n>` PRs by the pipeline login into context.json `own_prs`
+# and the judge context `own_pull_requests`. A standalone issue's `reissue`
+# is refused while one has a pipeline `ai-review/head-gate` success, carries
+# the merge-lease wait label, or the read failed: one comment ending in
+# `<!-- ai:unblock-wait:v1 item=<n> reason=<reason> pr=<m|unknown> -->`, no
+# round marker, nothing created or closed. A re-issue that goes ahead
+# comments "Superseded by #<new>" on each other own PR and closes it.
+# Log keys: UNBLOCK_JUDGE item=<n> op=own_prs outcome=ok|unknown count=<k> reason=<token>,
+# UNBLOCK_JUDGE item=<n> op=reissue outcome=refused reason=own_pr_green|own_pr_lease_wait|own_pr_unknown pr=<m|unknown>,
+# UNBLOCK_JUDGE item=<n> op=reissue outcome=own_pr_closed pr=<m> new=<k>,
+# UNBLOCK_JUDGE item=<n> op=comment issue=<m> outcome=skip reason=no_created_issue.
 # UNBLOCK_CREATED_ISSUES_FILE (optional, default unset): unblock_run_ops
 # appends each issue number it creates to this file.
 # UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #8470): once a
@@ -1622,7 +1636,7 @@ unblock_log_target_repo_guard()
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0 heal_planned="false" heal_warned="false" heal_unauth="false"
+	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0 heal_planned="false" heal_warned="false" heal_unauth="false" own_pr_comment_failed="false"
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -1647,8 +1661,25 @@ unblock_run_ops()
 		case "${op}" in
 			comment)
 				body="$(jq -r ".ops[${idx}].body" "${ops_file}")"
+				if [ "$(jq -r ".ops[${idx}].created_ref // false" "${ops_file}")" = "true" ]; then
+					# #10241: name the issue an earlier create_issue op made; no eval.
+					if ! [[ "${created}" =~ ^[0-9]+$ ]]; then
+						ops_failed="true"
+						unblock_log "item=${ITEM} op=comment issue=${issue} outcome=skip reason=no_created_issue"
+						continue
+					fi
+					local created_token="{created_issue}"
+					body="${body//"${created_token}"/${created}}"
+				fi
 				if ! gh api "repos/${REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null 2>&1; then
-					ops_failed="true"
+					# #10241 (G3): a failed "Superseded by" comment must not skip the
+					# own PR's close that follows (the replacement already exists);
+					# the run still reports the failure at the end.
+					if [ "$(jq -r ".ops[${idx}].created_ref // false" "${ops_file}")" = "true" ]; then
+						own_pr_comment_failed="true"
+					else
+						ops_failed="true"
+					fi
 					unblock_log "item=${ITEM} op=comment issue=${issue} outcome=failed"
 					if [ "${body}" = "/approved" ] && [ -n "${unblock_removed_guard}" ]; then
 						# Keep a failed approval discoverable after its trigger label was cleared.
@@ -1813,6 +1844,10 @@ PY
 					gh api -X PATCH "repos/${REPOSITORY}/pulls/${issue}" -f state=closed >/dev/null 2>&1 \
 						&& close_succeeded="true" \
 						|| { close_failed="true"; ops_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
+					if [ "${close_failed}" != "true" ] && [ "${issue}" != "${ITEM}" ] && [[ "${created}" =~ ^[0-9]+$ ]]; then
+						# #10241 (G3): a re-issue retired the issue's own open PR.
+						unblock_log "item=${ITEM} op=reissue outcome=own_pr_closed pr=${issue} new=${created}"
+					fi
 				else
 					gh api -X PATCH "repos/${REPOSITORY}/issues/${issue}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1 \
 						&& close_succeeded="true" \
@@ -1964,7 +1999,7 @@ PY
 	elif [ "${heal_unauth}" = "true" ] && [ "${heal_warned}" != "true" ]; then
 		unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity; a heal intake that requires report authentication drops it, so check that the heal issue was filed (${REPOSITORY})."
 	fi
-	[ "${ops_failed}" != "true" ]
+	[ "${ops_failed}" != "true" ] && [ "${own_pr_comment_failed}" != "true" ]
 }
 
 # Normalised evidence for the fingerprint: the block's reason line and, for a
@@ -2309,6 +2344,13 @@ UNBLOCK_IMPL_PR_RESULT_FILE=""
 # Set when that lookup ran but its read or parse failed, so the recurrence
 # check keeps the hold instead of trusting a narrower listing (#9967).
 UNBLOCK_IMPL_PR_LOOKUP_FAILED=""
+# Set by unblock_resolve_implementation_pr to its GraphQL response file once
+# the read succeeded, so unblock_resolve_own_prs reuses it (#10241, §14).
+UNBLOCK_IMPL_PR_GRAPHQL_FILE=""
+# One query for both lookups (#9809, #10241): open `ai/issue-<n>` head PRs
+# (with the facts the own-PR guard needs) and the issue's cross-referencing PRs.
+# shellcheck disable=SC2016
+UNBLOCK_OWN_PR_GRAPHQL_QUERY='query($owner:String!,$name:String!,$head:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequests(headRefName:$head,states:OPEN,first:20){pageInfo{hasNextPage} nodes{number state headRefName headRefOid mergeStateStatus headRepository{nameWithOwner} author{login} labels(first:50){nodes{name}} commits(last:1){nodes{commit{oid status{headGate:context(name:"ai-review/head-gate"){state creator{login}} ciFinal:context(name:"ci/final"){state creator{login}}}}}}}} issue(number:$number){timelineItems(itemTypes:[CROSS_REFERENCED_EVENT],last:50){nodes{... on CrossReferencedEvent{source{... on PullRequest{number state body repository{nameWithOwner} headRepository{nameWithOwner} author{login} authorAssociation}}}}}}}}'
 
 # Existing-PR routing (#9809). Default on: unset, empty or `true`; `false`
 # turns it off; any other value turns it off and says so.
@@ -2346,15 +2388,16 @@ unblock_resolve_implementation_pr()
 	result_file="${RUNTIME_DIR}/impl_pr.json"
 	# Plain `gh` like unblock_resolve_ci_owner: the CONSIST-001 gh_retry list is
 	# fixed, and a failed read only keeps today's reset.
-	# shellcheck disable=SC2016
 	if ! gh api graphql \
-		-f query='query($owner:String!,$name:String!,$head:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequests(headRefName:$head,states:OPEN,first:5){nodes{number state headRefName headRepository{nameWithOwner}}} issue(number:$number){timelineItems(itemTypes:[CROSS_REFERENCED_EVENT],last:50){nodes{... on CrossReferencedEvent{source{... on PullRequest{number state body repository{nameWithOwner} headRepository{nameWithOwner} author{login} authorAssociation}}}}}}}}' \
+		-f query="${UNBLOCK_OWN_PR_GRAPHQL_QUERY}" \
 		-f owner="${owner}" -f name="${name}" -f head="ai/issue-${ITEM}" -F number="${ITEM}" \
 		> "${graphql_file}" 2>/dev/null; then
 		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=read_failed"
 		UNBLOCK_IMPL_PR_LOOKUP_FAILED="true"
 		return 0
 	fi
+	# #10241: unblock_resolve_own_prs reads the same response; no second call.
+	UNBLOCK_IMPL_PR_GRAPHQL_FILE="${graphql_file}"
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" impl-pr --graphql-file "${graphql_file}" --item "${ITEM}" \
 		--repo "${REPOSITORY}" --pipeline-login "${UNBLOCK_LOGIN:-}" > "${result_file}" 2>/dev/null; then
 		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=parse_failed"
@@ -2380,6 +2423,140 @@ unblock_resolve_implementation_pr()
 		rm -f "${RUNTIME_DIR}/context_impl_pr.json"
 		unblock_log "item=${ITEM} op=impl_pr outcome=unavailable reason=context_write_failed pr=${impl_pr}"
 	fi
+	return 0
+}
+
+# Own-PR reissue guard (#10241). Default on: only `false` (any case) turns it
+# off; a typo keeps the guard, which fails toward no duplicate.
+unblock_reissue_own_pr_guard_enabled()
+{
+	[ "$(printf '%s' "${UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" != "false" ]
+}
+
+# The issue's own open pull requests (#10241, G1): merges `own_prs` into
+# context.json for unblock_actions.py and the judge context. Only the API's
+# head ref, head repository, author and status creator decide; model text and
+# the issue body never do. A failed read, parse or context write is recorded
+# as `unknown` (never as "none"), which refuses a reissue.
+# §14 audit: the #9809 lookup's GraphQL response is reused when this run made
+# it (one call for both); otherwise this is the one GraphQL read for the item.
+unblock_resolve_own_prs()
+{
+	local owner name graphql_file result_file reason="read" count own_wait_label="${MERGE_LEASE_WAIT_LABEL:-}"
+	[ "${ITEM_KIND:-}" = "issue" ] || return 0
+	unblock_reissue_own_pr_guard_enabled || return 0
+	result_file="${RUNTIME_DIR}/own_prs.json"
+	printf '{"status":"unknown","prs":[]}\n' > "${result_file}"
+	if [ -n "${UNBLOCK_IMPL_PR_GRAPHQL_FILE:-}" ] && [ -s "${UNBLOCK_IMPL_PR_GRAPHQL_FILE}" ]; then
+		graphql_file="${UNBLOCK_IMPL_PR_GRAPHQL_FILE}"
+		reason="reused"
+	else
+		owner="${REPOSITORY%%/*}"
+		name="${REPOSITORY#*/}"
+		graphql_file="${RUNTIME_DIR}/own_prs_graphql.json"
+		if ! gh api graphql \
+			-f query="${UNBLOCK_OWN_PR_GRAPHQL_QUERY}" \
+			-f owner="${owner}" -f name="${name}" -f head="ai/issue-${ITEM}" -F number="${ITEM}" \
+			> "${graphql_file}" 2>/dev/null; then
+			graphql_file=""
+			reason="read_failed"
+		fi
+	fi
+	# The parser marks `lease_wait` by the repository's merge-lease wait label.
+	# unblock_judge.yml does not forward MERGE_LEASE_WAIT_LABEL, so when it is
+	# unset the repository variable is read once. §14 audit: no other call in
+	# this run returns repository variables (the placeholder hold reads only its
+	# own name). The read is skipped when the response has no open
+	# `ai/issue-<n>` node the parser would keep (same repository and, when the
+	# pipeline login is known, its author): the label cannot change the result,
+	# and a fork or other-author PR must not turn a failed read into `unknown`.
+	# A missing variable (HTTP 404) keeps the default label; any other failed
+	# read makes the facts `unknown` (reason=label_read_failed), so a
+	# custom-labelled lease-waiting PR is never closed by a re-issue.
+	if [ -n "${graphql_file}" ] && [ -z "${own_wait_label}" ] \
+		&& ! jq -e --arg h "ai/issue-${ITEM}" --arg r "${REPOSITORY}" --arg l "${UNBLOCK_LOGIN:-}" '[.data.repository.pullRequests.nodes[]? | select(type == "object" and .headRefName == $h and .state == "OPEN"
+			and (((.headRepository.nameWithOwner? // "") | tostring | ascii_downcase) == ($r | ascii_downcase))
+			and ($l == "" or ((.author.login? // "") == $l)))] | length == 0' "${graphql_file}" >/dev/null 2>&1; then
+		local own_label_rc=0 own_label_err="${RUNTIME_DIR}/own_wait_label.err"
+		own_wait_label="$(gh api "repos/${REPOSITORY}/actions/variables/MERGE_LEASE_WAIT_LABEL" --jq '.value // ""' 2>"${own_label_err}")" || own_label_rc=$?
+		own_wait_label="$(printf '%s\n' "${own_wait_label}" | head -n 1 | tr -d '[:cntrl:]' | cut -c1-100)"
+		if [ "${own_label_rc}" != "0" ]; then
+			own_wait_label=""
+			if ! grep -q 'HTTP 404' "${own_label_err}" 2>/dev/null; then
+				graphql_file=""
+				reason="label_read_failed"
+			fi
+		fi
+		rm -f "${own_label_err}"
+	fi
+	if [ -n "${graphql_file}" ] && ! MERGE_LEASE_WAIT_LABEL="${own_wait_label:-ai:merge-lease-wait}" unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" own-prs --graphql-file "${graphql_file}" \
+		--item "${ITEM}" --repo "${REPOSITORY}" --pipeline-login "${UNBLOCK_LOGIN:-}" > "${result_file}" 2>/dev/null; then
+		printf '{"status":"unknown","prs":[]}\n' > "${result_file}"
+		reason="parse_failed"
+	fi
+	if ! jq -e '.status == "ok" and (.prs | type) == "array"' "${result_file}" >/dev/null 2>&1; then
+		printf '{"status":"unknown","prs":[]}\n' > "${result_file}"
+		if [ "${reason}" = "read" ] || [ "${reason}" = "reused" ]; then
+			reason="unreadable"
+		fi
+	fi
+	if ! jq --slurpfile own "${result_file}" '. + {own_prs: $own[0]}' "${RUNTIME_DIR}/context.json" > "${RUNTIME_DIR}/context_own_prs.json" 2>/dev/null \
+		|| ! mv "${RUNTIME_DIR}/context_own_prs.json" "${RUNTIME_DIR}/context.json"; then
+		rm -f "${RUNTIME_DIR}/context_own_prs.json"
+		# The reissue guard runs with --require-facts, so a missing key is `unknown` there too.
+		unblock_log "item=${ITEM} op=own_prs outcome=unknown count=0 reason=context_write_failed"
+		return 0
+	fi
+	if jq -e '.status == "ok"' "${result_file}" >/dev/null 2>&1; then
+		count="$(jq -r '.prs | length' "${result_file}" 2>/dev/null | tr -cd '0-9' | cut -c1-3)"
+		unblock_log "item=${ITEM} op=own_prs outcome=ok count=${count:-0} reason=${reason}"
+	else
+		unblock_log "item=${ITEM} op=own_prs outcome=unknown count=0 reason=${reason}"
+	fi
+	return 0
+}
+
+# G2 (#10241): asks unblock_actions.py whether a standalone issue's `reissue`
+# must be refused because its own PR is green, lease-waiting or unreadable.
+# Returns 0 when it refused (the comment is posted or its failure logged; the
+# caller stops: no round marker, no ops), 1 when the reissue may proceed.
+unblock_reissue_own_pr_guard()
+{
+	local fp="$1" guard_file outcome="" reason pr body
+	unblock_reissue_own_pr_guard_enabled || return 1
+	guard_file="${RUNTIME_DIR}/own_pr_guard.json"
+	if unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" own-pr-guard --context-file "${RUNTIME_DIR}/context.json" \
+		--require-facts > "${guard_file}" 2>/dev/null; then
+		outcome="$(jq -r '.outcome // ""' "${guard_file}" 2>/dev/null || true)"
+	fi
+	case "${outcome}" in
+		proceed|disabled) return 1 ;;
+		refused)
+			reason="$(jq -r '.reason // ""' "${guard_file}" | tr -cd 'a-z_' | cut -c1-40)"
+			pr="$(jq -r '.pr // "unknown"' "${guard_file}" | tr -cd 'a-z0-9' | cut -c1-20)"
+			body="$(jq -r '.body // ""' "${guard_file}")"
+			;;
+		*)
+			# Fail closed: a guard that cannot answer never lets a duplicate through.
+			reason="own_pr_unknown"
+			pr="unknown"
+			body=""
+			;;
+	esac
+	case "${reason}" in
+		own_pr_green|own_pr_lease_wait|own_pr_unknown) ;;
+		*) reason="own_pr_unknown"; pr="unknown"; body="" ;;
+	esac
+	if [ -z "${body}" ]; then
+		body="The unblock judge chose \`reissue\` for #${ITEM}, but nothing was re-issued: its open pull requests could not be checked, so a replacement could duplicate one of them. This item keeps its block and the unblock judge decides again on a later run.
+
+<!-- ai:unblock-wait:v1 item=${ITEM} reason=${reason} pr=${pr:-unknown} -->"
+	fi
+	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${body}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=reissue outcome=skip reason=record_failed"
+		return 0
+	fi
+	unblock_log "item=${ITEM} op=reissue outcome=refused reason=${reason} pr=${pr:-unknown}"
 	return 0
 }
 
@@ -2578,6 +2755,8 @@ unblock_main()
 	# issue's open implementation PR reaches plan, followup, hold-followup
 	# and regrant alike.
 	unblock_resolve_implementation_pr
+	# #10241 (G1): the issue's own open PRs, from the same GraphQL response.
+	unblock_resolve_own_prs
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
 	local last_activity="" wait_id wait_fixup wait_state wait_at wait_updated fixup_json
@@ -3261,6 +3440,12 @@ ${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=wait op=hold hold=${hold_kind} ref=${hold_ref} outcome=held"
 		return 0
 	fi
+	# #10241 (G2): before the round marker, so a refused reissue uses no round
+	# and is recorded as a wait (its comment ends in an ai:unblock-wait:v1 marker).
+	if [ "${verdict_name}" = "reissue" ] && [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] \
+		&& unblock_reissue_own_pr_guard "${fp}"; then
+		return 0
+	fi
 	round="$(jq -r '.round' "${RUNTIME_DIR}/verdict.json")"
 	local -a marker_args=(marker --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${fp}" --verdict "${verdict_name}" --round "${round}")
 	[ "$(jq -r '.override // ""' "${RUNTIME_DIR}/verdict.json")" = "bulk_delete" ] && marker_args+=(--override bulk_delete)
@@ -3515,6 +3700,16 @@ unblock_ask_model()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=context_failed"
 		return 1
 	}
+	# #10241 (G1): only when context.json carries `own_prs`, so the judge
+	# context is byte-identical with UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED=false.
+	if jq -e 'has("own_prs")' "${RUNTIME_DIR}/context.json" >/dev/null 2>&1; then
+		if jq --slurpfile context "${RUNTIME_DIR}/context.json" '. + {own_pull_requests: $context[0].own_prs}' \
+			"${RUNTIME_DIR}/judge_context.json" > "${RUNTIME_DIR}/judge_context.json.tmp" 2>/dev/null; then
+			mv -f "${RUNTIME_DIR}/judge_context.json.tmp" "${RUNTIME_DIR}/judge_context.json"
+		else
+			rm -f "${RUNTIME_DIR}/judge_context.json.tmp"
+		fi
+	fi
 	# Issue #10149: an issue item's open pull request, only with
 	# UNBLOCK_JUDGE_LINKED_PR_ENABLED on (default true; off keeps the context
 	# byte-identical). null when the issue has none.

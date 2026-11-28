@@ -2965,5 +2965,141 @@ class RunsHelpers(unittest.TestCase):
 		self.assertIn("reason=page_failed", res.stderr)
 
 
+def _issue_states(**states: tuple[str, str | None]) -> dict:
+	"""A batched source-issue reply: {"i5": {"number": 5, "state": ..., "stateReason": ...}}."""
+	return {"data": {"repository": {key: {"number": int(key[1:]), "state": state, "stateReason": reason}
+		for key, (state, reason) in states.items()}}}
+
+
+class LeaseSourceIssueGuard(unittest.TestCase):
+	"""Issue #10241 (G4): the tick does not grant the lease to an orphan of an
+	unblock re-issue (a waiter whose `ai/issue-<n>` issue is closed as not
+	planned), from one batched GraphQL read per base."""
+
+	def _free(self, issue5: tuple[str, str | None] = ("CLOSED", "NOT_PLANNED")) -> dict:
+		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT], "6": [WAIT]}, "files": {"5": ["a"], "6": ["b"]},
+			"graphql": _issue_states(i5=issue5, i6=("OPEN", None))}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, 5, 6)
+		return st
+
+	@staticmethod
+	def _graphql_calls(h: _Harness) -> list[str]:
+		return [c for c in h.calls if "graphql" in c and "stateReason" in c]
+
+	def test_not_planned_source_issue_skips_the_waiter(self) -> None:
+		h, out = _p2_tick(self._free())
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=source_issue_not_planned\n", out)
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"], "the orphan is unlabelled")
+		self.assertIn("pr=6", h.record())
+		self.assertIn(("skipped", "5", "source_issue_not_planned"), [(r["event"], r["pr"], r["reason"]) for r in _metrics(out)])
+		calls = self._graphql_calls(h)
+		self.assertEqual(len(calls), 1, "one batched read per base")
+		self.assertIn("i5:issue(number:5)", calls[0])
+		self.assertIn("i6:issue(number:6)", calls[0])
+		self.assertNotIn(f"{_sha(5)}/statuses", " ".join(h.calls), "the orphan costs no eligibility read")
+
+	def test_completed_or_open_source_issue_is_granted(self) -> None:
+		for issue5 in (("CLOSED", "COMPLETED"), ("OPEN", None)):
+			h, out = _p2_tick(self._free(issue5))
+			self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted", out, issue5)
+			self.assertNotIn("source_issue_not_planned", out)
+
+	def test_switch_off_makes_no_read_and_grants(self) -> None:
+		for value in ("false", "FALSE"):
+			h, out = _p2_tick(self._free(), env={"MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED": value})
+			self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted", out)
+			self.assertEqual(self._graphql_calls(h), [])
+		# Any other value keeps the guard.
+		_, out = _p2_tick(self._free(), env={"MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED": "flase"})
+		self.assertIn("reason=source_issue_not_planned", out)
+
+	def test_revocation_switch_off_keeps_todays_grant(self) -> None:
+		h, out = _p2_tick(self._free(), env={"MERGE_LEASE_REVOKE_ENABLED": "false"})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
+		self.assertEqual(self._graphql_calls(h), [])
+
+	def test_unreadable_reply_fails_open(self) -> None:
+		st = self._free()
+		st["graphql"] = {"errors": [{"message": "boom"}]}
+		h, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=- base=main mode=tick outcome=unavailable reason=source_issue_read_failed", out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted", out)
+
+	def test_fork_and_non_issue_heads_are_never_looked_up(self) -> None:
+		fork = _pull(5)
+		fork["head"]["repo"]["full_name"] = "evil/repo"
+		other = _pull(6, head_ref="feature/x")
+		st = {"pulls": [fork, other], "labels": {"5": [WAIT], "6": [WAIT]}, "files": {"5": ["a"], "6": ["b"]},
+			"graphql": _issue_states(i5=("CLOSED", "NOT_PLANNED"))}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, 5, 6)
+		h, out = _p2_tick(st)
+		self.assertEqual(self._graphql_calls(h), [])
+		self.assertNotIn("source_issue_not_planned", out)
+
+	def test_multi_holder_tick_skips_the_orphan(self) -> None:
+		st = self._free()
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=source_issue_not_planned\n", out)
+		self.assertIn("pr=6 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"])
+		self.assertEqual(len(self._graphql_calls(h)), 1)
+
+	def _orphan_gate_state(self, issue5: tuple[str, str | None] = ("CLOSED", "NOT_PLANNED")) -> dict:
+		return {"pulls": [_pull(5)], "labels": {"5": [WAIT]}, "files": {"5": ["a"]}, "graphql": _issue_states(i5=issue5)}
+
+	def test_update_gate_does_not_acquire_a_free_lease_for_an_orphan(self) -> None:
+		h = _Harness(self._orphan_gate_state())
+		rc, out = _gate(h, 5, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=update outcome=skipped reason=source_issue_not_planned", out)
+		self.assertIn("outcome=wait reason=source_issue_not_planned", out)
+		self.assertNotIn(REF, h.state.get("refs", {}), "an orphan never writes the lease")
+		self.assertNotIn(WAIT, h.state["labels"]["5"], "the orphan is unlabelled")
+		calls = self._graphql_calls(h)
+		self.assertEqual(len(calls), 1)
+		self.assertIn("i5:issue(number:5)", calls[0])
+
+	def test_update_gate_acquires_when_the_source_issue_is_not_an_orphan_or_unreadable(self) -> None:
+		for issue5 in (("CLOSED", "COMPLETED"), ("OPEN", None)):
+			h = _Harness(self._orphan_gate_state(issue5))
+			rc, out = _gate(h, 5, "update")
+			self.assertEqual(rc, 0, out)
+			self.assertIn("outcome=acquired", out)
+		st = self._orphan_gate_state()
+		st["graphql"] = {"errors": [{"message": "boom"}]}
+		rc, out = _gate(_Harness(st), 5, "update")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("MERGE_LEASE pr=- base=main mode=update outcome=unavailable reason=source_issue_read_failed", out)
+		rc, out = _gate(_Harness(self._orphan_gate_state()), 5, "update", {"MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED": "false"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=acquired", out)
+
+	def test_multi_holder_update_gate_does_not_join_for_an_orphan(self) -> None:
+		st = {"pulls": [_pull(5), _pull(8)], "labels": {"5": [WAIT]}, "files": {"5": ["a"], "8": ["b"]},
+			"graphql": _issue_states(i5=("CLOSED", "NOT_PLANNED"))}
+		_seed_lease(st, _record(8, paths="b"))
+		h = _Harness(st)
+		rc, out = _gate(h, 5, "update", {MAXH: "2"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=update outcome=skipped reason=source_issue_not_planned", out)
+		self.assertNotIn("pr=5\n", h.record())
+
+	def test_empty_reply_is_a_logged_read_failure(self) -> None:
+		h = _Harness({})
+		rows = json.dumps([{"number": 5, "head": "ai/issue-5", "head_repo": "owner/repo", "labels": [WAIT]}])
+		res = h.lib(f"gh_retry() {{ return 1; }}; _merge_lease_not_planned_source_prs '{rows}' main; echo rc=$?")
+		self.assertIn("rc=0", res.stdout)
+		self.assertIn("MERGE_LEASE pr=- base=main mode=tick outcome=unavailable reason=source_issue_read_failed", res.stderr)
+
+	def test_tick_steps_get_the_switch(self) -> None:
+		line = "MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED: ${{ vars.MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED || 'true' }}"
+		for path in (POLL, CLOSE, REVIEW):
+			text = path.read_text()
+			self.assertEqual(text.count(line), text.count("MERGE_LEASE_REVOKE_ENABLED:"), path.name)
+
+
 if __name__ == "__main__":
 	unittest.main()

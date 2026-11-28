@@ -1438,9 +1438,19 @@ if endpoint.startswith(("repos/o/r/actions/variables/", "repos/o/r/actions/secre
 	kind = "VARIABLES" if "/variables/" in endpoint else "SECRETS"
 	name = endpoint.rsplit("/", 1)[1]
 	state.setdefault("actions_reads", []).append(endpoint)
+	# #10241: a variable's value (the own-PR wait label read); --jq is not applied.
+	if kind == "VARIABLES" and os.environ.get("FAKE_GH_FAIL_VARIABLE_READ"):
+		json.dump(state, open(state_path, "w"))
+		print("gh: Server Error (HTTP 500)", file=sys.stderr)
+		sys.exit(1)
+	variable_values = json.loads(os.environ.get("FAKE_GH_VARIABLE_VALUES") or "{}")
+	if kind == "VARIABLES" and name in variable_values:
+		done(variable_values[name])
 	if name in os.environ.get("FAKE_GH_ACTIONS_" + kind, "").split(","):
 		done(name)
 	json.dump(state, open(state_path, "w"))
+	# The real gh reports an unset variable or secret as HTTP 404.
+	print("gh: Not Found (HTTP 404)", file=sys.stderr)
 	sys.exit(1)
 if endpoint.startswith("repos/o/r/actions/runs/"):
 	run_id = endpoint.rsplit("/", 1)[1]
@@ -1506,6 +1516,10 @@ if method == "POST" and endpoint.endswith("/comments"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_RESUME") and f.get("body", "").startswith(("/answer", "/approved", "/reclarify", "/judge_resume")):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	# #10241: the "Superseded by" comment on a retired own PR fails.
+	if os.environ.get("FAKE_GH_FAIL_SUPERSEDED") and f.get("body", "").startswith("Superseded by #"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	if "ai:unblock-park-alert:v1" in f.get("body", ""):
@@ -1707,6 +1721,12 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
 	if verdict is not None:
 		env["MOCK_UNBLOCK_JUDGE_JSON"] = verdict if isinstance(verdict, str) else json.dumps(verdict)
+	# #10241: the own-PR guard adds a GraphQL read for every issue item and
+	# refuses a reissue when it is unreadable. The tests written before it pin
+	# it off; the #10241 tests below pass `true` explicitly.
+	env["UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED"] = "false"
+	# The wait-label read runs only when this is unset; never inherit the runner's.
+	env.pop("MERGE_LEASE_WAIT_LABEL", None)
 	env.update(env_extra)
 	result = subprocess.run(["bash", str(JUDGE)], capture_output=True, text=True, env=env, check=False)
 	return result, json.loads(state_file.read_text(encoding="utf-8"))
@@ -7328,3 +7348,318 @@ def test_routed_planning_scope_block_retry_reclarifies_and_clears_both_labels(ha
 def test_implement_time_scope_block_retry_still_approves_the_plan() -> None:
 	ctx = _ctx(stop="scope-blocked", labels=["ai:scope-blocked"], has_plan=True)
 	assert actions.reset_ops(ctx, "x") == actions._approve(7, ["ai:scope-blocked"], "ai:scope-blocked")
+
+
+# --- #10241: the unblock judge does not re-issue, or orphan, an issue's own PR ---
+
+OWN_SHA = "d" * 40
+
+
+def _own_pr(number: int = 40, head_gate: str = "pending", lease_wait: bool = False, ci_final: str = "absent") -> dict:
+	return {"number": number, "head_sha": OWN_SHA, "mergeable_state": "clean", "head_gate": head_gate, "ci_final": ci_final, "lease_wait": lease_wait}
+
+
+def _own(*prs: dict, status: str = "ok") -> dict:
+	return {"status": status, "prs": list(prs)}
+
+
+@pytest.fixture
+def own_pr_guard_default(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.delenv("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", raising=False)
+	monkeypatch.delenv("MERGE_LEASE_WAIT_LABEL", raising=False)
+
+
+def _baseline_reissue_ops(**extra) -> list[dict]:
+	return actions.plan(_verdict("reissue", instructions="redo it"), _ctx(**extra))
+
+
+@pytest.mark.parametrize(("own", "reason", "pr"), [
+	(_own(_own_pr(40, head_gate="success")), "own_pr_green", "40"),
+	(_own(_own_pr(40, lease_wait=True)), "own_pr_lease_wait", "40"),
+	(_own(status="unknown"), "own_pr_unknown", "unknown"),
+	# The highest green number wins, and green beats lease-waiting.
+	(_own(_own_pr(41, lease_wait=True), _own_pr(42, head_gate="success"), _own_pr(43, head_gate="success")), "own_pr_green", "43"),
+])
+def test_reissue_is_refused_while_the_own_pr_is_the_work(own_pr_guard_default: None, own: dict, reason: str, pr: str) -> None:
+	ops = actions.plan(_verdict("reissue", instructions="redo it"), _ctx(own_prs=own))
+	assert [op["op"] for op in ops] == ["comment"]
+	assert ops[0]["issue"] == 7
+	body = ops[0]["body"]
+	assert body.splitlines()[-1] == f"<!-- ai:unblock-wait:v1 item=7 reason={reason} pr={pr} -->"
+	# Fixed text only: no model text (reason / instructions) reaches the comment.
+	assert "redo it" not in body and "because" not in body
+
+
+def test_reissue_with_a_non_green_own_pr_retires_it(own_pr_guard_default: None) -> None:
+	for gate in ("pending", "failure", "absent"):
+		ops = actions.plan(_verdict("reissue", instructions="redo it"), _ctx(own_prs=_own(_own_pr(40, head_gate=gate))))
+		assert [op["op"] for op in ops] == ["create_issue", "close", "comment", "close"], gate
+		assert ops[1] == {"op": "close", "issue": 7, "reason": "not_planned", "pr": False}
+		assert ops[2]["issue"] == 40 and ops[2]["created_ref"] is True
+		assert ops[2]["body"].startswith("Superseded by #{created_issue}: ")
+		assert ops[3] == {"op": "close", "issue": 40, "reason": "not_planned", "pr": True}
+
+
+def test_reissue_refuses_an_own_pr_whose_head_gate_is_unreadable(own_pr_guard_default: None) -> None:
+	# An unreadable head-gate may be green: neither close it nor duplicate it.
+	ops = actions.plan(_verdict("reissue", instructions="redo it"), _ctx(own_prs=_own(_own_pr(40), _own_pr(41, head_gate="unknown"))))
+	assert [op["op"] for op in ops] == ["comment"]
+	assert ops[0]["body"].splitlines()[-1] == "<!-- ai:unblock-wait:v1 item=7 reason=own_pr_unknown pr=41 -->"
+	# Green and lease-waiting stay the stronger reasons.
+	ops = actions.plan(_verdict("reissue", instructions="x"), _ctx(own_prs=_own(_own_pr(41, head_gate="unknown"), _own_pr(40, head_gate="success"))))
+	assert "reason=own_pr_green pr=40" in ops[0]["body"]
+	# The retire backstop never closes an unreadable PR either.
+	assert actions._own_pr_retire_ops(_ctx(own_prs=_own(_own_pr(41, head_gate="unknown"))), None) == []
+
+
+def test_reissue_without_an_own_pr_is_unchanged(own_pr_guard_default: None) -> None:
+	baseline = _baseline_reissue_ops()
+	assert [op["op"] for op in baseline] == ["create_issue", "close"]
+	assert _baseline_reissue_ops(own_prs=_own()) == baseline
+
+
+def test_reissue_guard_off_restores_todays_ops(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", "false")
+	baseline = _baseline_reissue_ops()
+	for own in (_own(_own_pr(40, head_gate="success")), _own(status="unknown"), _own(_own_pr(40))):
+		assert _baseline_reissue_ops(own_prs=own) == baseline
+	# Any value but `false` keeps the guard (it fails toward no duplicate).
+	monkeypatch.setenv("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", "flase")
+	assert [op["op"] for op in _baseline_reissue_ops(own_prs=_own(status="unknown"))] == ["comment"]
+
+
+def test_own_pr_guard_runs_before_the_superseded_owner_close(own_pr_guard_default: None) -> None:
+	owner = {"number": 6786, "state": "superseded", "head_sha": "c" * 40, "head_ref": None}
+	ops = actions.plan(_verdict("reissue", instructions="x"), _ctx(ci_owner=owner, own_prs=_own(_own_pr(40, head_gate="success"))))
+	assert [op["op"] for op in ops] == ["comment"] and "reason=own_pr_green pr=40" in ops[0]["body"]
+
+
+def test_open_ci_owner_pr_is_never_retired(own_pr_guard_default: None) -> None:
+	owner = {"number": 40, "state": "open", "head_sha": None, "head_ref": "ai/issue-7"}
+	ops = actions.plan(_verdict("reissue", instructions="x"), _ctx(ci_owner=owner, own_prs=_own(_own_pr(40), _own_pr(44))))
+	assert [(op["op"], op.get("issue")) for op in ops] == [("create_issue", None), ("close", 7), ("comment", 44), ("close", 44)]
+
+
+def test_tracked_issue_reissue_ignores_own_prs(own_pr_guard_default: None) -> None:
+	baseline = _baseline_reissue_ops(tracking=99)
+	assert _baseline_reissue_ops(tracking=99, own_prs=_own(_own_pr(40, head_gate="success"))) == baseline
+	assert _baseline_reissue_ops(tracking=99, own_prs=_own(_own_pr(40))) == baseline
+
+
+@pytest.mark.parametrize("raw", [
+	"x", [], {"status": "ok"}, {"status": "ok", "prs": "x"}, {"status": "weird", "prs": []},
+	{"status": "ok", "prs": [dict(_own_pr(), number=7)]},
+	{"status": "ok", "prs": [dict(_own_pr(), head_sha="zz")]},
+	{"status": "ok", "prs": [dict(_own_pr(), head_gate="green")]},
+	{"status": "ok", "prs": [dict(_own_pr(), lease_wait="yes")]},
+	{"status": "ok", "prs": [dict(_own_pr(), number=True)]},
+])
+def test_malformed_own_prs_is_unknown(own_pr_guard_default: None, raw: object) -> None:
+	ctx = _ctx(own_prs=raw)
+	assert ctx["own_prs"] == {"status": "unknown", "prs": []}
+	assert "reason=own_pr_unknown pr=unknown" in actions.plan(_verdict("reissue", instructions="x"), ctx)[0]["body"]
+	# Off issues the key is ignored.
+	assert _ctx("pr", own_prs=raw)["own_prs"] is None
+
+
+def _own_node(number: int = 40, gate: str | None = "SUCCESS", gate_login: str = BOT, ci: str | None = None, labels: tuple = (),
+		author: str = BOT, head_repo: str = "acme/app", oid: str | None = None, ref: str = "ai/issue-7", state: str = "OPEN") -> dict:
+	sha = f"{number:040d}"
+	status = {
+		"headGate": None if gate is None else {"state": gate, "creator": {"login": gate_login}},
+		"ciFinal": None if ci is None else {"state": ci, "creator": {"login": BOT}},
+	}
+	return {"number": number, "state": state, "headRefName": ref, "headRefOid": sha, "mergeStateStatus": "CLEAN",
+		"headRepository": {"nameWithOwner": head_repo}, "author": {"login": author}, "labels": {"nodes": [{"name": name} for name in labels]},
+		"commits": {"nodes": [{"commit": {"oid": oid or sha, "status": status}}]}}
+
+
+def _own_payload(nodes: list, has_next: bool = False) -> dict:
+	return {"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": has_next}, "nodes": nodes},
+		"issue": {"timelineItems": {"nodes": []}}}}}
+
+
+def test_own_prs_parser_keeps_only_the_pipelines_same_repository_prs(own_pr_guard_default: None) -> None:
+	def parse(payload: object, login: str = BOT) -> dict:
+		return actions.own_prs_from_graphql(payload, 7, "acme/app", login)
+
+	# Shaped like #9887 / #9899: head-gate and ci/final success, clean, lease-waiting.
+	green = _own_node(99, ci="SUCCESS", labels=("ai:merge-lease-wait",))
+	assert parse(_own_payload([green])) == {"status": "ok", "prs": [{"number": 99, "head_sha": f"{99:040d}", "mergeable_state": "clean",
+		"head_gate": "success", "ci_final": "success", "lease_wait": True}]}
+	# Shaped like #9519 / #9562: open, head-gate pending.
+	assert parse(_own_payload([_own_node(62, gate="PENDING")]))["prs"][0]["head_gate"] == "pending"
+	# Fork, other author, another head ref, a closed PR: dropped.
+	dropped = [_own_node(41, head_repo="evil/app"), _own_node(42, author="mallory"), _own_node(43, ref="ai/issue-70"), _own_node(44, state="MERGED")]
+	assert parse(_own_payload(dropped)) == {"status": "ok", "prs": []}
+	# A status posted by another login is absent; a moved head makes both unknown.
+	assert parse(_own_payload([_own_node(45, gate_login="mallory")]))["prs"][0]["head_gate"] == "absent"
+	moved = parse(_own_payload([_own_node(46, oid="e" * 40)]))["prs"][0]
+	assert (moved["head_gate"], moved["ci_final"]) == ("unknown", "unknown")
+	# A further page, an empty login with a candidate, or garbage: unknown.
+	unknown = {"status": "unknown", "prs": []}
+	assert parse(_own_payload([green], has_next=True)) == unknown
+	assert parse(_own_payload([green]), login="") == unknown
+	assert parse(_own_payload([]), login="") == {"status": "ok", "prs": []}
+	for bad in (None, "", [], {"data": None}, {"data": {"repository": {"pullRequests": {"nodes": "x"}}}}, {"errors": [{"message": "x"}]}):
+		assert parse(bad) == unknown
+
+
+def test_own_prs_and_guard_subcommands(tmp_path: Path, own_pr_guard_default: None) -> None:
+	graphql = tmp_path / "g.json"
+	graphql.write_text(json.dumps(_own_payload([_own_node(40, gate="FAILURE")])), encoding="utf-8")
+	result = actions.run(["own-prs", "--graphql-file", str(graphql), "--item", "7", "--repo", "acme/app", "--pipeline-login", BOT])
+	assert result["status"] == "ok" and result["prs"][0]["head_gate"] == "failure"
+	assert actions.run(["own-prs", "--graphql-file", str(tmp_path / "missing"), "--item", "7", "--repo", "acme/app", "--pipeline-login", BOT]) == {"status": "unknown", "prs": []}
+	ctx_file = tmp_path / "ctx.json"
+	base = {"repo": "acme/app", "kind": "issue", "item": 7, "stop": "blocked", "labels": ["ai:blocked"], "tracking": None}
+	ctx_file.write_text(json.dumps(base), encoding="utf-8")
+	assert actions.run(["own-pr-guard", "--context-file", str(ctx_file)])["outcome"] == "proceed"
+	refused = actions.run(["own-pr-guard", "--context-file", str(ctx_file), "--require-facts"])
+	assert refused["outcome"] == "refused" and refused["reason"] == "own_pr_unknown" and refused["pr"] is None
+	ctx_file.write_text(json.dumps(dict(base, own_prs=_own(_own_pr(40, lease_wait=True)))), encoding="utf-8")
+	assert actions.run(["own-pr-guard", "--context-file", str(ctx_file)])["reason"] == "own_pr_lease_wait"
+
+
+def test_own_pr_guard_subcommand_reports_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", "FALSE")
+	ctx_file = tmp_path / "ctx.json"
+	ctx_file.write_text(json.dumps({"repo": "acme/app", "kind": "issue", "item": 7, "stop": "blocked", "labels": [], "own_prs": {"status": "unknown"}}), encoding="utf-8")
+	assert actions.run(["own-pr-guard", "--context-file", str(ctx_file), "--require-facts"])["outcome"] == "disabled"
+
+
+def _judge_own_payload(*nodes: dict) -> str:
+	fixed = []
+	for node in nodes:
+		node = dict(node, headRepository={"nameWithOwner": "o/r"})
+		fixed.append(node)
+	return json.dumps(_own_payload(fixed))
+
+
+def test_judge_refuses_reissue_of_a_green_own_pr(tmp_path: Path) -> None:
+	payload = _judge_own_payload(_own_node(99, ci="SUCCESS", labels=("ai:merge-lease-wait",)))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true")
+	assert result.returncode == 0, result.stderr
+	assert "UNBLOCK_JUDGE item=7 op=reissue outcome=refused reason=own_pr_green pr=99" in result.stdout, result.stdout + result.stderr
+	assert "op=own_prs outcome=ok count=1 reason=reused" in result.stdout
+	# The impl-pr lookup's response was reused: one GraphQL call in all.
+	assert len(state["graphql"]) == 1
+	assert state["created"] == [] and not any("pulls/99" in endpoint for endpoint, _ in state["patched"])
+	bodies = [comment["body"] for comment in state["comments"]]
+	assert len(bodies) == 1 and bodies[0].endswith("<!-- ai:unblock-wait:v1 item=7 reason=own_pr_green pr=99 -->")
+	# No round: no ai:unblock:v1 ledger marker was posted.
+	assert not any("<!-- ai:unblock:v1 " in body for body in bodies)
+
+
+def test_judge_refuses_reissue_when_the_own_pr_read_fails(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_FAIL_GRAPHQL="1", UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true")
+	assert result.returncode == 0, result.stderr
+	assert "op=own_prs outcome=unknown count=0 reason=read_failed" in result.stdout, result.stdout
+	assert "op=reissue outcome=refused reason=own_pr_unknown pr=unknown" in result.stdout
+	assert state["created"] == []
+
+
+def test_judge_reissue_retires_a_non_green_own_pr(tmp_path: Path) -> None:
+	payload = _judge_own_payload(_own_node(62, gate="PENDING"))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true")
+	assert result.returncode == 0, result.stderr
+	assert len(state["created"]) == 1
+	match = re.search(r"op=reissue outcome=own_pr_closed pr=62 new=(\d+)", result.stdout)
+	assert match, result.stdout + result.stderr
+	superseded = [c for c in state["comments"] if c["endpoint"] == "repos/o/r/issues/62/comments"]
+	assert len(superseded) == 1 and superseded[0]["body"].startswith(f"Superseded by #{match.group(1)}: ")
+	assert ["repos/o/r/pulls/62", {"state": "closed"}] in state["patched"]
+	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state_reason") == "not_planned" for endpoint, fields in state["patched"])
+
+
+def test_judge_reissue_closes_the_own_pr_when_its_superseded_comment_fails(tmp_path: Path) -> None:
+	payload = _judge_own_payload(_own_node(62, gate="PENDING"))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, FAKE_GH_FAIL_SUPERSEDED="1", UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true")
+	assert len(state["created"]) == 1, result.stdout + result.stderr
+	assert "op=comment issue=62 outcome=failed" in result.stdout
+	assert ["repos/o/r/pulls/62", {"state": "closed"}] in state["patched"], result.stdout + result.stderr
+	assert re.search(r"op=reissue outcome=own_pr_closed pr=62 new=\d+", result.stdout)
+
+
+def test_judge_reissue_does_not_touch_the_own_pr_when_creation_fails(tmp_path: Path) -> None:
+	payload = _judge_own_payload(_own_node(62, gate="PENDING"))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, FAKE_GH_FAIL_CREATE="1", UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true")
+	assert result.returncode == 0, result.stderr
+	assert not any(c["endpoint"] == "repos/o/r/issues/62/comments" for c in state["comments"])
+	assert not any(endpoint == "repos/o/r/pulls/62" for endpoint, _ in state["patched"])
+
+
+def test_judge_own_pr_guard_off_keeps_todays_reissue(tmp_path: Path) -> None:
+	payload = _judge_own_payload(_own_node(99))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="false")
+	assert result.returncode == 0, result.stderr
+	assert "op=own_prs" not in result.stdout and "outcome=refused" not in result.stdout
+	assert len(state["created"]) == 1
+	assert not any(endpoint == "repos/o/r/pulls/99" for endpoint, _ in state["patched"])
+
+
+def test_unblock_judge_wires_the_own_pr_guard_and_lease_switch() -> None:
+	text = JUDGE.read_text(encoding="utf-8")
+	call = text.index("\tunblock_resolve_implementation_pr\n\t# #10241")
+	assert text.index("\tunblock_resolve_own_prs\n", call) > call
+	assert text.index('unblock_reissue_own_pr_guard "${fp}"') < text.index("local -a marker_args=(marker")
+	workflows = ROOT / ".github" / "workflows"
+	unblock_line = "UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED: ${{ vars.UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED || 'true' }}"
+	lease_line = "MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED: ${{ vars.MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED || 'true' }}"
+	for name, unblock_count, lease_count in (("orchestrate_poll.yml", 2, 4), ("unblock_judge.yml", 1, 0), ("review_autofix.yml", 0, 3), ("cancel_on_pr_close.yml", 0, 1)):
+		workflow = (workflows / name).read_text(encoding="utf-8")
+		assert workflow.count(unblock_line) == unblock_count == workflow.count("UNBLOCK_EXISTING_PR_ROUTING_ENABLED:"), name
+		assert workflow.count(lease_line) == lease_count == workflow.count("MERGE_LEASE_REVOKE_ENABLED:"), name
+
+
+def test_own_prs_parser_treats_a_graphql_errors_reply_as_unknown(own_pr_guard_default: None) -> None:
+	# A partial reply can null `labels` or `status`; it must never read as "not waiting".
+	payload = _own_payload([_own_node(40, gate="PENDING")])
+	payload["errors"] = [{"message": "x", "path": ["repository", "pullRequests", "nodes", 0, "labels"]}]
+	assert actions.own_prs_from_graphql(payload, 7, "acme/app", BOT) == {"status": "unknown", "prs": []}
+
+
+def test_judge_reads_the_repositorys_custom_wait_label(tmp_path: Path) -> None:
+	# unblock_judge.yml does not forward MERGE_LEASE_WAIT_LABEL: the judge reads the variable.
+	payload = _judge_own_payload(_own_node(62, gate="PENDING", labels=("custom:lease-wait",)))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true",
+		FAKE_GH_VARIABLE_VALUES=json.dumps({"MERGE_LEASE_WAIT_LABEL": "custom:lease-wait"}))
+	assert result.returncode == 0, result.stderr
+	assert "op=reissue outcome=refused reason=own_pr_lease_wait pr=62" in result.stdout, result.stdout + result.stderr
+	assert "repos/o/r/actions/variables/MERGE_LEASE_WAIT_LABEL" in state.get("actions_reads", [])
+	assert state["created"] == [] and not any(endpoint == "repos/o/r/pulls/62" for endpoint, _ in state["patched"])
+
+
+def test_judge_refuses_reissue_when_the_wait_label_read_fails(tmp_path: Path) -> None:
+	# A failed (non-404) variable read could hide a custom wait label: the facts are unknown.
+	payload = _judge_own_payload(_own_node(62, gate="PENDING", labels=("custom:lease-wait",)))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true",
+		FAKE_GH_FAIL_VARIABLE_READ="1")
+	assert result.returncode == 0, result.stderr
+	assert "op=own_prs outcome=unknown count=0 reason=label_read_failed" in result.stdout, result.stdout + result.stderr
+	assert "op=reissue outcome=refused reason=own_pr_unknown pr=unknown" in result.stdout
+	assert state["created"] == [] and not any(endpoint == "repos/o/r/pulls/62" for endpoint, _ in state["patched"])
+
+
+def test_judge_skips_the_wait_label_read_without_an_own_pr_candidate(tmp_path: Path) -> None:
+	payload = _judge_own_payload(_own_node(62, gate="PENDING", ref="ai/issue-70"))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true",
+		FAKE_GH_FAIL_VARIABLE_READ="1")
+	assert result.returncode == 0, result.stderr
+	assert "op=own_prs outcome=ok count=0 reason=reused" in result.stdout, result.stdout + result.stderr
+	assert "repos/o/r/actions/variables/MERGE_LEASE_WAIT_LABEL" not in state.get("actions_reads", [])
+	assert len(state["created"]) == 1
+
+
+def test_judge_fork_or_other_author_pr_does_not_trigger_the_wait_label_read(tmp_path: Path) -> None:
+	# #10241: G1-G3 ignore fork and other-author PRs, so a failed variable read must not refuse for them.
+	fork = dict(_own_node(62, gate="PENDING"), headRepository={"nameWithOwner": "evil/r"})
+	other = dict(_own_node(63, gate="PENDING"), headRepository={"nameWithOwner": "o/r"}, author={"login": "mallory"})
+	payload = json.dumps(_own_payload([fork, other]))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true",
+		FAKE_GH_FAIL_VARIABLE_READ="1")
+	assert result.returncode == 0, result.stderr
+	assert "op=own_prs outcome=ok count=0 reason=reused" in result.stdout, result.stdout + result.stderr
+	assert "repos/o/r/actions/variables/MERGE_LEASE_WAIT_LABEL" not in state.get("actions_reads", [])
+	assert "outcome=refused" not in result.stdout
+	assert len(state["created"]) == 1

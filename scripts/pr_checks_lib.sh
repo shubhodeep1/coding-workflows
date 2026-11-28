@@ -2619,7 +2619,12 @@ _pr_base_fresh_for_merge()
 			if ! _merge_lease_gate "${pr_number}" "${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-}}" "${PR_BASE_FRESHNESS_HEAD_SHA:-}" update; then
 				PR_BASE_FRESHNESS_OUTCOME="lease_wait"
 				PR_BASE_FRESHNESS_LAST_REASON="merge_lease_${MERGE_LEASE_REASON:-held}"
-				echo "  [merge-lease] PR #${pr_number}: the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+				if [ "${MERGE_LEASE_REASON:-}" = "source_issue_not_planned" ]; then
+					# Issue #10241 (G4): the gate unlabelled an orphan; no grant will come.
+					echo "  [merge-lease] PR #${pr_number}: its ai/issue-<n> source issue is closed as not planned, so the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}} is not granted to it; not updating the branch."
+				else
+					echo "  [merge-lease] PR #${pr_number}: the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+				fi
 				return 1
 			fi
 			local sync_max="${MERGE_BASE_FRESHNESS_MAX_SYNCS:-2}" sync_done=""
@@ -3327,7 +3332,12 @@ _pr_final_ci_wiring_behind_update()
 		return 0
 	fi
 	if ! _merge_lease_gate "${wiring_pr}" "${wiring_base}" "${wiring_head}" update; then
-		echo "  [merge-lease] PR #${wiring_pr}: the merge lease for ${wiring_base} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch's CI wiring. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+		if [ "${MERGE_LEASE_REASON:-}" = "source_issue_not_planned" ]; then
+			# Issue #10241 (G4): the gate unlabelled an orphan; no grant will come.
+			echo "  [merge-lease] PR #${wiring_pr}: its ai/issue-<n> source issue is closed as not planned, so the merge lease for ${wiring_base} is not granted to it; not updating the branch's CI wiring."
+		else
+			echo "  [merge-lease] PR #${wiring_pr}: the merge lease for ${wiring_base} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch's CI wiring. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+		fi
 		_pr_final_ci_wiring_log held "merge_lease_${MERGE_LEASE_REASON:-held}"
 		return 0
 	fi
@@ -3888,6 +3898,85 @@ _merge_lease_revoke_enabled()
 		true|1|yes|on) return 0 ;;
 	esac
 	return 1
+}
+
+# Source-issue guard (issue #10241, G4): MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED
+# (default true). Only `false` (any case) turns it off; any other value keeps it.
+_merge_lease_source_issue_guard_enabled()
+{
+	[ "$(printf '%s' "${MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" != "false" ]
+}
+
+# _merge_lease_not_planned_source_prs <rows_json> [<base>] [<candidate>] [<mode>]
+# (issue #10241, G4): the waiters whose source issue was closed as not
+# planned, so neither the tick nor the update-mode gate grants the lease to an
+# orphan of an unblock re-issue.
+# Batching contract (CLAUDE.md §14):
+#   input     - a JSON array of open-PR rows: the tick's per-base rows {number,
+#               head, head_repo, labels, ...} or a REST `pulls` listing (also
+#               slurped pages) whose `head` is an object (the gate's listing;
+#               no extra listing read).
+#   selection - rows carrying the wait label (or numbered <candidate>, the
+#               gate's caller, labelled or not) whose head repository is this
+#               repository and whose head is `ai/issue-<n>`; at most 50
+#               distinct issues in ascending PR order (the rest stay
+#               unchecked: fail open).
+#   calls     - exactly one `gh api graphql` with aliases
+#               `i<n>: issue(number:<n>){number state stateReason}`, and none
+#               when no row qualifies. Aliases are built from integers only.
+#   output    - newline-separated PR numbers whose source issue is CLOSED with
+#               stateReason NOT_PLANNED.
+#   fail-open - a failed, empty or unreadable read prints nothing, logs
+#               `MERGE_LEASE pr=- base=<b> mode=<mode> outcome=unavailable
+#               reason=source_issue_read_failed` on stderr and returns 0 (the
+#               caller grants as before). gh_retry drops a failed attempt's
+#               stdout, so a reply with an error on one alias (a deleted
+#               issue) is also a failed read. <mode> defaults to `tick`.
+_merge_lease_not_planned_source_prs()
+{
+	local lease_rows="$1" lease_base="${2:--}" lease_cand="${3:-}" lease_mode="${4:-tick}" lease_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local lease_pairs lease_issues lease_issue lease_query="" lease_out="" lease_closed lease_total
+	[ -n "${lease_repo}" ] || return 0
+	[[ "${lease_cand}" =~ ^[1-9][0-9]*$ ]] || lease_cand=""
+	[[ "${lease_mode}" =~ ^[a-z]{1,10}$ ]] || lease_mode="tick"
+	lease_pairs="$(jq -r --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" --arg r "${lease_repo}" --arg c "${lease_cand}" '
+		[ .[]? | if type == "array" then .[] else . end
+		| select(type == "object" and (.number | type) == "number")
+		| { number,
+			head: (if (.head | type) == "object" then (.head.ref // "") else (.head // "") end),
+			head_repo: (if (.head | type) == "object" then (.head.repo.full_name // "") else (.head_repo // "") end),
+			names: [ (.labels // [])[] | if type == "object" then .name else . end ] }
+		| select(((.head_repo | tostring) | ascii_downcase) == ($r | ascii_downcase))
+		| select(((.number | tostring) == $c) or (.names | index($l) != null))
+		| select(.head | type == "string" and test("^ai/issue-[1-9][0-9]{0,8}$"))
+		| {pr: .number, issue: (.head | ltrimstr("ai/issue-"))} ] | unique_by(.pr) | sort_by(.pr) | .[] | "\(.pr) \(.issue)"' <<< "${lease_rows}" 2>/dev/null)" || lease_pairs=""
+	[ -n "${lease_pairs}" ] || return 0
+	lease_issues="$(awk '!seen[$2]++ { print $2 }' <<< "${lease_pairs}")"
+	lease_total="$(grep -c . <<< "${lease_issues}" || true)"
+	if [ "${lease_total:-0}" -gt 50 ]; then
+		echo "MERGE_LEASE pr=- base=${lease_base} mode=${lease_mode} outcome=truncated reason=source_issue_cap checked=50 total=${lease_total}" >&2
+		lease_issues="$(head -n 50 <<< "${lease_issues}")"
+	fi
+	while IFS= read -r lease_issue; do
+		[[ "${lease_issue}" =~ ^[1-9][0-9]{0,8}$ ]] || continue
+		lease_query="${lease_query} i${lease_issue}:issue(number:${lease_issue}){number state stateReason}"
+	done <<< "${lease_issues}"
+	[ -n "${lease_query}" ] || return 0
+	# gh_retry hands back only a successful attempt's stdout: a failed read
+	# (an error on one alias included) leaves lease_out empty, checked below.
+	# shellcheck disable=SC2016
+	lease_out="$(gh_retry gh api graphql -f query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){'"${lease_query}"' }}' \
+		-f owner="${lease_repo%%/*}" -f name="${lease_repo#*/}" 2>/dev/null)" || true
+	if [ -z "${lease_out//[[:space:]]/}" ] || ! jq -e '.data.repository | type == "object"' >/dev/null 2>&1 <<< "${lease_out}" \
+		|| ! lease_closed="$(jq -r '.data.repository
+		| to_entries[] | select(.key | test("^i[0-9]+$")) | .value
+		| select(type == "object" and .state == "CLOSED" and .stateReason == "NOT_PLANNED" and (.number | type) == "number") | .number' <<< "${lease_out}" 2>/dev/null)"; then
+		echo "MERGE_LEASE pr=- base=${lease_base} mode=${lease_mode} outcome=unavailable reason=source_issue_read_failed" >&2
+		return 0
+	fi
+	[ -n "${lease_closed}" ] || return 0
+	awk 'NR == FNR { if ($1 != "") closed[$1] = 1; next } ($2 in closed) { print $1 }' <(printf '%s\n' "${lease_closed}") - <<< "${lease_pairs}"
+	return 0
 }
 
 # Idle window in seconds (MERGE_LEASE_IDLE_MINUTES, default 180, clamped to
@@ -5615,6 +5704,17 @@ _merge_lease_gate_multi()
 			'[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n) | (.labels // [])[] | (if type == "object" then .name else . end) | select(. == $l) ] | length > 0' >/dev/null 2>&1; then
 			gm_was_waiting=1
 		fi
+		# Issue #10241 (G4): as the single-holder gate, an orphan never joins.
+		if _merge_lease_revoke_enabled && _merge_lease_source_issue_guard_enabled \
+			&& grep -qx -- "${gm_pr}" <<< "$(_merge_lease_not_planned_source_prs "$(jq -c --argjson n "${gm_pr}" '[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n) ]' <<< "${gm_pulls_json}" 2>/dev/null || echo '[]')" \
+				"${gm_base}" "${gm_pr}" update)"; then
+			MERGE_LEASE_OUTCOME="wait"
+			MERGE_LEASE_REASON="source_issue_not_planned"
+			_merge_lease_log "${gm_pr}" "${gm_base}" update skipped source_issue_not_planned
+			_merge_lease_metric skipped "${gm_base}" "${gm_pr}" update source_issue_not_planned || true
+			[ "${gm_was_waiting}" = "1" ] && _merge_lease_unlabel_wait "${gm_pr}"
+			return 1
+		fi
 		while :; do
 			gm_first="$(_merge_lease_queue_first "${gm_pulls_json}" "${gm_pr}" "${gm_skips}" "${gm_excluded}")"
 			[ -n "${gm_first}" ] && [ "${gm_first}" != "${gm_pr}" ] || break
@@ -5787,6 +5887,19 @@ _merge_lease_gate()
 				if printf '%s' "${lease_pulls_json}" | jq -e --argjson n "${lease_pr}" --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" \
 					'[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n) | (.labels // [])[] | (if type == "object" then .name else . end) | select(. == $l) ] | length > 0' >/dev/null 2>&1; then
 					lease_was_waiting=1
+				fi
+				# Issue #10241 (G4): a caller whose `ai/issue-<n>` source issue is
+				# closed as not planned never acquires a free lease; one batched read
+				# of the caller's own row (fail open). Unlabelled, like the tick.
+				if _merge_lease_revoke_enabled && _merge_lease_source_issue_guard_enabled \
+					&& grep -qx -- "${lease_pr}" <<< "$(_merge_lease_not_planned_source_prs "$(jq -c --argjson n "${lease_pr}" '[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n) ]' <<< "${lease_pulls_json}" 2>/dev/null || echo '[]')" \
+						"${lease_base}" "${lease_pr}" update)"; then
+					MERGE_LEASE_OUTCOME="wait"
+					MERGE_LEASE_REASON="source_issue_not_planned"
+					_merge_lease_log "${lease_pr}" "${lease_base}" update skipped source_issue_not_planned
+					_merge_lease_metric skipped "${lease_base}" "${lease_pr}" update source_issue_not_planned || true
+					[ "${lease_was_waiting}" = "1" ] && _merge_lease_unlabel_wait "${lease_pr}"
+					return 1
 				fi
 				if [ -n "${lease_first}" ] && [ "${lease_first}" != "${lease_pr}" ]; then
 					MERGE_LEASE_BLOCKER="${lease_first}"

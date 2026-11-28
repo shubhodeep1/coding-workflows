@@ -62,6 +62,18 @@ the network; the shell only executes.
       `/approved` (implement.yml refuses it with `existing_pr`). Switch
       UNBLOCK_EXISTING_PR_ROUTING_ENABLED (unset, empty or `true` on; `false`
       off; any other value off with a warning). A malformed value is dropped.
+      Optional `own_prs` (issues only, #10241): `{"status": "ok"|"unknown",
+      "prs": [{"number", "head_sha", "mergeable_state", "head_gate",
+      "ci_final", "lease_wait"}]}`, the issue's own open pull requests (`own-prs`
+      below). For a standalone issue a `reissue` verdict is refused (one
+      comment ending in `<!-- ai:unblock-wait:v1 item=<n> reason=own_pr_green|
+      own_pr_lease_wait|own_pr_unknown pr=<m|unknown> -->`, nothing created or
+      closed) while one of them has an `ai-review/head-gate` success, carries
+      the merge-lease wait label, has an `unknown` head-gate, or the read was
+      `unknown`; a re-issue that
+      goes ahead comments "Superseded by #<new>" on each other own PR and
+      closes it. Switch UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED (only `false`
+      turns it off). A malformed value is `unknown`.
   followup --context-file PATH --fixup N [--done-text TEXT]
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
@@ -92,6 +104,19 @@ the network; the shell only executes.
       same-repository `ai/issue-<N>` head PR, else exactly one open
       same-repository PR by the pipeline login or a repository member whose
       body closes the issue (#9809).
+  own-prs --graphql-file PATH --item N --repo R --pipeline-login L
+      Reads the impl-pr GraphQL response (#10241; its `pullRequests` nodes
+      carry head SHA, merge state, author, labels and the head commit's
+      `ai-review/head-gate` / `ci/final` statuses) and prints `{"status":
+      "ok"|"unknown", "prs": [...]}`: the open same-repository `ai/issue-<N>`
+      PRs by the pipeline login. A status counts only when the pipeline login
+      posted it. An unreadable shape, a further page or an empty login with a
+      candidate is `unknown`, never an empty list.
+  own-pr-guard --context-file PATH [--require-facts]
+      Prints `{"outcome": "proceed"|"refused"|"disabled", "reason", "pr",
+      "body"}`: the #10241 refusal of a `reissue` verdict (see `own_prs`).
+      `--require-facts` treats a standalone issue context without `own_prs` as
+      `unknown`.
   fixup-delivered-body --item-file PATH --repo R --pipeline-login L
       Reads the already-fetched item JSON and prints `{"status": "ok"|"skip",
       "reason": s, "target_branch": s|null, "paths": [s]}` for the unblock
@@ -111,6 +136,10 @@ the network; the shell only executes.
 
 Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "comment", "issue": n, "body": s}
+      (optional `"created_ref": true`, #10241: the executor replaces the
+      literal `{created_issue}` in the body with the number of the issue an
+      earlier `create_issue` op of the same run created, and skips the
+      comment when none was created)
   {"op": "add_labels", "issue": n, "labels": [s]}
   {"op": "remove_label", "issue": n, "label": s}
   {"op": "create_issue", "title": s, "body": s, "labels": [s], "wait_on": n}
@@ -208,6 +237,12 @@ SECURITY_BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 # A PR head a fix-up issue may be routed to as its Integration branch (#9938).
 PR_FIXUP_HEAD_REF_RE = re.compile(r"^ai/issue-[0-9]+$")
 MAX_COMMAND_TEXT = 300
+# The issue's own open pull requests (#10241, G1-G3).
+OWN_PR_STATUS_STATES = ("success", "pending", "failure", "error", "absent", "unknown")
+OWN_PR_GUARD_REASONS = ("own_pr_unknown", "own_pr_green", "own_pr_lease_wait")
+OWN_PR_MAX = 20
+OWN_PR_MERGE_STATE_RE = re.compile(r"^[a-z_]{1,30}$")
+OWN_PR_CREATED_PLACEHOLDER = "{created_issue}"
 PROTECTED_HANDOFF_VERDICTS = ("descope", "operator_step")
 # Chain lineage in titles (see the module docstring); kept equal to
 # unblock_ledger.CHAIN_TITLE_PREFIX_PATTERN by tests/test_unblock_judge.py.
@@ -583,7 +618,36 @@ def _context(raw: object) -> dict:
 		"pr_base_branch": pr_base_branch,
 		"implementation_pr": _implementation_pr(raw.get("implementation_pr"), kind, item),
 		"pr_head_ref": pr_head_ref,
+		"own_prs": _own_prs(raw.get("own_prs"), kind, item) if "own_prs" in raw else None,
 	}
+
+
+def _own_prs(raw: object, kind: str, item: int) -> dict | None:
+	"""The judge's own-PR facts (#10241); None off issues, anything malformed is `unknown`."""
+	if kind != "issue":
+		return None
+	unknown = {"status": "unknown", "prs": []}
+	if not isinstance(raw, dict) or raw.get("status") != "ok":
+		return unknown
+	prs = raw.get("prs")
+	if not isinstance(prs, list) or len(prs) > OWN_PR_MAX:
+		return unknown
+	clean: list[dict] = []
+	for pr in prs:
+		if not isinstance(pr, dict):
+			return unknown
+		number, head_sha = pr.get("number"), pr.get("head_sha")
+		mergeable, head_gate, ci_final, lease_wait = pr.get("mergeable_state"), pr.get("head_gate"), pr.get("ci_final"), pr.get("lease_wait")
+		if (
+			isinstance(number, bool) or not isinstance(number, int) or number < 1 or number == item
+			or not isinstance(head_sha, str) or not CI_OWNER_SHA_RE.fullmatch(head_sha)
+			or not isinstance(mergeable, str) or not OWN_PR_MERGE_STATE_RE.fullmatch(mergeable)
+			or head_gate not in OWN_PR_STATUS_STATES or ci_final not in OWN_PR_STATUS_STATES
+			or not isinstance(lease_wait, bool)
+		):
+			return unknown
+		clean.append({"number": number, "head_sha": head_sha, "mergeable_state": mergeable, "head_gate": head_gate, "ci_final": ci_final, "lease_wait": lease_wait})
+	return {"status": "ok", "prs": clean}
 
 
 def _implementation_pr(raw: object, kind: str, item: int) -> int | None:
@@ -772,6 +836,178 @@ def implementation_pr_candidate(raw: object, item: int, repo: str, pipeline_logi
 	if closes:
 		return result(closes.pop(), "closes")
 	return result(None, "none")
+
+
+def _own_pr_status_state(context: object, pipeline_login: str) -> str:
+	"""One named commit status of an own PR: only the pipeline login's counts (#10241)."""
+	if context is None:
+		return "absent"
+	if not isinstance(context, dict):
+		return "unknown"
+	creator = context.get("creator")
+	login = creator.get("login") if isinstance(creator, dict) else None
+	if not isinstance(login, str) or not pipeline_login or login != pipeline_login:
+		return "absent"
+	state = str(context.get("state") or "").lower()
+	if state in ("success", "pending", "failure", "error"):
+		return state
+	return "pending" if state == "expected" else "unknown"
+
+
+def own_prs_from_graphql(raw: object, item: int, repo: str, pipeline_login: str, env: object = None) -> dict:
+	"""The issue's own open pull requests, from the impl-pr GraphQL response (no network, #10241).
+
+	Kept: an open `ai/issue-<item>` head PR whose head repository is `repo`
+	and whose author is the pipeline login; a fork or another author is
+	dropped. A failed or partial read is `unknown`, never an empty list: an
+	unreadable shape, `pageInfo.hasNextPage`, a kept PR without a valid head
+	SHA, or an empty pipeline login while a same-repository candidate exists.
+	"""
+	unknown = {"status": "unknown", "prs": []}
+	if isinstance(item, bool) or not isinstance(item, int) or item < 1 or not repo:
+		return unknown
+	env = os.environ if env is None else env
+	wait_label = str(env.get("MERGE_LEASE_WAIT_LABEL", "") or "").strip() or "ai:merge-lease-wait"
+	head_ref = f"ai/issue-{item}"
+	try:
+		# A reply with GraphQL `errors` may carry nulled `labels` / `status`
+		# fields that would read as "not waiting" / "absent": fail closed.
+		if isinstance(raw, dict) and raw.get("errors"):
+			return unknown
+		connection = raw["data"]["repository"]["pullRequests"]
+		nodes = connection["nodes"]
+		page = connection.get("pageInfo") or {}
+		if not isinstance(nodes, list) or not isinstance(page, dict) or len(nodes) > OWN_PR_MAX:
+			return unknown
+		if page.get("hasNextPage") is True:
+			return unknown
+		prs: list[dict] = []
+		for node in nodes:
+			if not isinstance(node, dict):
+				return unknown
+			head = node.get("headRepository")
+			owner = head.get("nameWithOwner") if isinstance(head, dict) else None
+			if node.get("headRefName") != head_ref or not isinstance(owner, str) or owner.lower() != repo.lower():
+				continue
+			if node.get("state") != "OPEN":
+				continue
+			if not pipeline_login:
+				return unknown
+			author = node.get("author")
+			if not isinstance(author, dict) or author.get("login") != pipeline_login:
+				continue
+			number, head_sha = node.get("number"), node.get("headRefOid")
+			if isinstance(number, bool) or not isinstance(number, int) or number < 1 or number == item:
+				return unknown
+			if not isinstance(head_sha, str) or not CI_OWNER_SHA_RE.fullmatch(head_sha):
+				return unknown
+			label_nodes = (node.get("labels") or {}).get("nodes") or []
+			names = [label.get("name") for label in label_nodes if isinstance(label, dict)]
+			commits = (node.get("commits") or {}).get("nodes") or []
+			commit = commits[-1].get("commit") if commits and isinstance(commits[-1], dict) else None
+			if not isinstance(commit, dict) or commit.get("oid") != head_sha:
+				head_gate = ci_final = "unknown"
+			elif commit.get("status") is None:
+				head_gate = ci_final = "absent"
+			elif not isinstance(commit.get("status"), dict):
+				head_gate = ci_final = "unknown"
+			else:
+				head_gate = _own_pr_status_state(commit["status"].get("headGate"), pipeline_login)
+				ci_final = _own_pr_status_state(commit["status"].get("ciFinal"), pipeline_login)
+			merge_state = node.get("mergeStateStatus")
+			mergeable = merge_state.lower() if isinstance(merge_state, str) and OWN_PR_MERGE_STATE_RE.fullmatch(merge_state.lower()) else "unknown"
+			prs.append({"number": number, "head_sha": head_sha, "mergeable_state": mergeable, "head_gate": head_gate, "ci_final": ci_final, "lease_wait": wait_label in names})
+	except (KeyError, TypeError, AttributeError):
+		return unknown
+	prs.sort(key=lambda pr: pr["number"])
+	return {"status": "ok", "prs": prs}
+
+
+def _reissue_own_pr_guard_enabled(env: object = None) -> bool:
+	"""UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED (#10241): only `false` (any case) turns the guard off."""
+	env = os.environ if env is None else env
+	return str(env.get("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", "") or "").strip().lower() != "false"
+
+
+def own_pr_guard(ctx: dict, env: object = None) -> dict | None:
+	"""Refuse a standalone issue's `reissue` while its own PR is the work (#10241, G2), else None.
+
+	First match wins: an `unknown` read, then a PR with an `ai-review/head-gate`
+	success, then one carrying the merge-lease wait label, then a PR whose
+	head-gate could not be read on its current head (`unknown`: it may be
+	green, so it is neither closed nor duplicated); within a rule the highest
+	number. The body is fixed text and ends with a no-round
+	`ai:unblock-wait:v1 ... reason=` marker.
+	"""
+	if not _reissue_own_pr_guard_enabled(env) or ctx["kind"] != "issue" or ctx["tracking"]:
+		return None
+	own = ctx.get("own_prs")
+	if own is None:
+		return None
+	item = ctx["item"]
+	reason, pr = "", None
+	if own.get("status") != "ok":
+		reason, pr = "own_pr_unknown", None
+	else:
+		green = [entry for entry in own["prs"] if entry["head_gate"] == "success"]
+		waiting = [entry for entry in own["prs"] if entry["lease_wait"]]
+		unreadable = [entry for entry in own["prs"] if entry["head_gate"] == "unknown"]
+		if green:
+			reason, pr = "own_pr_green", max(green, key=lambda entry: entry["number"])
+		elif waiting:
+			reason, pr = "own_pr_lease_wait", max(waiting, key=lambda entry: entry["number"])
+		elif unreadable:
+			reason, pr = "own_pr_unknown", max(unreadable, key=lambda entry: entry["number"])
+	if reason not in OWN_PR_GUARD_REASONS:
+		return None
+	if pr is None:
+		why = "its open pull requests could not be read, so a replacement could duplicate one of them"
+		pr_token = "unknown"
+	else:
+		pr_token = str(pr["number"])
+		if reason == "own_pr_green":
+			why = f"pull request #{pr['number']} has an `ai-review/head-gate` success on its current head `{pr['head_sha'][:12]}`"
+		elif reason == "own_pr_unknown":
+			why = f"the `ai-review/head-gate` state of pull request #{pr['number']} could not be read on its current head `{pr['head_sha'][:12]}`, so it may be green"
+		else:
+			why = f"pull request #{pr['number']} (head `{pr['head_sha'][:12]}`) is waiting for the merge lease"
+	body = "\n".join([
+		f"The unblock judge chose `reissue` for #{item}, but nothing was re-issued: {why}."
+		" That pull request is the work: review and the merge lease keep moving it, and this item keeps its block."
+		" The unblock judge decides again on a later run.",
+		"",
+		f"<!-- ai:unblock-wait:v1 item={item} reason={reason} pr={pr_token} -->",
+	])
+	return {"reason": reason, "pr": pr["number"] if pr is not None else None, "body": body}
+
+
+def _own_pr_retire_ops(ctx: dict, owner: dict | None) -> list[dict]:
+	"""G3 (#10241): close each other own PR of a re-issued standalone issue, naming the replacement."""
+	own = ctx.get("own_prs")
+	if not _reissue_own_pr_guard_enabled() or not isinstance(own, dict) or own.get("status") != "ok":
+		return []
+	# The replacement is routed onto the verified open CI-owner PR's head; keep it.
+	# Own PRs are `ai/issue-<item>` heads, while the CI owner is the PR a triage
+	# issue was filed for: check_failure_triage.sh writes its `pr=` marker only
+	# when it creates the issue, so that PR (head `ai/issue-<K>`) predates the
+	# issue and K != item. `keep` therefore matches an own PR only in a
+	# hand-edited, self-referential body (the test_open_ci_owner_pr_is_never_retired
+	# fixture); the G4 lease guard never sees the routed `ai/issue-<K>` head as
+	# an orphan of this item (#10241).
+	keep = owner["number"] if owner and owner.get("state") == "open" else None
+	item = ctx["item"]
+	ops: list[dict] = []
+	for pr in own["prs"]:
+		# The guard already refused green, lease-waiting and unreadable PRs; never close one here.
+		if pr["number"] == keep or pr["head_gate"] in ("success", "unknown") or pr["lease_wait"]:
+			continue
+		ops.append({
+			"op": "comment", "issue": pr["number"], "created_ref": True,
+			"body": f"Superseded by #{OWN_PR_CREATED_PLACEHOLDER}: the unblock judge re-issued #{item} as a new issue and closed #{item} as not planned,"
+			" so this pull request is closed. Its branch is kept.",
+		})
+		ops.append({"op": "close", "issue": pr["number"], "reason": "not_planned", "pr": True})
+	return ops
 
 
 def _existing_pr_route_ops(ctx: dict, text: str) -> list[dict]:
@@ -1374,6 +1610,12 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 				{"op": "comment", "issue": item, "body": "This security finding stays open: its finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
 				{"op": "telegram", "level": "WARNING", "text": f"Unblock judge could not safely re-issue security finding #{item}; its metadata needs correction."},
 			]
+		# #10241 (G2): the issue's own green or lease-waiting PR is the work, and
+		# an unknown read could duplicate it. Before the CI-owner superseded
+		# close, which would close the issue and drop that PR from the lease.
+		own_refusal = own_pr_guard(ctx)
+		if own_refusal is not None:
+			return [{"op": "comment", "issue": item, "body": own_refusal["body"]}]
 		if security_issue and ctx.get("security_finding_id"):
 			body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['security_finding_id']} -->\n{body}"
 		if security_issue and not ctx["tracking"]:
@@ -1444,6 +1686,8 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			ops.append({"op": "create_issue", "title": title, "body": body, "labels": labels, "wait_on": None})
 			if not security_issue or ctx.get("security_finding_id"):
 				ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": False})
+				# #10241 (G3): retire the issue's other own open PRs.
+				ops += _own_pr_retire_ops(ctx, owner)
 		if security_issue and (ctx["tracking"] or not ctx.get("security_finding_id")):
 			location = f"the re-issue request recorded on tracking issue #{ctx['tracking']}" if ctx["tracking"] else "the newest issue that links this one"
 			ops.append({"op": "comment", "issue": item, "body": f"This security finding stays open; it is tracked here until a linked fix is merged. Re-issue: see {location}."})
@@ -1588,6 +1832,15 @@ def build_parser() -> argparse.ArgumentParser:
 	impl_pr_cmd.add_argument("--item", required=True, type=int)
 	impl_pr_cmd.add_argument("--repo", required=True)
 	impl_pr_cmd.add_argument("--pipeline-login", required=True)
+	# #10241: the issue's own open PRs and the reissue guard.
+	own_prs_cmd = sub.add_parser("own-prs")
+	own_prs_cmd.add_argument("--graphql-file", required=True)
+	own_prs_cmd.add_argument("--item", required=True, type=int)
+	own_prs_cmd.add_argument("--repo", required=True)
+	own_prs_cmd.add_argument("--pipeline-login", required=True)
+	own_guard_cmd = sub.add_parser("own-pr-guard")
+	own_guard_cmd.add_argument("--context-file", required=True)
+	own_guard_cmd.add_argument("--require-facts", action="store_true")
 	# #8530: read-only checks of the fix-up-delivered close.
 	delivered_cmd = sub.add_parser("fixup-delivered-body")
 	delivered_cmd.add_argument("--item-file", required=True)
@@ -1619,6 +1872,12 @@ def run(argv: list[str] | None = None) -> dict:
 		except InputError:
 			return implementation_pr_candidate(None, args.item, args.repo, args.pipeline_login)
 		return implementation_pr_candidate(raw, args.item, args.repo, args.pipeline_login)
+	if args.command == "own-prs":
+		try:
+			raw = _read_json(args.graphql_file, "--graphql-file")
+		except InputError:
+			return {"status": "unknown", "prs": []}
+		return own_prs_from_graphql(raw, args.item, args.repo, args.pipeline_login)
 	if args.command == "fixup-delivered-body":
 		return fixup_delivered_body(_read_json(args.item_file, "--item-file"), args.repo, args.pipeline_login)
 	ctx = _context(_read_json(args.context_file, "--context-file"))
@@ -1639,6 +1898,15 @@ def run(argv: list[str] | None = None) -> dict:
 		return {"ops": regrant_ops(ctx, rejection.get("run", ""), rejection.get("paths") or [])}
 	if args.command == "fixup-escalate":
 		return {"ops": fixup_escalate_ops(ctx, args.origin)}
+	if args.command == "own-pr-guard":
+		if not _reissue_own_pr_guard_enabled():
+			return {"outcome": "disabled", "reason": "", "pr": None, "body": ""}
+		if args.require_facts and ctx["kind"] == "issue" and not ctx["tracking"] and ctx.get("own_prs") is None:
+			ctx = dict(ctx, own_prs={"status": "unknown", "prs": []})
+		refusal = own_pr_guard(ctx)
+		if refusal is None:
+			return {"outcome": "proceed", "reason": "", "pr": None, "body": ""}
+		return {"outcome": "refused", **refusal}
 	verdict = _read_json(args.verdict_file, "--verdict-file")
 	if not isinstance(verdict, dict):
 		raise UsageError("--verdict-file must hold a JSON object")
