@@ -987,6 +987,13 @@ def _own_pr_retire_ops(ctx: dict, owner: dict | None) -> list[dict]:
 	if not _reissue_own_pr_guard_enabled() or not isinstance(own, dict) or own.get("status") != "ok":
 		return []
 	# The replacement is routed onto the verified open CI-owner PR's head; keep it.
+	# Own PRs are `ai/issue-<item>` heads, while the CI owner is the PR a triage
+	# issue was filed for: check_failure_triage.sh writes its `pr=` marker only
+	# when it creates the issue, so that PR (head `ai/issue-<K>`) predates the
+	# issue and K != item. `keep` therefore matches an own PR only in a
+	# hand-edited, self-referential body (the test_open_ci_owner_pr_is_never_retired
+	# fixture); the G4 lease guard never sees the routed `ai/issue-<K>` head as
+	# an orphan of this item (#10241).
 	keep = owner["number"] if owner and owner.get("state") == "open" else None
 	item = ctx["item"]
 	ops: list[dict] = []
