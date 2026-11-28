@@ -303,6 +303,42 @@ def test_a_ci_failed_marker_for_another_head_pr_or_author_is_ignored(tmp_path: P
 	assert "reason=freshness_sync" in result.stdout
 
 
+# --- freshness-sync after the full final CI failed on the head (PR #10152) ---
+
+def _final_ci_failed_marker(*, head: str = MERGE_HEAD, pr: int = 42, author: str = "github-actions[bot]", author_type: str = "Bot",
+	kind: str = "final-ci-failed") -> dict:
+	return {"author_login": author, "author_type": author_type,
+		"body": f"**The final CI run failed on head `{head[:12]}`.** ...\n\n<!-- ai:{kind}:v1 pr={pr} head={head} -->"}
+
+
+@pytest.mark.parametrize("marker", (
+	_final_ci_failed_marker(),
+	_final_ci_failed_marker(author="workflow-bot", author_type="User"),
+	_final_ci_failed_marker(author="Workflow-Bot", author_type="User"),
+	_final_ci_failed_marker(kind="final-ci-repair-request"),
+))
+def test_a_head_whose_final_ci_failed_is_reviewed_without_api_calls(tmp_path: Path, marker: dict) -> None:
+	result, calls = _freshness(tmp_path, [_marker(), marker])
+	assert result.returncode == 1
+	assert f"REVIEW_HEAD_GATE mode=freshness_sync pr=42 head={MERGE_HEAD} outcome=review reason=final_ci_failed_on_head from={APPROVED} sync=1" in result.stdout
+	assert calls == []
+
+
+@pytest.mark.parametrize("marker", (
+	_final_ci_failed_marker(head="f" * 40),
+	_final_ci_failed_marker(pr=43),
+	_final_ci_failed_marker(author="intruder", author_type="User"),
+	_final_ci_failed_marker(author="github-actions[bot]", author_type="User"),
+	_final_ci_failed_marker(kind="final-ci-stale-workflow"),
+	{"author_login": "github-actions[bot]", "author_type": "Bot",
+		"body": f"quoted <!-- ai:final-ci-failed:v1 pr=42 head={MERGE_HEAD} --> and more text"},
+))
+def test_a_final_ci_failed_marker_for_another_head_pr_or_author_is_ignored(tmp_path: Path, marker: dict) -> None:
+	result, _calls = _freshness(tmp_path, [_marker(), marker])
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "reason=freshness_sync" in result.stdout
+
+
 # ── Updater-PR exemption (#9483) ─────────────────────────────────────────
 
 

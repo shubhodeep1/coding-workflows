@@ -300,6 +300,8 @@ _REFUSED_RE = re.compile(
 	re.IGNORECASE,
 )
 _RATE_LIMITED_RE = re.compile(r"rate limit", re.IGNORECASE)
+# Issue #10176: the HTTP status of a failed job-token post, for the log only.
+_HTTP_STATUS_RE = re.compile(r"HTTP ([0-9]{3})\b")
 
 # `gh api` flags that take a value (short and long forms).
 _API_VALUE_FLAGS = {
@@ -734,9 +736,19 @@ def post_signed(original: list[str], repo: str, issue: int, payload: dict, outpu
 		return plain()
 	current = os.environ.get("GITHUB_REPOSITORY", "")
 	job_token = os.environ.get(JOB_TOKEN_ENV, "")
+	# Issue #10176: every fallback to the caller's token is logged with its
+	# reason (never a token value).
 	if os.environ.get(POST_SWITCH_ENV, "true").strip().lower() == "false":
+		log("fallback", reason="post_switch_off", issue=issue)
 		return plain()
-	if not job_token or repo.lower() != current.lower() or os.path.exists(_refusal_flag()):
+	if not job_token:
+		log("fallback", reason="job_token_missing", issue=issue)
+		return plain()
+	if repo.lower() != current.lower():
+		log("fallback", reason="repo_mismatch", issue=issue)
+		return plain()
+	if os.path.exists(_refusal_flag()):
+		log("fallback", reason="job_token_refused_cached", issue=issue)
 		return plain()
 	identity = caller_identity()
 	if identity is None:
@@ -768,20 +780,22 @@ def post_signed(original: list[str], repo: str, issue: int, payload: dict, outpu
 			if parts is not None:
 				head, text = parts
 		return write_normalized(text, head, jq_filter, secret)
+	status_match = _HTTP_STATUS_RE.search(proc.stderr or "")
+	status_field = {"status": status_match.group(1)} if status_match else {}
 	if _REFUSED_RE.search(proc.stderr or ""):
 		if _RATE_LIMITED_RE.search(proc.stderr or ""):
 			# A rate-limit 403 created nothing and says nothing about the
 			# token's permissions: fall back for this comment only.
-			log("fallback", reason="job_token_rate_limited", issue=issue)
+			log("fallback", reason="job_token_rate_limited", issue=issue, **status_field)
 			return plain()
-		log("fallback", reason="job_token_refused", issue=issue)
+		log("fallback", reason="job_token_refused", issue=issue, **status_field)
 		try:
 			open(_refusal_flag(), "w").close()
 		except OSError:
 			pass
 		return plain()
 	# Ambiguous failure: the comment may exist already. Never resend.
-	log("failed", issue=issue, rc=proc.returncode)
+	log("failed", issue=issue, rc=proc.returncode, **status_field)
 	return emit(proc)
 
 
@@ -1723,6 +1737,16 @@ _gh_pr_cache_entry_fresh()
 	jq -e --arg sha "${sha_key}" "${type_filter}" "${entry}" >/dev/null 2>&1
 }
 
+# Issue #10176: when GH_PR_CACHED_READ_SOURCE_FILE names a file (default
+# unset: nothing is written), gh_pr_cached_read records there which path served
+# the read: `<cache_hit|cache_miss|fallback> <epoch the data was fetched>`.
+# fallback = a live read because the cache was unavailable. Fail-open.
+_gh_pr_cache_note_source()
+{
+	[ -n "${GH_PR_CACHED_READ_SOURCE_FILE:-}" ] || return 0
+	{ printf '%s %s\n' "$1" "${2:-$(date +%s)}" > "${GH_PR_CACHED_READ_SOURCE_FILE}"; } 2>/dev/null || true
+}
+
 gh_pr_cached_read()
 {
 	local kind="${1:-}" repo="${2:-}" number="${3:-}" sha="${4:-}"
@@ -1743,6 +1767,7 @@ gh_pr_cached_read()
 	if ! _gh_pr_cache_enabled || ! command -v flock >/dev/null 2>&1 \
 		|| ! dir="$(_gh_pr_cache_dir)" || ! { [ -d "${dir}" ] || mkdir -m 700 "${dir}" 2>/dev/null || [ -d "${dir}" ]; } \
 		|| [ ! -d "${dir}" ] || [ ! -w "${dir}" ]; then
+		_gh_pr_cache_note_source fallback
 		_gh_pr_cache_live "${kind}" "${repo}" "${number}" "${sha}"
 		return $?
 	fi
@@ -1753,23 +1778,31 @@ gh_pr_cached_read()
 	# The lock file carries the entry identity so eviction can find entries
 	# whose first fetch is still in flight.
 	if ! { [ -s "${entry}.lock" ] || printf '%s %s %s %s\n' "${repo}" "${number}" "${kind}" "${sha_key}" >> "${entry}.lock"; } 2>/dev/null; then
+		_gh_pr_cache_note_source fallback
 		_gh_pr_cache_live "${kind}" "${repo}" "${number}" "${sha}"
 		return $?
 	fi
 	(
 		if ! flock -x -w 300 9; then
+			_gh_pr_cache_note_source fallback
 			_gh_pr_cache_live "${kind}" "${repo}" "${number}" "${sha}"
 			exit $?
 		fi
 		now="$(date +%s)"
 		if _gh_pr_cache_entry_fresh "${entry}" "${repo}" "${number}" "${kind}" "${sha_key}" "${now}"; then
 			printf 'hit %s\n' "${kind}" >> "${stats}" 2>/dev/null || true
+			hit_epoch=""
+			{ read -r _ _ _ _ hit_epoch < "${entry}.meta"; } 2>/dev/null || true
+			[[ "${hit_epoch}" =~ ^[0-9]{1,12}$ ]] || hit_epoch=""
+			_gh_pr_cache_note_source cache_hit "${hit_epoch}"
 			cat "${entry}"
 			exit $?
 		fi
 		printf 'miss %s\n' "${kind}" >> "${stats}" 2>/dev/null || true
+		_gh_pr_cache_note_source cache_miss "${now}"
 		fetched="$(mktemp "${entry}.tmp.XXXXXX" 2>/dev/null)" || fetched=""
 		if [ -z "${fetched}" ]; then
+			_gh_pr_cache_note_source fallback
 			_gh_pr_cache_live "${kind}" "${repo}" "${number}" "${sha}"
 			exit $?
 		fi

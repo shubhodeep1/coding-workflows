@@ -180,6 +180,12 @@
 # with no clean marker may add the base-sync carry's one commits/<head> and one
 # compare read (issue #9533; only when a trusted merge-base-sync marker names
 # the head).
+# Issue #10176: plus at most one fresh paginated read of this PR's comments
+# per gate run, only when the comments snapshot is unusable (missing, empty or
+# not an array) or right before a dispatch (after the throttle check). When the
+# fresh view holds other markers than the snapshot, the gate re-enters itself
+# once on the fresh view with no further comments, /user or skip-check read; a
+# re-entry may repeat the base-sync carry's commits/compare reads once.
 # report: one PR read to bind the audit inputs, one /user
 # identity read, one paginated comments read, one comment and at most one dispatch,
 # plus one paginated open ai:security listing when a delta audit left
@@ -200,6 +206,21 @@
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
 #      (followup_guard adds parent=; retirement adds item=, issues=, prs=)
+#      Issue #10176 (gate): outcome=markers_read comments=<n|unreadable>
+#      markers=<n> author=<login> source=<cache_hit|cache_miss|fallback|cache|direct|synthesized|fresh|unknown>
+#      age_s=<n|unknown> sig_shim=<on|off>, once per view (also for the view a
+#      markers_unverifiable hold rejects, with markers=0); a markers_unverifiable
+#      hold after a fresh read adds detail=fresh_read_failed|fresh_read_empty;
+#      outcome=reread reason=markers_changed before a re-entry;
+#      outcome=cycle_renumbered from= to=; outcome=cycle_guard result=unverified.
+#      AI_COMMENT_SIG lines the signing shim writes for the gate's own comment
+#      posts are echoed when they match a strict allow-list (no error bodies).
+# Switches (issue #10176; default on, `false` restores the earlier behaviour):
+#   SECURITY_PASS_MARKER_REREAD_ENABLED      fresh read, re-entry, and the
+#                                            markers_unverifiable hold on a
+#                                            failed or empty fresh read
+#   SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED  number a new pending or failed
+#                                            marker above every trusted cycle
 set -uo pipefail
 
 SECURITY_PASS_MARKER_RE='^<!-- ai:single-issue-security-pass:v1 status=(pending|clean|findings|failed) head=([0-9a-f]{40}) cycle=([1-9][0-9]*) -->$'
@@ -264,7 +285,7 @@ single_pass_marker()
 single_pass_post_pending_marker()
 {
 	local body="$1" marker="${1##*$'\n'}" attempts="${SECURITY_PASS_PENDING_MARKER_ATTEMPTS:-3}"
-	local delay="${SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS:-5}" attempt response
+	local delay="${SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS:-5}" attempt response pending_sig_err pending_post_ok
 	[[ "${attempts}" =~ ^[1-9][0-9]*$ ]] || attempts=3
 	[[ "${delay}" =~ ^[0-9]+$ ]] || delay=5
 	# Invalid or out-of-range attempts (1-10) and delay (0-30s) use defaults.
@@ -277,13 +298,156 @@ single_pass_post_pending_marker()
 		if [ "${attempt}" -gt 1 ] && [ "${delay}" -gt 0 ]; then
 			sleep "$((delay * (attempt - 1)))"
 		fi
-		if response="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER:-}/comments" -f body="${body}" 2>/dev/null)" \
+		pending_sig_err="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/single_pass_sig.XXXXXX" 2>/dev/null)" || pending_sig_err=""
+		pending_post_ok="false"
+		if response="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER:-}/comments" -f body="${body}" 2>"${pending_sig_err:-/dev/null}")" \
 			&& jq -e --arg m "${marker}" '(.id | type == "number") and ((.body // "") | type == "string") and (.body | contains($m))' <<< "${response}" >/dev/null 2>&1; then
+			pending_post_ok="true"
+		fi
+		single_pass_sig_log "${pending_sig_err}"
+		[ -z "${pending_sig_err}" ] || rm -f "${pending_sig_err}"
+		if [ "${pending_post_ok}" = "true" ]; then
 			return 0
 		fi
 		single_pass_log "mode=gate pr=${PR_NUMBER} outcome=marker_retry attempt=${attempt}"
 	done
 	return 1
+}
+
+# Issue #10176: echo only the signing shim's own AI_COMMENT_SIG lines from a
+# captured stderr file (outcome and fallback reason of a comment post); every
+# other line, such as an API error body, is dropped.
+single_pass_sig_log()
+{
+	[ -n "${1:-}" ] && [ -s "$1" ] || return 0
+	grep -E '^AI_COMMENT_SIG outcome=[a-z_]+( [a-z_]+=[A-Za-z0-9_.-]+)*$' "$1" 2>/dev/null | head -n 5 || true
+}
+
+# Posts one comment on the PR (output discarded) and echoes the shim's
+# AI_COMMENT_SIG lines. Returns gh's status.
+single_pass_post_comment_logged()
+{
+	local logged_body="$1" logged_err logged_rc=0
+	logged_err="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/single_pass_sig.XXXXXX" 2>/dev/null)" || logged_err=""
+	gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${logged_body}" >/dev/null 2>"${logged_err:-/dev/null}" || logged_rc=$?
+	single_pass_sig_log "${logged_err}"
+	[ -z "${logged_err}" ] || rm -f "${logged_err}"
+	return "${logged_rc}"
+}
+
+# Issue #10176: one fresh paginated read of this PR's comments (the same
+# shape as the collect step's read; through the signing shim when it is on
+# PATH). At most one per gate run: always sets SINGLE_PASS_COMMENTS_REREAD=done.
+# On success SINGLE_PASS_FRESH_COMMENTS_PATH holds a JSON array file; returns 1
+# on any failure (no retry loop: the hold is retried by the next review run).
+# Files are listed in SINGLE_PASS_FRESH_COMMENTS_FILES and removed by
+# single_pass_fresh_cleanup.
+SINGLE_PASS_COMMENTS_REREAD=""
+SINGLE_PASS_GATE_REENTRY=""
+SINGLE_PASS_FRESH_COMMENTS_PATH=""
+SINGLE_PASS_FRESH_COMMENTS_FILES=()
+single_pass_fresh_comments()
+{
+	local fresh_out
+	SINGLE_PASS_COMMENTS_REREAD="done"
+	SINGLE_PASS_FRESH_COMMENTS_PATH=""
+	fresh_out="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/single_pass_fresh_comments.XXXXXX" 2>/dev/null)" || return 1
+	SINGLE_PASS_FRESH_COMMENTS_FILES+=("${fresh_out}")
+	if ! gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" 2>/dev/null \
+		| jq -s 'if all(.[]; type == "array") then (add // []) else error("not array pages") end' > "${fresh_out}" 2>/dev/null \
+		|| ! jq -e 'type == "array"' "${fresh_out}" >/dev/null 2>&1; then
+		return 1
+	fi
+	SINGLE_PASS_FRESH_COMMENTS_PATH="${fresh_out}"
+	return 0
+}
+
+single_pass_fresh_cleanup()
+{
+	local fresh_file
+	for fresh_file in "${SINGLE_PASS_FRESH_COMMENTS_FILES[@]+"${SINGLE_PASS_FRESH_COMMENTS_FILES[@]}"}"; do
+		rm -f "${fresh_file}"
+	done
+	SINGLE_PASS_FRESH_COMMENTS_FILES=()
+}
+
+# Issue #10176: the issue-comment count the PR payload reports (0 when absent
+# or not a non-negative number).
+single_pass_payload_comment_count()
+{
+	local payload_count
+	payload_count="$(jq -r '(.comments // 0) | if type == "number" and . >= 0 then floor else 0 end' "$1" 2>/dev/null)" || payload_count=0
+	[[ "${payload_count}" =~ ^[0-9]{1,9}$ ]] || payload_count=0
+	printf '%s\n' "${payload_count}"
+}
+
+# Issue #10176: one diagnostic line describing the comments view the gate
+# decides on. Arguments: comments file, marker TSV, head, `fresh` for a fresh
+# read (anything else reads the file's `.source` sidecar written by
+# review_collect_pr_metadata.sh: `<cache_hit|cache_miss|fallback|cache|direct|synthesized> <epoch>`).
+# age_s is measured from that epoch (for cache_hit, when the cached entry was
+# fetched; for the legacy `cache` token a hit may be older still) or, without
+# a valid sidecar, from the file's mtime. No token or secret is printed.
+single_pass_view_log()
+{
+	local view_file="$1" view_markers="$2" view_head="$3" view_source="$4"
+	local view_comments view_marker_count view_age="unknown" view_token="" view_epoch="" view_now view_shim="off" view_path_dir view_old_ifs="${IFS}"
+	view_comments="$(jq -r 'if type == "array" then length else "unreadable" end' "${view_file}" 2>/dev/null)" || view_comments="unreadable"
+	[[ "${view_comments}" =~ ^[0-9]+$ ]] || view_comments="unreadable"
+	view_marker_count="$(printf '%s\n' "${view_markers}" | awk -F'\t' 'NF >= 5 { n++ } END { print n + 0 }')"
+	view_now="$(date +%s)"
+	if [ "${view_source}" = "fresh" ]; then
+		view_age=0
+	else
+		view_source="unknown"
+		if [ -n "${view_file}" ] && [ -f "${view_file}.source" ] && [ -r "${view_file}.source" ]; then
+			{ read -r view_token view_epoch _ || true; } < "${view_file}.source"
+			case "${view_token}" in
+				cache|cache_hit|cache_miss|fallback|direct|synthesized)
+					if [[ "${view_epoch}" =~ ^[0-9]{1,12}$ ]]; then
+						view_source="${view_token}"
+						view_epoch="$((10#${view_epoch}))"
+					else
+						view_epoch=""
+					fi
+					;;
+				*) view_epoch="" ;;
+			esac
+		fi
+		if [ "${view_source}" = "unknown" ] && [ -n "${view_file}" ] && [ -f "${view_file}" ]; then
+			view_epoch="$(stat -c %Y "${view_file}" 2>/dev/null || stat -f %m "${view_file}" 2>/dev/null || true)"
+			[[ "${view_epoch}" =~ ^[0-9]{1,12}$ ]] || view_epoch=""
+		fi
+		if [ -n "${view_epoch}" ] && [[ "${view_now}" =~ ^[0-9]+$ ]]; then
+			view_age=$((view_now - view_epoch))
+			[ "${view_age}" -ge 0 ] || view_age=0
+		fi
+	fi
+	# The gh call counter is kept first on PATH (it execs the next gh, the
+	# shim; gh_helpers.sh _gh_call_counter_refront), so scan every PATH entry
+	# for the shim dir rather than only the first gh.
+	IFS=":"
+	for view_path_dir in ${PATH}; do
+		case "${view_path_dir}" in
+			*/ai_comment_sig_shim.*)
+				if [ -x "${view_path_dir}/gh" ]; then
+					view_shim="on"
+					break
+				fi
+				;;
+		esac
+	done
+	IFS="${view_old_ifs}"
+	single_pass_log "mode=gate pr=${PR_NUMBER} head=${view_head} outcome=markers_read comments=${view_comments} markers=${view_marker_count} author=${SECURITY_PASS_AUTHOR_LOGIN:-} source=${view_source} age_s=${view_age} sig_shim=${view_shim}"
+}
+
+# Issue #10176: the lowest cycle number no trusted marker uses yet:
+# max(candidate, highest cycle in the marker TSV + 1). Pure text processing.
+single_pass_next_free_cycle()
+{
+	printf '%s\n' "$1" | awk -F'\t' -v c="$2" '
+		NF >= 5 && $5 ~ /^[0-9]+$/ { if ($5 + 0 > m) m = $5 + 0 }
+		END { n = m + 1; if (c + 0 > n) n = c + 0; print n }'
 }
 
 # Prints the pipeline's markers as TSV: created_at, id, status, head, cycle.
@@ -886,11 +1050,12 @@ single_pass_carry_skip()
 single_pass_base_sync_carry()
 {
 	local comments_file="$1" head_sha="$2" base_ref="$3" head_ref="$4" markers_tsv="$5"
-	local carry_dir carry_tmp carry_result carry_rc carry_from carry_base_parent carry_sha carry_mb carry_from_status
+	local carry_dir carry_tmp carry_result carry_rc carry_from carry_base_parent carry_sha carry_mb carry_from_status carry_mr_rc carry_mr_from carry_mr_remerge carry_mr_delta
 	local carry_pr_files carry_audited_files carry_patch_audited carry_patch_head
 	local -a carry_paths=()
 	single_pass_carry_from=""
 	single_pass_carry_skip_reason=""
+	single_pass_remerge_since=""
 	if [ "${SECURITY_PASS_BASE_SYNC_CARRY_ENABLED:-true}" = "false" ]; then
 		single_pass_carry_skip "${head_sha}" disabled
 		return 1
@@ -907,7 +1072,7 @@ single_pass_base_sync_carry()
 		return 1
 	fi
 	carry_tmp="$(mktemp -d)" || { single_pass_carry_skip "${head_sha}" tmp_unavailable; return 1; }
-	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), body: (.body // "")}]' "${comments_file}" > "${carry_tmp}/comments.json" 2>/dev/null; then
+	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), author_type: (.user.type // ""), body: (.body // "")}]' "${comments_file}" > "${carry_tmp}/comments.json" 2>/dev/null; then
 		rm -rf "${carry_tmp}"
 		single_pass_carry_skip "${head_sha}" comments_unreadable
 		return 1
@@ -929,10 +1094,65 @@ single_pass_base_sync_carry()
 		source "${carry_dir}/review_head_gate.sh" >/dev/null 2>&1 || exit 3
 		set +e
 		review_head_gate_freshness_sync "${REPOSITORY}" "${PR_NUMBER}" "${head_sha}" "${base_ref}" "${SECURITY_PASS_AUTHOR_LOGIN}" "${carry_tmp}/comments.json" > "${carry_tmp}/helper.log" 2>/dev/null
-		printf '%s %s %s\n' "$?" "${REVIEW_HEAD_GATE_FRESHNESS_FROM:-}" "${REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT:-}"
+		carry_fs_rc="$?"
+		# Resolution-only review (merge-lease short critical section plan,
+		# Phase 3): a head that is no freshness update may be the resolver's
+		# verified [ai-merge-resolve] merge of an audited head.
+		carry_mr_rc="-"
+		# Same switch parse as the gate and _pr_merge_resolve_marker_post:
+		# only empty or true (any case) is on; any other value is off.
+		carry_mr_switch="$(printf '%s' "${MERGE_RESOLVE_DELTA_REVIEW_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+		if [ "${carry_fs_rc}" != "0" ] && { [ -z "${carry_mr_switch}" ] || [ "${carry_mr_switch}" = "true" ]; } \
+			&& type review_head_gate_merge_resolve >/dev/null 2>&1 \
+			&& grep -Fq "resolve=${head_sha} " "${carry_tmp}/comments.json" 2>/dev/null; then
+			review_head_gate_merge_resolve "${REPOSITORY}" "${PR_NUMBER}" "${head_sha}" "${base_ref}" "${SECURITY_PASS_AUTHOR_LOGIN}" "${carry_tmp}/comments.json" >> "${carry_tmp}/helper.log" 2>/dev/null
+			carry_mr_rc="$?"
+		fi
+		# Every field is printed non-empty ("-" for none): the default-IFS
+		# read below would otherwise collapse empty fields and shift the rest.
+		printf '%s %s %s %s %s\n' "${carry_fs_rc:--}" "${REVIEW_HEAD_GATE_FRESHNESS_FROM:--}" "${REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT:--}" "${carry_mr_rc:--}" "${REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM:--}"
 	)" || carry_result=""
 	[ -s "${carry_tmp}/helper.log" ] && cat "${carry_tmp}/helper.log"
-	read -r carry_rc carry_from carry_base_parent <<< "${carry_result}"
+	read -r carry_rc carry_from carry_base_parent carry_mr_rc carry_mr_from <<< "${carry_result}"
+	[ "${carry_from:-}" = "-" ] && carry_from=""
+	[ "${carry_base_parent:-}" = "-" ] && carry_base_parent=""
+	[ "${carry_mr_rc:-}" = "-" ] && carry_mr_rc=""
+	[ "${carry_mr_from:-}" = "-" ] && carry_mr_from=""
+	if [ "${carry_rc:-}" != "0" ] && [ "${carry_mr_rc:-}" = "0" ] && [[ "${carry_mr_from:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		# A verified resolution head is never released without an audit: it
+		# gets a delta audit since its audited first parent (D4), and the
+		# gate skips the freshness inheritance walk for it.
+		carry_from_status="$(printf '%s\n' "${markers_tsv}" | awk -F'\t' -v h="${carry_mr_from}" '$4 == h' | tail -n 1 | cut -f3)"
+		# The delta audit keeps only files changed in <from>..<head>. A file the
+		# resolution kept at <from>'s content (e.g. dropping a base change) is in
+		# the remerge diff but not in that range, so the carry is granted only
+		# when <from>..<head> covers every remerge-diff file. Any git failure
+		# (missing objects, no merge base, git < 2.36) falls through to the
+		# full audit (freshness_unverified).
+		# A shallow checkout (the deterministic-skip job uses fetch-depth 1)
+		# usually has the head but not its parents or their merge base, so
+		# unshallow when any of them is missing, not only the head.
+		if [ "${carry_from_status}" = "clean" ] && { ! git cat-file -e "${head_sha}^{commit}" 2>/dev/null \
+			|| ! git merge-base "${head_sha}^1" "${head_sha}^2" >/dev/null 2>&1; } \
+			&& [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ] && git check-ref-format --branch "${head_ref}" >/dev/null 2>&1; then
+			git fetch --no-tags --unshallow origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" >/dev/null 2>&1 || true
+		fi
+		if [ "${carry_from_status}" = "clean" ] && { [ "$(git rev-parse --verify -q "${head_sha}^1" 2>/dev/null)" != "${carry_mr_from}" ] \
+			|| ! git merge-base "${head_sha}^1" "${head_sha}^2" >/dev/null 2>&1 \
+			|| ! carry_mr_remerge="$(git show --remerge-diff --no-ext-diff --format= --name-only "${head_sha}" 2>/dev/null)" \
+			|| ! carry_mr_delta="$(git diff --no-ext-diff --name-only "${carry_mr_from}..${head_sha}" -- 2>/dev/null)" \
+			|| [ -n "$(LC_ALL=C comm -23 <(printf '%s\n' "${carry_mr_remerge}" | sed '/^$/d' | LC_ALL=C sort -u) <(printf '%s\n' "${carry_mr_delta}" | sed '/^$/d' | LC_ALL=C sort -u))" ]; }; then
+			single_pass_log "mode=gate pr=${PR_NUMBER:-} head=${head_sha} outcome=merge_resolve_scope_uncovered from=${carry_mr_from}"
+			carry_from_status="scope_uncovered"
+		fi
+		if [ "${carry_from_status}" = "clean" ]; then
+			rm -rf "${carry_tmp}"
+			single_pass_remerge_since="${carry_mr_from}"
+			single_pass_log "mode=gate pr=${PR_NUMBER:-} head=${head_sha} outcome=merge_resolve_carry from=${carry_mr_from}"
+			single_pass_carry_skip "${head_sha}" merge_resolve_audit
+			return 1
+		fi
+	fi
 	if [ "${carry_rc:-}" != "0" ] || ! [[ "${carry_from:-}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${carry_base_parent:-}" =~ ^[0-9a-f]{40}$ ]]; then
 		rm -rf "${carry_tmp}"
 		single_pass_carry_skip "${head_sha}" "$([ -n "${carry_result}" ] && echo freshness_unverified || echo helper_missing)"
@@ -1009,7 +1229,7 @@ single_pass_inherited_clean()
 	inherit_work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/single_pass_inherit.XXXXXX" 2>/dev/null)" || return 1
 	inherit_comments="${inherit_work}/comments.json"
 	inherit_markers="${inherit_work}/markers.tsv"
-	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), body: (.body // "")}]' "${comments_file}" > "${inherit_comments}" 2>/dev/null \
+	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), author_type: (.user.type // ""), body: (.body // "")}]' "${comments_file}" > "${inherit_comments}" 2>/dev/null \
 		|| ! printf '%s\n' "${markers}" > "${inherit_markers}"; then
 		rm -rf "${inherit_work}"
 		return 1
@@ -1059,8 +1279,13 @@ single_pass_gate()
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
 	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings failed_marker_unrecorded="false"
 	local gate_checkout_head
+	# Issue #10176: comments-view bookkeeping (see single_pass_fresh_comments).
+	local gate_view_source="snapshot" snapshot_detail="" gate_reread_on="true" gate_guard_on="true"
+	local fresh_detail="" fresh_view="" fresh_markers="" guard_markers="" renumbered_cycle reentry_rc
 	local delta_source="" delta_since="" delta_comment_id="" delta_status="" delta_note="" dispatch_ok="false"
 	local -a dispatch_args=() delta_dispatch_args=()
+	# Set by single_pass_base_sync_carry for a verified resolution head.
+	single_pass_remerge_since=""
 	local attempts_used cap_cycle effective_attempts pending_state="" active_audits
 	# Issue #10017: merge-lease holder exception to the audit throttle.
 	local lease_exempt="" lease_throttle_note=""
@@ -1107,24 +1332,58 @@ single_pass_gate()
 	fi
 	# Skip only when the sole linked issue is verified; mixed-issue PRs
 	# must not inherit one follow-up's exemption.
-	linked="$(printf '%s' "${LINKED_ISSUES_JSON:-[]}" | jq -r 'if type == "array" and length == 1 then .[0].number // empty else empty end' 2>/dev/null || true)"
-	if [[ "${linked}" =~ ^[0-9]+$ ]] && [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/security_pass_skip.py" ]; then
-		skip_json="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/security_pass_skip.py" --repo "${REPOSITORY}" --issue "${linked}" 2>/dev/null || true)"
-		if [ "$(printf '%s' "${skip_json}" | jq -r '.skip // false' 2>/dev/null)" = "true" ]; then
-			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=skip reason=verified_followup issue=${linked}"
-			single_pass_state skip
-			single_pass_output false
-			return 0
+	# Issue #10176: a re-entry on a fresh comments view reuses the skip result
+	# and the identity the first pass resolved, so it makes no repeated reads.
+	if [ "${SINGLE_PASS_GATE_REENTRY:-}" != "true" ]; then
+		linked="$(printf '%s' "${LINKED_ISSUES_JSON:-[]}" | jq -r 'if type == "array" and length == 1 then .[0].number // empty else empty end' 2>/dev/null || true)"
+		if [[ "${linked}" =~ ^[0-9]+$ ]] && [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/security_pass_skip.py" ]; then
+			skip_json="$(PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/security_pass_skip.py" --repo "${REPOSITORY}" --issue "${linked}" 2>/dev/null || true)"
+			if [ "$(printf '%s' "${skip_json}" | jq -r '.skip // false' 2>/dev/null)" = "true" ]; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=skip reason=verified_followup issue=${linked}"
+				single_pass_state skip
+				single_pass_output false
+				return 0
+			fi
 		fi
+		# The gate job also probes /user, but its identity is not exported to this job.
+		SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+		if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
+			SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_AUTHOR_LOGIN_FALLBACK:-}"
+		fi
+	else
+		gate_view_source="fresh"
 	fi
-	# The gate job also probes /user, but its identity is not exported to this job.
-	SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
-	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ]; then
-		SECURITY_PASS_AUTHOR_LOGIN="${SECURITY_PASS_AUTHOR_LOGIN_FALLBACK:-}"
+	# Issue #10176: an unusable snapshot (missing, empty or not an array) is
+	# read again once, fresh, before the gate holds on it. A fresh read that
+	# fails, or returns no comments while the PR payload counts some, keeps the
+	# markers_unverifiable hold with a detail= field. `false` holds as before.
+	if [ -n "${SECURITY_PASS_AUTHOR_LOGIN}" ] \
+		&& { [ ! -s "${comments}" ] || ! jq -e 'type == "array"' "${comments}" >/dev/null 2>&1; } \
+		&& [ "${SECURITY_PASS_MARKER_REREAD_ENABLED:-true}" != "false" ] \
+		&& [ "${SINGLE_PASS_COMMENTS_REREAD}" != "done" ]; then
+		snapshot_detail=" detail=fresh_read_failed"
+		if single_pass_fresh_comments; then
+			if [ "$(jq -r 'length' "${SINGLE_PASS_FRESH_COMMENTS_PATH}" 2>/dev/null)" = "0" ] \
+				&& [ "$(single_pass_payload_comment_count "${pr_json}")" -ge 1 ]; then
+				snapshot_detail=" detail=fresh_read_empty"
+			else
+				snapshot_detail=""
+				comments="${SINGLE_PASS_FRESH_COMMENTS_PATH}"
+				gate_view_source="fresh"
+			fi
+		fi
 	fi
 	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ] || [ ! -s "${comments}" ] \
 		|| ! jq -e 'type == "array"' "${comments}" >/dev/null 2>&1; then
-		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable"
+		# Issue #10176: the view this hold rejects (the empty fresh read, or
+		# else the unusable snapshot), so the hold carries the comments,
+		# markers, author and source fields too.
+		if [ "${snapshot_detail}" = " detail=fresh_read_empty" ]; then
+			single_pass_view_log "${SINGLE_PASS_FRESH_COMMENTS_PATH}" "" "${head_sha}" fresh
+		else
+			single_pass_view_log "${comments}" "" "${head_sha}" "${gate_view_source}"
+		fi
+		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable${snapshot_detail}"
 		single_pass_state unverifiable
 		single_pass_output true markers_unverifiable
 		return 0
@@ -1135,6 +1394,7 @@ single_pass_gate()
 		single_pass_output true markers_unverifiable
 		return 0
 	fi
+	single_pass_view_log "${comments}" "${markers}" "${head_sha}" "${gate_view_source}"
 	if ! extensions="$(single_pass_extensions "${comments}" "${head_sha}" . "${head_ref}")"; then
 		# The checkout can be ahead of the PR head when this run made a commit
 		# it has not pushed yet: the conflict resolver's [ai-merge-resolve]
@@ -1206,7 +1466,7 @@ single_pass_gate()
 			return 0
 		fi
 		case "${single_pass_carry_skip_reason:-}" in
-			freshness_unverified|parents_mismatch|changed_files_differ|patch_mismatch) ;;
+			freshness_unverified|parents_mismatch|changed_files_differ|patch_mismatch|merge_resolve_audit) ;;
 			*)
 				if inherited="$(single_pass_inherited_clean "${comments}" "${markers}" "${head_sha}" "${default_branch}")"; then
 					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=freshness_sync_inherited from=${inherited%% *} hops=${inherited##* }"
@@ -1421,11 +1681,81 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			fi
 		fi
 	fi
+	# Issue #10176: the comments snapshot is taken when the job starts, and a
+	# review run can reach this point much later (merge-train wait, reviewer
+	# models), after an audit already posted its markers. Before a dispatch, and
+	# so before any pending or failed marker is posted, read the comments once
+	# more, fresh. A failed read, or an empty one while the PR payload counts
+	# comments, holds (markers_unverifiable): no dispatch, no marker, no cycle.
+	# Other markers in the fresh view re-enter the gate once on that view, which
+	# then decides clean, pending or a dispatch numbered from it.
+	[ "${SECURITY_PASS_MARKER_REREAD_ENABLED:-true}" != "false" ] || gate_reread_on="false"
+	[ "${SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED:-true}" != "false" ] || gate_guard_on="false"
+	guard_markers="${markers}"
+	if { [ "${gate_reread_on}" = "true" ] || [ "${gate_guard_on}" = "true" ]; } && [ "${SINGLE_PASS_COMMENTS_REREAD}" != "done" ]; then
+		fresh_detail="fresh_read_failed"
+		if single_pass_fresh_comments; then
+			fresh_view="${SINGLE_PASS_FRESH_COMMENTS_PATH}"
+			if [ "$(jq -r 'length' "${fresh_view}" 2>/dev/null)" = "0" ] \
+				&& [ "$(single_pass_payload_comment_count "${pr_json}")" -ge 1 ]; then
+				fresh_detail="fresh_read_empty"
+			elif fresh_markers="$(single_pass_markers "${fresh_view}")"; then
+				fresh_detail=""
+			fi
+		fi
+		if [ -n "${fresh_detail}" ]; then
+			# Issue #10176: an empty fresh view is logged before it is rejected
+			# (the snapshot view was logged above).
+			[ "${fresh_detail}" != "fresh_read_empty" ] || single_pass_view_log "${fresh_view}" "" "${head_sha}" fresh
+			if [ "${gate_reread_on}" = "true" ]; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable detail=${fresh_detail} cycle=${cycles_used}"
+				single_pass_state unverifiable
+				single_pass_output true markers_unverifiable
+				return 0
+			fi
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=cycle_guard result=unverified detail=${fresh_detail}"
+		else
+			# A re-entry logs the fresh view itself, so it is logged here only
+			# when no re-entry follows (one markers_read line per view).
+			if [ "${fresh_markers}" != "${markers}" ] && [ "${gate_reread_on}" = "true" ]; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=reread reason=markers_changed"
+				reentry_rc=0
+				SINGLE_PASS_GATE_REENTRY=true PR_ISSUE_COMMENTS_FILE="${fresh_view}" single_pass_gate || reentry_rc=$?
+				rm -f "${fresh_view}"
+				return "${reentry_rc}"
+			fi
+			single_pass_view_log "${fresh_view}" "${fresh_markers}" "${head_sha}" fresh
+			if [ "${fresh_markers}" != "${markers}" ]; then
+				guard_markers="${fresh_markers}"
+			fi
+		fi
+	fi
+	# Never reuse a cycle number a trusted marker already carries: the next
+	# pending or failed marker is numbered above the highest one in view.
+	if [ "${gate_guard_on}" = "true" ]; then
+		renumbered_cycle="$(single_pass_next_free_cycle "${guard_markers}" "${next_cycle}")"
+		if [[ "${renumbered_cycle}" =~ ^[0-9]+$ ]] && [ "${renumbered_cycle}" != "${next_cycle}" ]; then
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=cycle_renumbered from=${next_cycle} to=${renumbered_cycle}"
+			next_cycle="${renumbered_cycle}"
+		fi
+	fi
 	dispatch_args=(workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}")
 	# Delta re-audit (stuck-states P5a): never for the exhausted-head retry, so
 	# the final audit of an exhausted head stays a full merge-base..head audit.
 	if [ "${SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED:-true}" != "false" ] && [ "${exhausted_retry}" != "true" ]; then
 		delta_source="$(single_pass_delta_source "${markers}" "${head_sha}")"
+		# Resolution-only review (merge-lease plan Phase 3, D4): a verified
+		# resolution head is audited as a delta since its clean first parent.
+		# security_audit.sh keeps only PR-range files (merge-base..head) that
+		# also changed in <from>..<head>. single_pass_base_sync_carry grants
+		# this only when <from>..<head> contains every file of the head's
+		# remerge diff, so the audited scope covers the resolution (plus any
+		# PR file the base changed cleanly); otherwise the head is audited in full.
+		# The audit job re-derives the source from the trusted markers and
+		# runs a full audit when it is not that head (input_mismatch).
+		if [[ "${single_pass_remerge_since:-}" =~ ^[0-9a-f]{40}$ ]]; then
+			delta_source="$(printf '%s\t\tclean\t' "${single_pass_remerge_since}")"
+		fi
 		if [ -n "${delta_source}" ]; then
 			delta_since="$(printf '%s' "${delta_source}" | cut -f1)"
 			delta_comment_id="$(printf '%s' "${delta_source}" | cut -f2)"
@@ -1476,7 +1806,7 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 The retry audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). Auto-merge stays off, and this counts as head attempt $((head_attempts + 1)) of ${exhausted_head_limit}. Once the head attempts are used up, the PR is labelled \`ai:security-pass-failed\`.
 
 $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
-			if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
+			if ! single_pass_post_comment_logged "${body}"; then
 				echo "::error::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the head attempt is not recorded. Holding the merge and failing closed so workflow recovery retries."
 				failed_marker_unrecorded="true"
 			fi
@@ -1490,7 +1820,7 @@ $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
 The audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). A consumer \`ai-security-audit.yml\` that predates the \`pr_number\` input fails this way; syncing the wrapper fixes it. Auto-merge stays off, and this counts as cycle $((cycles_used + 1)) of ${effective_max}. A later review run retries the dispatch. Once the cycles are used up, the PR is labelled \`ai:security-pass-failed\`.
 
 $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
-			if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
+			if ! single_pass_post_comment_logged "${body}"; then
 				echo "::error::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the cycle is not recorded. Holding the merge and failing closed so workflow recovery retries."
 				failed_marker_unrecorded="true"
 			fi
@@ -2089,10 +2419,18 @@ single_pass_since()
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	case "${1:-}" in
-		gate) single_pass_gate ;;
+		gate)
+			single_pass_gate_rc=0
+			single_pass_gate || single_pass_gate_rc=$?
+			single_pass_fresh_cleanup
+			exit "${single_pass_gate_rc}"
+			;;
 		status)
 			SINGLE_PASS_STATUS_ONLY="true"
-			single_pass_gate
+			single_pass_gate_rc=0
+			single_pass_gate || single_pass_gate_rc=$?
+			single_pass_fresh_cleanup
+			exit "${single_pass_gate_rc}"
 			;;
 		report) single_pass_report ;;
 		delta) single_pass_delta_resolve ;;

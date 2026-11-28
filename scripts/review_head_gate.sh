@@ -229,7 +229,9 @@ review_head_gate_main()
 # is reviewed normally.
 # Usage: freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file>
 # The comments file is the review gate's existing marker-comment read (an array
-# of {author_login, body}); this adds no comments call. API budget (§15): one
+# of {author_login, author_type, body}; author_type is optional and is only
+# needed to trust a github-actions[bot] final-CI-failed marker); this adds no
+# comments call. API budget (§15): one
 # `commits/<head>` and one compare read, both only when a bound marker names
 # the head. Exit 0 = skip the reviewers; 1 = review normally. Every outcome
 # logs one REVIEW_HEAD_GATE mode=freshness_sync line. On exit 0 it also sets
@@ -260,7 +262,7 @@ review_head_gate_freshness_sync()
 	fs_markers="$(jq -r --arg login "${fs_login}" --arg pr "${fs_pr}" '
 		.[]? | select(type == "object" and (.author_login // "") == $login)
 		| (.body // "") | select(type == "string" and startswith("**Branch updated from `"))
-		| capture("<!-- ai:merge-base-sync:v1 pr=(?<pr>[0-9]+) from=(?<from>[0-9a-f]{40}) sync=(?<sync>[0-9]+)( base=(?<base>[0-9a-f]{40}) merge=(?<merge>[0-9a-f]{40}))? -->\\s*$")?
+		| capture("<!-- ai:merge-base-sync:v1 pr=(?<pr>[0-9]+) from=(?<from>[0-9a-f]{40}) sync=(?<sync>[0-9]+)( base=(?<base>[0-9a-f]{40}) merge=(?<merge>[0-9a-f]{40})( inline_run=(?<inline_run>[0-9]+))?)? -->\\s*$")?
 		| select(.pr == $pr) | "\(.from) \(.sync) \(.base // "-") \(.merge // "-")"' "${fs_comments}" 2>/dev/null || true)"
 	if [ -z "${fs_markers}" ]; then
 		fs_log review no_sync_marker
@@ -284,6 +286,23 @@ review_head_gate_freshness_sync()
 		  | test("<!-- ai:freshness-ci-failed:v1 pr=" + $pr + " head=" + $head + " -->\\s*$") ] | any' \
 		"${fs_comments}" >/dev/null 2>&1; then
 		fs_log review ci_failed_on_head "from=${fs_from} sync=${fs_sync}"
+		return 1
+	fi
+	# The full final CI failed on this head (scripts/review_final_ci_failed.sh,
+	# ci.yml's `final-ci-failed` job, or the review-blocked judge's repair
+	# request, issue #10063). That hand-back is a different marker, posted by
+	# github-actions[bot] or the GH_PAT login: the same trust rule as the review
+	# gate's doc-only / small-diff check. Without this the update head was
+	# skipped and re-approved on every review run while its final CI stayed
+	# red (PR #10152, 2026-11-28).
+	if jq -e --arg login "${fs_login}" --arg pr "${fs_pr}" --arg head "${fs_head}" '
+		[ .[]? | select(type == "object")
+		  | select(((.author_login // "") | ascii_downcase) == ($login | ascii_downcase)
+		    or ((.author_login // "") == "github-actions[bot]" and (.author_type // "") == "Bot"))
+		  | (.body // "") | select(type == "string")
+		  | test("<!-- ai:(final-ci-failed|final-ci-repair-request):v1 pr=" + $pr + " head=" + $head + " -->\\s*$") ] | any' \
+		"${fs_comments}" >/dev/null 2>&1; then
+		fs_log review final_ci_failed_on_head "from=${fs_from} sync=${fs_sync}"
 		return 1
 	fi
 	if ! fs_commit="$(gh_retry gh api "repos/${fs_repo}/commits/${fs_head}" \
@@ -324,6 +343,31 @@ review_head_gate_freshness_sync()
 	REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT="${fs_second}"
 	fs_log skip freshness_sync "from=${fs_from} base_parent=${fs_second} sync=${fs_sync} merge=${fs_head}"
 	REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM="${fs_from}"
+	return 0
+}
+
+# freshness-sync-inline-run <pr> <head sha> <author login> <comments json file>
+# (docs/plans/merge-lease-short-critical-section-plan.md Phase 4). Prints the
+# inline_run=<run id> of the newest trusted ai:merge-base-sync:v1 marker for
+# <pr> whose `merge` equals <head sha> (same author, heading and capture rules
+# as freshness-sync), or nothing when that marker has no inline_run field or
+# there is no such marker. The id must match ^[1-9][0-9]{0,19}$. No API call.
+# Exit 0 on valid input, 2 on invalid input.
+review_head_gate_freshness_inline_run()
+{
+	local ir_pr="${1:-}" ir_head="${2:-}" ir_login="${3:-}" ir_comments="${4:-}" ir_run=""
+	if ! [[ "${ir_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${ir_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| [ -z "${ir_login}" ] || [ ! -f "${ir_comments}" ]; then
+		return 2
+	fi
+	ir_run="$(jq -r --arg login "${ir_login}" --arg pr "${ir_pr}" --arg head "${ir_head}" '
+		[ .[]? | select(type == "object" and (.author_login // "") == $login)
+		| (.body // "") | select(type == "string" and startswith("**Branch updated from `"))
+		| capture("<!-- ai:merge-base-sync:v1 pr=(?<pr>[0-9]+) from=(?<from>[0-9a-f]{40}) sync=(?<sync>[0-9]+)( base=(?<base>[0-9a-f]{40}) merge=(?<merge>[0-9a-f]{40})( inline_run=(?<inline_run>[0-9]+))?)? -->\\s*$")?
+		| select(.pr == $pr and .merge == $head) ] | last | (.inline_run // "")' "${ir_comments}" 2>/dev/null || true)"
+	if [[ "${ir_run}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		printf '%s\n' "${ir_run}"
+	fi
 	return 0
 }
 
@@ -402,6 +446,99 @@ review_head_gate_final_ci_repair()
 	return 0
 }
 
+# merge-resolve <repo> <pr> <head sha> <base ref> <author login> <comments json file>
+# (docs/plans/merge-lease-short-critical-section-plan.md Phase 3, D4).
+# Recognises a resolver head ([ai-merge-resolve] merge of an approved head
+# with the base) so its review narrows the reviewers' primary diff to the
+# resolution (git show --remerge-diff). Every check must hold, otherwise the
+# head gets a full review (fail closed):
+#   * the newest marker comment by <author login> (the GH_PAT login,
+#     case-insensitive) whose final line is
+#     `<!-- ai:merge-resolve from=<sha> resolve=<head> base=<sha> -->`;
+#   * the head commit has exactly two parents, [from, base];
+#   * its committer or author is the pipeline identity (`codex-bot` or
+#     `claude-bot` at users.noreply.invalid, the final-ci-repair guard);
+#   * `from`'s newest ai-review/head-gate status is `success`, posted by
+#     <author login>;
+#   * the base parent is contained in <base ref> (`compare/<base>...<base ref>`
+#     is `ahead` or `identical`, the freshness_sync check).
+# The comments file is the gate's shared marker read (no comments call here).
+# API budget (§14): `commits/<head>`, `commits/<from>/statuses` and one
+# compare read, only when a trusted marker names the head and the earlier
+# checks pass. On success prints `merge_resolve_from=<from>`, sets
+# REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM for sourcing callers and returns 0;
+# anything else returns 1. Every outcome logs one
+# `REVIEW_HEAD_GATE mode=merge_resolve outcome=delta|review reason=<token>` line.
+review_head_gate_merge_resolve()
+{
+	local mr_repo="${1:-}" mr_pr="${2:-}" mr_head="${3:-}" mr_base="${4:-}" mr_login="${5:-}" mr_comments="${6:-}"
+	local mr_marker mr_from mr_base_parent mr_commit mr_parents mr_identity mr_gate mr_gate_state mr_gate_creator mr_status
+	REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM=""
+	mr_log()
+	{
+		echo "REVIEW_HEAD_GATE mode=merge_resolve pr=${mr_pr:-?} head=${mr_head:-?} outcome=$1 reason=$2${3:+ $3}"
+	}
+	if ! review_head_gate_valid_repo "${mr_repo}" || ! [[ "${mr_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${mr_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${mr_base}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${mr_base}" == *..* ]] \
+		|| [ -z "${mr_login}" ] || [ ! -f "${mr_comments}" ]; then
+		mr_log review invalid_input
+		return 1
+	fi
+	mr_marker="$(jq -r --arg login "${mr_login}" --arg head "${mr_head}" '
+		[ .[]? | select(type == "object" and ((.author_login // "") | ascii_downcase) == ($login | ascii_downcase))
+		| (.body // "") | select(type == "string")
+		| capture("<!-- ai:merge-resolve from=(?<from>[0-9a-f]{40}) resolve=(?<resolve>[0-9a-f]{40}) base=(?<base>[0-9a-f]{40}) -->\\s*$")?
+		| select(.resolve == $head) | "\(.from) \(.base)" ] | last // ""' "${mr_comments}" 2>/dev/null || true)"
+	read -r mr_from mr_base_parent _ <<< "${mr_marker}"
+	if ! [[ "${mr_from:-}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${mr_base_parent:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		mr_log review no_resolve_marker
+		return 1
+	fi
+	if ! mr_commit="$(gh_retry gh api "repos/${mr_repo}/commits/${mr_head}" \
+		--jq '{parents: [.parents[]?.sha], cname: (.commit.committer.name // ""), cemail: (.commit.committer.email // ""), aname: (.commit.author.name // ""), aemail: (.commit.author.email // "")}' 2>/dev/null)"; then
+		mr_log review commit_read_failed "from=${mr_from}"
+		return 1
+	fi
+	mr_parents="$(printf '%s' "${mr_commit}" | jq -r '.parents | join(",")' 2>/dev/null || true)"
+	if [ "${mr_parents}" != "${mr_from},${mr_base_parent}" ]; then
+		mr_log review head_is_not_the_resolution "from=${mr_from} parents=${mr_parents:-none}"
+		return 1
+	fi
+	mr_identity="$(printf '%s' "${mr_commit}" | jq -r '
+		def pipeline($n; $e): ($n == "codex-bot" or $n == "claude-bot") and $e == ($n + "@users.noreply.invalid");
+		if pipeline(.cname; .cemail) or pipeline(.aname; .aemail) then "pipeline" else "other" end' 2>/dev/null || true)"
+	if [ "${mr_identity}" != "pipeline" ]; then
+		mr_log review identity_not_pipeline "from=${mr_from}"
+		return 1
+	fi
+	if ! mr_gate="$(gh_retry gh api "repos/${mr_repo}/commits/${mr_from}/statuses?per_page=100" \
+		--jq '[.[] | select(.context == "ai-review/head-gate")][0] // {} | "\(.state // "none") \(.creator.login // "-")"' 2>/dev/null)"; then
+		mr_log review from_gate_read_failed "from=${mr_from}"
+		return 1
+	fi
+	read -r mr_gate_state mr_gate_creator <<< "${mr_gate:-none -}"
+	if [ "${mr_gate_state}" != "success" ] \
+		|| [ "$(printf '%s' "${mr_gate_creator}" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "${mr_login}" | tr '[:upper:]' '[:lower:]')" ]; then
+		mr_log review from_not_approved "from=${mr_from} state=${mr_gate_state:-none}"
+		return 1
+	fi
+	if ! mr_status="$(gh_retry gh api "repos/${mr_repo}/compare/${mr_base_parent}...${mr_base}" --jq '.status // ""' 2>/dev/null)"; then
+		mr_log review base_compare_failed "from=${mr_from} base_parent=${mr_base_parent}"
+		return 1
+	fi
+	case "${mr_status}" in
+		ahead|identical) ;;
+		*)
+			mr_log review base_parent_not_on_base "from=${mr_from} base_parent=${mr_base_parent} status=${mr_status:-none}"
+			return 1
+			;;
+	esac
+	REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM="${mr_from}"
+	mr_log delta merge_resolve "from=${mr_from} base_parent=${mr_base_parent}"
+	echo "merge_resolve_from=${mr_from}"
+	return 0
+}
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	set -euo pipefail
 	# shellcheck source=/dev/null
@@ -410,6 +547,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 		gate) review_head_gate_main ;;
 		freshness-sync) shift; review_head_gate_freshness_sync "$@" ;;
 		final-ci-repair) shift; review_head_gate_final_ci_repair "$@" ;;
-		*) echo "Usage: review_head_gate.sh gate | freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file> | final-ci-repair <repo> <pr> <head sha> <author login> <comments json file>" >&2; exit 2 ;;
+		merge-resolve) shift; review_head_gate_merge_resolve "$@" ;;
+		freshness-sync-inline-run) shift; review_head_gate_freshness_inline_run "$@" ;;
+		*) echo "Usage: review_head_gate.sh gate | freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file> | freshness-sync-inline-run <pr> <head sha> <author login> <comments json file> | final-ci-repair <repo> <pr> <head sha> <author login> <comments json file> | merge-resolve <repo> <pr> <head sha> <base ref> <author login> <comments json file>" >&2; exit 2 ;;
 	esac
 fi
