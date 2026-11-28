@@ -45,7 +45,9 @@ MAX_JOB_TIMEOUT_MINUTES = 20
 # here is a reviewed decision. #9916: the repository owner raised
 # `orchestrate-poll` to 30 minutes after its shards were cancelled at the
 # 20-minute cap on 2026-11-21 (runs 44915291684 and 44917124015).
-JOB_TIMEOUT_EXCEPTIONS_MINUTES = {"orchestrate-poll": 30}
+# tests-sync-quick: 30 minutes for the delta suite after a clean merge-base
+# update (merge-lease short critical section, Phase 2).
+JOB_TIMEOUT_EXCEPTIONS_MINUTES = {"orchestrate-poll": 30, "tests-sync-quick": 30}
 # The single `lint` job's budget before the #4707 split; no exception may
 # reach it.
 OLD_SINGLE_JOB_BUDGET_MINUTES = 45

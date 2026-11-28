@@ -1,0 +1,7 @@
+<!-- changelog: changed -->
+- **Unanswered heal counterfactual holds now end, and the stall judge looks at the right pull request.** Refs #9650 (plan `docs/plans/pipeline-human-wait-elimination-plan.md`, Phase 7; issue #9986).
+
+  - A heal plan held because its counterfactual check did not show the fix would work used to wait for a person indefinitely. The poller now posts one escalation notice (and a Telegram WARNING) when the hold has been open for half of `HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS` (default `3`, clamped 1-30), and closes the issue as not planned at the limit, no sooner than half the limit after the notice. A maintainer `/approved`, `/reclarify` or `/answer` restarts the clock; automatic answers and stall-recovery posts do not. Labels are left as they are, and a reopened issue is never closed again. Switch: `HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED` (default `true`).
+  - The stall judge used the issue's last cross-referencing pull request, which could be a later plan-only PR rather than the issue's own implementation PR. It now prefers an open `ai/issue-<n>` PR, then a cross-referenced PR that implements the issue, and skips cross-referencing PRs that change only `docs/plans/`. Switch: `STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED` (default `true`).
+
+What this means for consumer repos: after the next `@stable` sync, held heal issues in your repository close as not planned after the limit unless a maintainer answers. Set either repository variable to `false` to keep today's behaviour; `orchestrate_poll.yml` forwards all three variables.
