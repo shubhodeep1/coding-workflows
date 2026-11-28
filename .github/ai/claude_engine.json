@@ -181,6 +181,11 @@
       "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "read"
+    },
+    "ALERT_BREAK_GLASS_REVIEWER": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "read"
     }
   }
 }

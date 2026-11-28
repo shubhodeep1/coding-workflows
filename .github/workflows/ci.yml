@@ -1990,6 +1990,12 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_test_script_prologue.py
 
       # `Tracking issue comment cap tests` moved on to orchestrate-poll group 2 in #10200.
+
+      # Alert triage Phase 3 (Refs #9394): tests/test_alert_self_fix.py and
+      # tests/test_alert_self_fix_break_glass.py are not named here. The
+      # tests-system-python catch-all collects and runs every tests/test_*.py,
+      # and this job was measured at 17m00s of its 20 minutes (#9045), so
+      # their ~70 subprocess-heavy tests would only run a second time here.
       - name: Alert inbox capture and store tests
         run: |
           set -euo pipefail
