@@ -1283,6 +1283,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_daily_usage.py
 
+      - name: Plan autopilot tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_autopilot.py tests/test_plan_autopilot_workflow_contract.py tests/test_plan_audit_prompt_contract.py
+
       - name: Install Claude CLI action tests
         run: |
           set -euo pipefail

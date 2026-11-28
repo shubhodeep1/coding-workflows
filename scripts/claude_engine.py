@@ -107,6 +107,8 @@ ROLES: tuple[str, ...] = (
 	"BEHAVIOURAL_SMOKE",
 	"PANEL_REVIEWER",
 	"CS_INVESTIGATE",
+	# Unattended /audit-plans run by the plan autopilot (#10091); write profile.
+	"PLAN_AUDIT",
 	"ISSUE_PR_AUDIT",
 )
 UTILITY_ROLES: tuple[str, ...] = ("LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE")
