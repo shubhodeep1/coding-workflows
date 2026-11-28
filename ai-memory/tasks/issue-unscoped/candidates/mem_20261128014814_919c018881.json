@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Changes involving review, CI freshness, merge leases, or auto-merge can span shared shell helpers, gate scripts, and multiple workflows. Before planning a change, trace the relevant callers and existing gate tests so behavior stays consistent across entry points.",
+  "fingerprint": "524a9cce3177abbe4dd4872d207c4eb3bff3c4ec70a1478fb6bb3805ce41e973",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46092673742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46092673742",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10063",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10078",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10172",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10198",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10205",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10067",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10081",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10174",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10203",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10207"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261128014814_919c018881",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Review and merge gates share logic across scripts and workflow entry points.",
+  "timestamps": {
+    "created_at": "2026-11-28T01:48:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
