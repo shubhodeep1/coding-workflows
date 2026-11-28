@@ -98,6 +98,8 @@ def _run(body: str, plan: list[tuple[int, str, str]], **env_overrides: str) -> t
 				PLAN_STATUS,
 				'phase7_list_cancel_runs() { phase7_plan_status; if [ "${PLAN_S}" = "none" ]; then PHASE7_CANCEL_RUNS_JSON=\'{"workflow_runs":[]}\'; else PHASE7_CANCEL_RUNS_JSON="{\\"workflow_runs\\":[$(phase7_plan_json)]}"; fi; return 0; }',
 				'gh() { phase7_plan_status; if [ "${PLAN_S}" = "fail" ]; then return 1; fi; phase7_plan_json; }',
+				# Issue #10225: Phase 7 reads go through phase7_gh_api_read.
+				'phase7_gh_api_read() { gh api "$@"; }',
 				"PR_NUMBER=42",
 				"PR_CLOSED_AT=2026-10-20T00:00:00Z",
 				"PRE_RUN_ID=100",
