@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-28T07:40:47Z",
+  "issue_number": 10248,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows/review_autofix.yml:549-553; cited_path=.github/workflows/review_autofix.yml; files_touched=.github/workflows/ci.yml, changelog.d/10248-promote-job-budget-move.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 10250,
+  "record_id": "lesson_20261128074047_e6d54638f4",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/ci.yml",
+    "changelog.d/10248-promote-job-budget-move.md",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
