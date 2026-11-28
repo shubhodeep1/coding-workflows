@@ -105,12 +105,16 @@ check_all_steps() {
   # rc of the latest jobs listing read: a failed read is "listing
   # unavailable", never "no jobs" (review of #10225).
   local dv_last_rc=0
+  # 1 once any listing read of this run succeeded (even with zero jobs): a
+  # later failed recheck then leaves the "no jobs" verdict, not "unavailable".
+  local dv_listing_read_ok=0
   for _attempt in 1 2 3; do
     local dv_read_rc=0
     _JOBS_OUT=$(deep_verify_gh_api_read "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null) || dv_read_rc=$?
     dv_last_rc="${dv_read_rc}"
     if [ "${dv_read_rc}" -eq 0 ]; then
       JOBS_JSON="$_JOBS_OUT"
+      dv_listing_read_ok=1
       break
     fi
     # rc 75: the helper already waited what the job's budget allows and
@@ -156,6 +160,7 @@ check_all_steps() {
       dv_last_rc="${dv_recheck_rc}"
       if [ "${dv_recheck_rc}" -eq 0 ]; then
         JOBS_JSON="$_JOBS_OUT"
+        dv_listing_read_ok=1
       else
         JOBS_JSON='{"jobs":[]}'
       fi
@@ -178,7 +183,7 @@ check_all_steps() {
   fi
   # Fail closed: the steps of a run whose listing could not be read were
   # not verified, so it must not pass as a spurious re-trigger.
-  if [ "$TOTAL_JOBS" -eq 0 ] && [ "${dv_last_rc}" -ne 0 ]; then
+  if [ "$TOTAL_JOBS" -eq 0 ] && [ "${dv_last_rc}" -ne 0 ] && [ "${dv_listing_read_ok}" -eq 0 ]; then
     echo "  │  ✗ Jobs listing unavailable (gh_api_retry rc=${dv_last_rc}) — steps not verified"
     DEEP_PASS=false
     FAILED_STEPS="${FAILED_STEPS}\n  - ${phase_name}: jobs listing unavailable (gh_api_retry rc=${dv_last_rc})"

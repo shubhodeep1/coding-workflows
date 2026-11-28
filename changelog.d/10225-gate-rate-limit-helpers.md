@@ -9,7 +9,7 @@ The gate's reads now go through `gh_api_retry` from `scripts/gh_helpers.sh`, whi
 | --- | --- |
 | Attempts per read in a PAT job | 3 (`GH_RETRY_MAX_ATTEMPTS`) |
 | Longest single rate-limit wait | 600 s (`GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS`, the helper's default) |
-| Raised job limits | `orchestrate-decompose-test` 60 to 80, `clarify-rejects-unsolvable-test` 30 to 50, `e2e-alt-model-test` 90 to 110 minutes |
+| Raised job limits | `orchestrate-decompose-test` 81 to 101 (on top of #10205's budget), `clarify-rejects-unsolvable-test` 30 to 50, `e2e-alt-model-test` 90 to 110 minutes |
 | Extra API calls | 2 `GET /rate_limit` per PAT job (not counted against the allowance) |
 | New jobs or workflows | none |
 

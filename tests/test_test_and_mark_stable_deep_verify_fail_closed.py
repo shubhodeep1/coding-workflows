@@ -28,8 +28,16 @@ PHASES = 4  # Clarify, Plan, Implement, Review/Edit
 _STUB = r"""
 gh_api_retry() {
   echo call >> "$CALLS"
-  if [ "$STUB_RC" -ne 0 ]; then
-    return "$STUB_RC"
+  local stub_rc="$STUB_RC"
+  if [ -n "${STUB_RC_SEQ:-}" ]; then
+    # Per-call rc: the Nth call takes the Nth word of STUB_RC_SEQ.
+    local stub_n stub_seq
+    stub_n=$(wc -l < "$CALLS")
+    read -r -a stub_seq <<< "$STUB_RC_SEQ"
+    stub_rc="${stub_seq[$(( (stub_n - 1) % ${#stub_seq[@]} ))]}"
+  fi
+  if [ "$stub_rc" -ne 0 ]; then
+    return "$stub_rc"
   fi
   printf '%s' "$STUB_BODY"
 }
@@ -37,7 +45,7 @@ sleep() { :; }
 """
 
 
-def _run(rc: int, body: dict | None = None) -> tuple[subprocess.CompletedProcess, int, str]:
+def _run(rc: int, body: dict | None = None, rc_seq: str = "") -> tuple[subprocess.CompletedProcess, int, str]:
 	if shutil.which("jq") is None:
 		import pytest
 
@@ -55,6 +63,7 @@ def _run(rc: int, body: dict | None = None) -> tuple[subprocess.CompletedProcess
 		env.update(
 			CALLS=str(calls),
 			STUB_RC=str(rc),
+			STUB_RC_SEQ=rc_seq,
 			STUB_BODY=json.dumps(body if body is not None else {"jobs": []}),
 			GITHUB_OUTPUT=str(out),
 			TEST_REPO="o/r",
@@ -110,6 +119,17 @@ def test_readable_empty_listing_still_passes_as_spurious() -> None:
 	assert calls == PHASES * (1 + 3)
 	assert "Run has no jobs after retries (spurious re-trigger) — OK" in proc.stdout
 	assert "Jobs listing unavailable" not in proc.stdout
+
+
+def test_empty_listing_then_failed_recheck_stays_spurious() -> None:
+	# A listing read once (rc 0, zero jobs) counts as read: a recheck that then
+	# hits a rate limit (rc 75) must not turn it into "listing unavailable".
+	proc, calls, output = _run(0, {"jobs": []}, rc_seq="0 75")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "deep_passed=true" in output
+	assert calls == PHASES * 2
+	assert "Jobs listing unavailable" not in proc.stdout
+	assert "Run has no jobs after retries (spurious re-trigger) — OK" in proc.stdout
 
 
 def test_successful_steps_pass() -> None:

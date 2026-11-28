@@ -4325,7 +4325,9 @@ jobs:
     runs-on: ubuntu-latest
     # The dispatch step has no step limit: its 3000s watch + 1500s
     # rate-limit cap (issue #10205) + 360s for the other steps = 4860s = 81m.
-    timeout-minutes: 81
+    # Issue #10225: + 1200s for one gh_api_retry read that waits out a
+    # rate-limit reset ((3 - 1) x 600 s) = 6060s = 101m.
+    timeout-minutes: 101
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
@@ -4406,7 +4408,8 @@ jobs:
           # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
           # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
           # raise timeout-minutes to fit it, never lower the cap. Budget:
-          # no step limit; 3000s completion + 1500s leaves 360s of the 81 min job (4860s) for its other steps.
+          # no step limit; 3000s completion + 1500s + 1200s for one gh_api_retry reset wait (#10225)
+          # leaves 360s of the 101 min job (6060s) for its other steps.
           DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads

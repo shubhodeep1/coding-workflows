@@ -344,6 +344,13 @@ def test_pat_jobs_bound_helper_waits() -> None:
 		assert worst < int(job["timeout-minutes"]) * 60, job_id
 		if job_id == "e2e-smoke-test":
 			assert worst <= int(env["E2E_FINALIZATION_RESERVE_MINUTES"]) * 60
+		if job_id == "orchestrate-decompose-test":
+			# Its dispatch step has no step limit: the 3000 s watch, the step's
+			# dispatch rate-limit cap (#10205) and 360 s for the other steps
+			# share the job limit with one read's reset wait (#10225).
+			cap = re.search(r'DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "([0-9]+)"', "".join(st["text"] for st in job["steps"]))
+			assert cap is not None, job_id
+			assert 3000 + int(cap.group(1)) + 360 + worst <= int(job["timeout-minutes"]) * 60, job_id
 		for step in job.get("steps") or []:
 			run = step.get("run") or ""
 			if "timeout-minutes" in step and re.search(r"\bgh_(api_)?retry\b", run):
