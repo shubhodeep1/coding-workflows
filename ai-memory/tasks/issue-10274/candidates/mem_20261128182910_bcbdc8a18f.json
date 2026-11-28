@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for issue #10274\n\nPlanning ref: `main` @ `f9b3ff877842fa8effe2e4c4eec3fc061b2efd5d`\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check Quick CI\nACCEPTANCE: post-merge none: this smoke canary text file runs nothing after merge\n\n## Functions or modules to implement\nNone. The only change is to a text file. At the moment `tests/e2e_smoke_canary.txt` holds two lines: `status: ok` and `decompose-run: 41445772297`. Replace that with exactly these three lines, each ending in a newline:\n\n```\nstatus: ok\nrun_id: alt-46172020453\nupdated-by: ai-pipeline\n```\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Rewrite the whole file\n- Chosen: overwrite the file with exactly the three lines the issue gives, plus a final newline. The current file also ends with one.\n- Alternatives considered: change only the second line in place and append the third.\n- Why: the issue asks for content that is \"exactly\" these three lines, and a full rewrite guarantees that.\n\n## Security considerations\nNo trust boundary is touched. There is no new endpoint or surface, no external input and no secrets. The file is a static canary.\n\n## Potential risks or edge cases\n- Several tests mention this file's path, for example `tests/test_review_autofix_smoke_editor_override.py` and `tests/test_implement_post_codex_recovery.py`. They appear to use the path as a smoke-scope fixture, not to check what the file says, but I did not read them closely.\n- Keep the trailing newline and use no CRLF line endings.\n\n## Testing considerations\n- Run `cat -A tests/e2e_smoke_canary.txt` and confirm it shows three lines, each ending in `$`.\n- `git diff --stat` should list only this one file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the change: one existing file, with exact content. No helper or pattern applies beyond editing the existing file in place.\n\nPLAN_SELF_CHECK: WARNING: Quick CI is assumed to be the PR's CI check-run name and was not checked against the workflows; if the host drops it as invalid, done falls back to green CI.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "4846f2bccb5106550bb4d548f653851d5938d38021f2f7c436f3c84f9cfd9f87",
+  "lineage": {
+    "issue_number": 10274,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46175244789",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46175244789",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10274"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261128182910_bcbdc8a18f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10274,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46175244789"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10274",
+  "timestamps": {
+    "created_at": "2026-11-28T18:29:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
