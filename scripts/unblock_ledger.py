@@ -86,14 +86,16 @@ verdict, 2 unreadable input):
       terminal (and why); `holds_used` and `holds_met` count the item's
       trusted hold markers.
   validate --verdict-file <path> --decision-file <path> --repo <owner/repo>
-           [--sandbox-check]
+           [--sandbox-check] [--linked-pr-file <path>]
       Check a judge verdict against the `decide` output and the hard limits,
       and print the normalised verdict. With --sandbox-check, instructions a
       fix-up would run in the network-less implement sandbox are refused with
       `sandbox_incompatible:<id>` (SANDBOX_INCOMPATIBLE_PATTERNS).
       `target_repo` (`consumer` | `harness`) is kept for the instruction
       verdicts (TARGET_REPO_VERDICTS); a missing or empty value becomes
-      `consumer`, any other value refuses the verdict.
+      `consumer`, any other value refuses the verdict. With
+      --linked-pr-file naming the issue's open pull request, `retry_budget`
+      and `reissue` are refused with `linked_open_pr:<n>` (issue #10149).
   rejection --item <n> --stop <id> --comments-file <path> --trusted-login <login>
       Find the latest trusted, unused guard rejection on the blocked item.
   protected-rejection --item <n> --comments-file <path> --trusted-login <login>
@@ -254,7 +256,7 @@ IMPLEMENT_WORKFLOW_PATHS = {
 }
 
 EVIDENCE_LIST_KEYS = ("checks", "findings", "issues", "paths")
-EVIDENCE_SCALAR_KEYS = ("reason", "validation_class", "validation_status", "pr")
+EVIDENCE_SCALAR_KEYS = ("reason", "validation_class", "validation_status", "pr", "linked_pr")
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{12}$")
 MARKER_RE = re.compile(
 	r"^<!-- ai:unblock:v1 item=(?P<item>[1-9][0-9]*) stop=(?P<stop>[a-z-]+) "
@@ -304,6 +306,8 @@ GUARD_REJECTION_HEADERS = (
 	"🚨 **Issue scope-lock rejected this implementation run.**",
 	"🚨 **Automation-path grant guard rejected this implementation run.**",
 	"🚨 **Destructive-commit guard rejected this implementation run.**",
+	# A routed planning scope block (scripts/plan_scope_block_route.sh, #9534).
+	"🚨 **files_touched scope guard rejected this planning run.**",
 	"🚨 **Auto-heal remediation guard rejected this implementation run: no code change.**",
 )
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
@@ -352,6 +356,10 @@ SANDBOX_CHECKED_VERDICTS = ("retry_budget", "descope", "reissue", "accept_with_f
 # scripts/unblock_actions.py routes to a heal report instead of a fix-up).
 TARGET_REPOS = ("consumer", "harness")
 TARGET_REPO_VERDICTS = SANDBOX_CHECKED_VERDICTS
+# Issue #10149: while an issue's own open pull request carries the work
+# (`validate --linked-pr-file`), these verdicts would implement it again from
+# the default branch; they are refused with `linked_open_pr:<n>`.
+LINKED_PR_REFUSED_VERDICTS = ("retry_budget", "reissue")
 
 
 # Issue #9484: an `_UNSET_OPERATOR_STEP` operator step is held for
@@ -430,7 +438,7 @@ def normalise_evidence(evidence: object) -> dict:
 	for key in EVIDENCE_SCALAR_KEYS:
 		if evidence.get(key) is None:
 			continue
-		value = _text(evidence[key]).lstrip("#") if key == "pr" else _text(evidence[key])
+		value = _text(evidence[key]).lstrip("#") if key in ("pr", "linked_pr") else _text(evidence[key])
 		if value:
 			canonical[key] = value
 	return canonical
@@ -1193,8 +1201,14 @@ def validate(
 	rejected: object = None,
 	*,
 	sandbox_check: bool = False,
+	linked_pr: dict | None = None,
 ) -> dict:
-	"""Refuse anything outside the menu or the hard limits; return the normalised verdict."""
+	"""Refuse anything outside the menu or the hard limits; return the normalised verdict.
+
+	``linked_pr`` is the issue's open pull request (``{"number": <n>, ...}``);
+	with a positive integer number, `retry_budget` and `reissue` are refused
+	with ``linked_open_pr:<n>``. ``None`` or ``{}`` changes nothing.
+	"""
 	if not isinstance(verdict, dict) or not isinstance(decision, dict):
 		raise UsageError("verdict and decision must be JSON objects")
 	name = verdict.get("verdict")
@@ -1203,6 +1217,11 @@ def validate(
 		raise UsageError(f"unknown verdict {name!r}")
 	if name not in allowed:
 		raise UsageError(f"verdict {name!r} is not allowed here; allowed: {allowed}")
+	# Issue #10149: the issue's open pull request already carries the work.
+	if name in LINKED_PR_REFUSED_VERDICTS and isinstance(linked_pr, dict):
+		linked_number = linked_pr.get("number")
+		if type(linked_number) is int and linked_number > 0:
+			raise UsageError(f"linked_open_pr:{linked_number}")
 	# Independent of `allowed`: a hand-built or tampered decision that lists
 	# `close` without a deterministic terminal condition is refused (#6557).
 	if name == TERMINAL_VERDICT and (
@@ -1371,6 +1390,7 @@ def build_parser() -> argparse.ArgumentParser:
 	validate_cmd.add_argument("--repo", required=True)
 	validate_cmd.add_argument("--rejected-deletions-file")
 	validate_cmd.add_argument("--sandbox-check", action="store_true")
+	validate_cmd.add_argument("--linked-pr-file", help="the issue's open pull request (issue #10149)")
 	rejection_cmd = sub.add_parser("rejection-snapshot")
 	rejection_cmd.add_argument("--run-file", required=True)
 	rejection_cmd.add_argument("--artifact-file", required=True)
@@ -1466,6 +1486,7 @@ def run(argv: list[str] | None = None) -> dict:
 			_read_json(args.rejection_file, "--rejection-file") if args.rejection_file else None,
 			_read_json(args.rejected_deletions_file, "--rejected-deletions-file") if args.rejected_deletions_file else None,
 			sandbox_check=args.sandbox_check,
+			linked_pr=_read_json(args.linked_pr_file, "--linked-pr-file") if args.linked_pr_file else None,
 		)
 	if args.command == "rejection-snapshot":
 		try:

@@ -505,14 +505,18 @@ def test_workflows_do_not_interpolate_secrets_into_remote_urls() -> None:
 	assert isinstance(implement_push_env, dict)
 	assert implement_push_env.get("GH_TOKEN") == "${{ secrets.GH_PAT }}"
 	review_push = _step("review_autofix.yml", "codex-agent", "Push all pending commits")
-	assert ENV_BOUND_PUSH_URL in str(review_push.get("run"))
+	# The step sources its body from scripts/ (moved for the workflow size guard).
+	assert "review_autofix_step_push_pending_commits.sh" in str(review_push.get("run"))
+	review_push_body = (REPO_ROOT / "scripts" / "review_autofix_step_push_pending_commits.sh").read_text(encoding="utf-8")
+	assert ENV_BOUND_PUSH_URL in review_push_body
+	assert not (SECRET_IN_REMOTE_URL.search(review_push_body) or SECRET_IN_URL_AUTHORITY.search(review_push_body))
 	review_push_env = review_push.get("env")
 	assert isinstance(review_push_env, dict)
 	assert review_push_env.get("GH_TOKEN") == "${{ secrets.GH_PAT }}"
 
 
 FREE_DISK_SPACE_PINNED_REF = re.compile(r"^jlumbroso/free-disk-space@[0-9a-f]{40}$")
-FREE_DISK_SPACE_PINNED_SHA = "54081f138730dfa15788a46383842cd2f914a1be"
+FREE_DISK_SPACE_PINNED_SHA = "ceedf095f4ec1a097402bc6bd80831f2e1a6fde6"
 
 
 def test_review_autofix_free_disk_space_is_sha_pinned() -> None:
@@ -527,7 +531,7 @@ def test_review_autofix_free_disk_space_is_sha_pinned() -> None:
 	assert references
 	for line in references:
 		assert re.search(r"jlumbroso/free-disk-space@[0-9a-f]{40}\b", line), line
-		assert line.rstrip().endswith("# v1.3.1"), line
+		assert line.rstrip().endswith("# v2.0.0"), line
 
 
 def run_all_contract_tests() -> None:

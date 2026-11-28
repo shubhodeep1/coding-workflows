@@ -195,6 +195,20 @@ if args[:1] == ["api"]:
         # Release-blocker streak check: an earlier cycle run's jobs.
         state.setdefault("self_jobs_reads", []).append(path)
         respond(state["self_run_jobs"][path.split("/actions/runs/")[1].split("/")[0]])
+    if "/actions/runs/" in path and "/jobs" in path and (path.split("/actions/runs/")[1].split("/")[0] in state.get("window_jobs", {})
+            or any(str(r.get("id")) == path.split("/actions/runs/")[1].split("/")[0] for r in state.get("window_runs", []))):
+        # Issue #10181: a runner-wait candidate run's jobs. A window run
+        # without a window_jobs entry gets one queued job created with the
+        # run; [] means the run has no jobs (concurrency hold).
+        state.setdefault("window_jobs_reads", []).append(path)
+        if state.get("window_jobs_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        run_id = path.split("/actions/runs/")[1].split("/")[0]
+        jobs = state.get("window_jobs", {}).get(run_id)
+        if jobs is None:
+            run = next((r for r in state.get("window_runs", []) if str(r.get("id")) == run_id), None)
+            jobs = [{"id": 1, "status": "queued", "created_at": run["created_at"]}] if run else []
+        respond({"total_count": len(jobs), "jobs": jobs})
     if "/actions/jobs/" in path and path.endswith("/logs"):
         state.setdefault("log_reads", []).append(path)
         if state.get("job_logs_error"):
@@ -1974,6 +1988,22 @@ def test_runner_wait_long_skips_before_the_smoke_gate_and_the_freeze() -> None:
 	assert len(final["window_reads"]) == 1
 
 
+def test_runner_wait_held_run_replay_runs_the_cycle() -> None:
+	# Issue #10181 replay: a CI push run held 70 minutes by its concurrency
+	# group (no jobs) and a run whose queued job has waited 28 minutes, limit
+	# 30. The run age (70) is not a runner wait, so the cycle runs.
+	state = _rw_state(window_runs=[_rw_queued(1, 70), _rw_queued(11, 40)],
+		window_jobs={"1": [], "11": [{"id": 5, "status": "queued", "created_at": _rw_minutes_ago(28)}]})
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env={"RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES": "30"})
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "runner_wait_long" not in proc.stdout
+	# Both runs are older than the limit, so both are read, oldest first.
+	assert "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=clear max=30 calls=3" in proc.stdout
+	assert [r.split("/actions/runs/")[1].split("/")[0] for r in final["window_jobs_reads"]] == ["1", "11"]
+	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
+
+
 def test_runner_wait_short_runs_the_cycle() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), _rw_state(window_runs=[_rw_queued(1, 5)]))
@@ -1993,6 +2023,18 @@ def test_runner_wait_read_failure_runs_the_cycle_with_a_warning() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), _rw_state(window_error=True), env={"GH_RETRY_MAX_ATTEMPTS": "1"})
 	assert "::warning::PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=read_failed" in proc.stdout
+	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
+
+
+def test_runner_wait_jobs_read_failure_runs_the_cycle_with_a_warning() -> None:
+	# Issue #10181: the run listing succeeds but the candidate's jobs read
+	# fails, so the check answers read_failed and the cycle does not skip.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _rw_state(window_runs=[_rw_queued(1, 70)], window_jobs_error=True), env={"GH_RETRY_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "::warning::PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=read_failed calls=2" in proc.stdout
+	assert "runner_wait_long" not in proc.stdout
+	assert len(final["window_jobs_reads"]) == 1
 	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
 
 

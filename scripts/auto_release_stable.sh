@@ -36,8 +36,9 @@
 #                                                 recently and the Actions
 #                                                 queue is deep; a new cycle
 #                                                 would wait on the same queue
-#   AUTO_RELEASE_SKIPPED reason=runner_wait_long  the oldest live queued run of
-#                                                 this repository has waited
+#   AUTO_RELEASE_SKIPPED reason=runner_wait_long  the oldest queued job of a live
+#                                                 queued run of this repository
+#                                                 has waited
 #                                                 RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES
 #                                                 or longer; a new cycle would
 #                                                 time out on the same wait
@@ -46,8 +47,10 @@
 #
 # Runner-wait check (issue #10037): after every check above and before the
 # dispatch, the script measures the current runner wait as the age of the
-# oldest live `queued` run of this repository (runs older than
-# ZOMBIE_RUN_MAX_QUEUED_HOURS are wedged and left out) and skips the tick
+# oldest `queued` job in the oldest 3 live `queued` runs of this repository
+# (issue #10181: a run held by a concurrency group has no jobs and does not
+# count; runs older than ZOMBIE_RUN_MAX_QUEUED_HOURS are wedged and left
+# out) and skips the tick
 # with runner_wait_long while it is RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES or
 # longer (0 turns the check off). Bound (AD-2): once the newest gate run on
 # the stable branch (any status) is at least
@@ -56,7 +59,7 @@
 # (AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=bound_reached), so a long queue
 # holds a release for at most one window. Costs 0 reads when disabled or the
 # bound is reached, otherwise 1 (2 when more than 100 runs are queued in the
-# window). Fail open: a failed read dispatches as before
+# window) plus at most 3 jobs reads. Fail open: a failed read dispatches as before
 # (AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=read_failed).
 #
 # Runner-queue back-off: every gate cycle files five to nine fixture issues and
@@ -188,7 +191,7 @@
 #   AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX
 #                                       default 30 (fixtures closed per tick)
 #   RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES
-#                                       default 30 (oldest live queued run age
+#                                       default 30 (oldest queued job wait
 #                                       at or above which the tick skips with
 #                                       runner_wait_long; 0 disables the check)
 #   GITHUB_OUTPUT                       receives dispatched=/sha=
@@ -877,12 +880,16 @@ else
 		rw_result="$(release_gate_oldest_queued_wait "${GITHUB_REPOSITORY}" "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" "${zq_cutoff}" 2>/dev/null || true)"
 		rw_outcome="$(printf '%s' "${rw_result}" | sed -n 's/^outcome=\([a-z_]*\) .*/\1/p' | head -n 1)"
 		rw_oldest_min="$(printf '%s' "${rw_result}" | sed -n 's/.* oldest_queued_min=\([0-9]*\) .*/\1/p' | head -n 1)"
-		rw_calls="$(printf '%s' "${rw_result}" | sed -n 's/.* calls=\([0-9]*\)$/\1/p' | head -n 1)"
+		# Issue #10181: `runs_unread=<n>` may follow `calls=`, so neither
+		# pattern is anchored at the end of the line.
+		rw_calls="$(printf '%s' "${rw_result}" | sed -n 's/.* calls=\([0-9]*\).*/\1/p' | head -n 1)"
+		rw_runs_unread="$(printf '%s' "${rw_result}" | sed -n 's/.* runs_unread=\([0-9]*\).*/\1/p' | head -n 1)"
+		[[ "${rw_runs_unread}" =~ ^[0-9]+$ ]] || rw_runs_unread=""
 		if [ "${rw_outcome}" = "long" ] && [[ "${rw_oldest_min}" =~ ^[0-9]+$ ]] && [ "${rw_oldest_min}" -ge "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" ]; then
-			echo "::warning::The oldest live queued run of ${GITHUB_REPOSITORY} has waited ${rw_oldest_min} minute(s) for a runner (limit ${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}); not starting a gate cycle that would time out on the same wait."
+			echo "::warning::The oldest queued job of ${GITHUB_REPOSITORY} has waited ${rw_oldest_min} minute(s) for a runner (limit ${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}); not starting a gate cycle that would time out on the same wait."
 			skip_release runner_wait_long "oldest_queued_min=${rw_oldest_min} max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} sha=${branch_tip} last_run=${rw_last_run_id} last_age_hours=${rw_last_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
 		elif [ "${rw_outcome}" = "short" ] || [ "${rw_outcome}" = "long" ]; then
-			echo "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} calls=${rw_calls:-0}"
+			echo "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} calls=${rw_calls:-0}${rw_runs_unread:+ runs_unread=${rw_runs_unread}}"
 		else
 			echo "::warning::AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=read_failed calls=${rw_calls:-0} — dispatching without the runner-wait check."
 		fi

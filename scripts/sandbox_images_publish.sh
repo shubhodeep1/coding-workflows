@@ -12,7 +12,7 @@
 #   --force rebuilds and re-pushes existing tags (the weekly refresh that
 #   picks up Debian security updates under an unchanged input hash).
 #
-# Environment: CODEX_VERSION (default v0.114.0), OPENCODE_VERSION (default
+# Environment: CODEX_VERSION (default v0.171.0), OPENCODE_VERSION (default
 # 1.18.23), SANDBOX_IMAGE_REGISTRY (see scripts/sandbox_image.sh).
 #
 # Exit status: 1 when any image failed to publish; the others still run.
@@ -27,7 +27,7 @@ case "${1:-}" in
 	*) echo "usage: sandbox_images_publish.sh [--force]" >&2; exit 2 ;;
 esac
 
-publish_codex_version="${CODEX_VERSION:-v0.114.0}"
+publish_codex_version="${CODEX_VERSION:-v0.171.0}"
 publish_opencode_version="${OPENCODE_VERSION:-1.18.23}"
 publish_claude_cli_version="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${publish_scripts_dir}/claude_engine.py" config --key cli_version)"
 publish_failed=0

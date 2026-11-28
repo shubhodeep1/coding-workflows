@@ -345,9 +345,13 @@ class FinalCiPendingMark(unittest.TestCase):
 		start = text.index("_pr_wait_for_required_checks()\n{")
 		body = text[start:text.index("\n}\n", start)]
 		timeouts = re.findall(r'echo "AUTOFIX_AUTO_MERGE_CHECKS ([^\n]*outcome=timeout[^\n]*)\n\t*([^\n]*)', body)
-		# A failed final CI dispatch leaves no run to wait for, so that exit must not mark.
-		marking = [follow for line, follow in timeouts if "reason=final_ci_dispatch_failed" not in line]
-		unmarked = [follow for line, follow in timeouts if "reason=final_ci_dispatch_failed" in line]
+		# A failed final CI dispatch, or a head held back because its CI wiring
+		# is behind the base (issue #9993), leaves no run to wait for, so those
+		# exits must not mark.
+		no_run = ("reason=final_ci_dispatch_failed", "reason=final_ci_wiring_behind")
+		marking = [follow for line, follow in timeouts if not any(r in line for r in no_run)]
+		unmarked = [follow for line, follow in timeouts if any(r in line for r in no_run)]
+		self.assertEqual(len(unmarked), 2)
 		self.assertEqual(len(marking), 3)
 		for follow in unmarked:
 			self.assertNotIn("_pr_final_ci_merge_pending_mark", follow)
@@ -1271,7 +1275,11 @@ class JudgeDecisionLeaseGrant(unittest.TestCase):
 		h1, _ = _p2_tick(with_judge)
 		h2, _ = _p2_tick(with_gate)
 		def reads(h: _Harness) -> list[str]:
-			return [c for c in _stable_calls(h.calls) if not c.startswith("gh workflow run")]
+			# Issue #10098: a confirmed head-gate waiter also gets the ready-
+			# first mergeability read (pulls/<n>); a judge-decision waiter is
+			# granted without it. Every other read must stay the same.
+			return [c for c in _stable_calls(h.calls) if not c.startswith("gh workflow run")
+				and c != "gh api repos/owner/repo/pulls/5"]
 		self.assertEqual(reads(h1), reads(h2))
 		self.assertEqual(sum("/statuses" in c for c in h1.calls), 1, h1.calls)
 
@@ -1648,9 +1656,11 @@ class Wiring(unittest.TestCase):
 				kind, value = match.group(1), match.group(2)
 				self.assertEqual(value, expected[kind], f"{path.relative_to(REPO_ROOT)}: MERGE_LEASE_{kind}_MINUTES default {value}")
 				counts[(path.name, kind)] = counts.get((path.name, kind), 0) + 1
+		# Issue #10078: the three poller steps and the two sweep steps that can
+		# grant or renew a lease now pass the full lease set, TTL included.
 		self.assertEqual(counts, {
-			(REVIEW.name, "TTL"): 3, (POLL.name, "TTL"): 1, (CLOSE.name, "TTL"): 1,
-			(REVIEW.name, "IDLE"): 3, (POLL.name, "IDLE"): 4, (CLOSE.name, "IDLE"): 1,
+			(REVIEW.name, "TTL"): 3, (POLL.name, "TTL"): 4, (CLOSE.name, "TTL"): 1, (SWEEP.name, "TTL"): 2,
+			(REVIEW.name, "IDLE"): 3, (POLL.name, "IDLE"): 4, (CLOSE.name, "IDLE"): 1, (SWEEP.name, "IDLE"): 2,
 		})
 		lib = LIB.read_text()
 		for needle in ("${MERGE_LEASE_TTL_MINUTES:-480}", "lease_ttl_minutes=480",
@@ -1702,7 +1712,10 @@ class Wiring(unittest.TestCase):
 			self.assertIn("MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}", text, wf.name)
 
 	def test_merge_paths_get_the_lease_switches(self) -> None:
-		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}"), 3)
+		# Issue #10017: the fourth and fifth are the single-issue security pass
+		# gates (codex-agent and deterministic skip), which read the lease to
+		# exempt the holder from the audit throttle.
+		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}"), 5)
 
 	def test_release_steps_get_the_review_paths_switches(self) -> None:
 		for wf in (POLL, CLOSE):
@@ -1732,8 +1745,9 @@ class Wiring(unittest.TestCase):
 		for expansion in ("${MERGE_LEASE_REVOKE_ENABLED:-true}", "${MERGE_LEASE_IDLE_MINUTES:-180}",
 				"${MERGE_LEASE_PRIORITY_HEAD_PREFIXES-auto/forward-merge-stable-}"):
 			self.assertIn(expansion, lib)
-		# The sweep reads only MERGE_LEASE_ENABLED / MERGE_LEASE_WAIT_LABEL; if it
-		# ever calls the gate or tick, it needs the three lines above too.
+		# The sweep's lease-writing steps pass the full lease set (issue #10078,
+		# enforced by tests/test_merge_lease_env_contract.py), but it still
+		# never calls the gate or tick itself.
 		sweep = SWEEP.read_text()
 		for fn in ("_merge_lease_gate", "_merge_lease_queue_first", "_mt_merge_lease_tick"):
 			self.assertNotIn(fn, sweep)
@@ -1743,11 +1757,12 @@ class Wiring(unittest.TestCase):
 		that runs the freshness gate or the lease, with the helper's default."""
 		line = ("MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || "
 			"'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}")
-		for wf, expected in ((REVIEW, 3), (POLL, 4), (CLOSE, 1), (SWEEP, 0)):
+		for wf, expected in ((REVIEW, 3), (POLL, 4), (CLOSE, 1), (SWEEP, 1)):
 			text = wf.read_text()
 			self.assertEqual(text.count(line), expected, wf.name)
 			if wf is SWEEP:
-				# The sweep's base sync treats clean and overlap alike, so its
+				# The enumerate step carries the vars expression (issue #10078);
+				# the sweep's base sync treats clean and overlap alike, so its
 				# final-CI step pins the class off (no probe it cannot use).
 				step = text.split("- name: Ensure the final CI run on reviewed PR heads", 1)[1].split("\n      - name: ", 1)[0]
 				self.assertIn("          MERGE_LEASE_SOFT_PATHS: none\n", step)
@@ -2402,14 +2417,23 @@ class LeaseQueueSnapshot(unittest.TestCase):
 class MultiHolderWiring(unittest.TestCase):
 	def test_max_holders_switch_reaches_every_lease_path(self) -> None:
 		line = "MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}"
-		for wf, expected, before in ((REVIEW, 3, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
-				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 1, "MERGE_LEASE_WAIT_LABEL: ${{ vars.")):
+		# Issue #10017: two of REVIEW's hits are the single-issue security pass
+		# gates (codex-agent and deterministic skip), lease readers without the
+		# soft-path list; they follow MERGE_LEASE_ENABLED, and only those two may.
+		gate_before = "MERGE_LEASE_ENABLED: ${{ vars."
+		for wf, expected, before in ((REVIEW, 5, ("MERGE_LEASE_SOFT_PATHS: ${{ vars.", gate_before)), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
+				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 2, ("MERGE_LEASE_SOFT_PATHS: ${{ vars.", "MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars."))):
+			# The sweep has two lease steps (issue #10078): the enumerate step
+			# ends with SOFT_PATHS, the final-CI step pins SOFT_PATHS: none after
+			# MAX_HOLDERS, so its MAX_HOLDERS follows PRIORITY_HEAD_PREFIXES.
 			lines = wf.read_text().splitlines()
 			hits = [i for i, ln in enumerate(lines) if ln.strip() == line]
 			self.assertEqual(len(hits), expected, wf.name)
 			for i in hits:
 				self.assertTrue(lines[i - 1].strip().startswith(before), f"{wf.name}:{i + 1}")
 				self.assertEqual(len(lines[i]) - len(lines[i].lstrip()), len(lines[i - 1]) - len(lines[i - 1].lstrip()))
+			if wf == REVIEW:
+				self.assertEqual(sum(lines[i - 1].strip().startswith(gate_before) for i in hits), 2, wf.name)
 		self.assertIn("${MERGE_LEASE_MAX_HOLDERS:-1}", LIB.read_text())
 
 

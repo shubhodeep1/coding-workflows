@@ -154,6 +154,19 @@ jobs:
             echo 'GH_PAT_BUDGET phase=start workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
           fi
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       # Use the 30-minute sweep rather than the hourly Claude catch-all: it
       # already snapshots every open non-draft PR, including non-Claude PRs.
       # The sweep itself needs no checkout. Fetch only the default-branch
@@ -247,8 +260,14 @@ jobs:
           # env mapping is a duplicate YAML key.
           ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
           ZOMBIE_RUN_REAPER_TOKEN: ${{ github.token }}
+          # The full lease set (issue #10078, tests/test_merge_lease_env_contract.py).
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
+          MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           # Smoke-PR backstop age limit in hours (issue #8953); 0 disables
           # the age rule (an issue_closed match still closes).
@@ -262,8 +281,20 @@ jobs:
           # in the last SWEEP_REVIEW_ROUND_WINDOW_HOURS gets ai:needs-human and
           # no dispatch. 'false' turns the cap off.
           SWEEP_REVIEW_ROUND_CAP_ENABLED: ${{ vars.SWEEP_REVIEW_ROUND_CAP_ENABLED || 'true' }}
+          # Rounds whose review engine was refused for lack of credentials (or
+          # a broker refusal) do not count toward the cap (issue #9917); 'false'
+          # counts every round again.
+          REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED: ${{ vars.REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED || 'true' }}
           SWEEP_REVIEW_MAX_ROUNDS: ${{ vars.SWEEP_REVIEW_MAX_ROUNDS || '10' }}
           SWEEP_REVIEW_ROUND_WINDOW_HOURS: ${{ vars.SWEEP_REVIEW_ROUND_WINDOW_HOURS || '48' }}
+          # Priority lane (issue #10048; scripts/pr_checks_lib.sh): a PR whose
+          # verified linked issue carries a priority label is dispatched first,
+          # and while its run waits in `queued` other dispatches are held back
+          # for at most PRIORITY_LANE_MAX_DEFER_MINUTES. 'false' turns it off.
+          MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security,ai:priority' }}
+          PRIORITY_LANE_ENABLED: ${{ vars.PRIORITY_LANE_ENABLED || 'true' }}
+          PRIORITY_LANE_WAIT_MINUTES: ${{ vars.PRIORITY_LANE_WAIT_MINUTES || '15' }}
+          PRIORITY_LANE_MAX_DEFER_MINUTES: ${{ vars.PRIORITY_LANE_MAX_DEFER_MINUTES || '120' }}
         run: |
           set -euo pipefail
           # Classified retry for the active-run snapshot (issue #6634): the
@@ -290,6 +321,7 @@ jobs:
               body: (.body // ""),
               labels: [.labels[]?.name // empty],
               created_at: (.created_at // ""),
+              updated_at: (.updated_at // ""),
               author: (.user.login // "")
             })')"
 
@@ -349,6 +381,7 @@ jobs:
           skipped_merge_queued=0
           skipped_approved_final_ci_failed=0
           skipped_round_cap=0
+          skipped_priority_lane=0
           failures=0
           # Smoke-PR backstop (issue #8953): release-gate smoke PRs whose
           # Implement run started after the gate gave up stayed open for days
@@ -645,6 +678,10 @@ jobs:
           # tick, so the counts would not be read. Fail-open: an empty result
           # (helper missing, cap off, failed listing) applies no cap this tick.
           round_cap_counts_json=""
+          # Counts before the infra-failed exclusion (issue #9917), for the
+          # dispatch backoff below; written by the helper, no extra API call.
+          round_cap_raw_counts_json='{}'
+          round_cap_raw_counts_file="${RUNNER_TEMP:-/tmp}/review-round-raw-counts.json"
           round_cap_max="${SWEEP_REVIEW_MAX_ROUNDS:-10}"
           round_cap_window_hours="${SWEEP_REVIEW_ROUND_WINDOW_HOURS:-48}"
           if ! [[ "${round_cap_max}" =~ ^[1-9][0-9]{0,3}$ ]]; then
@@ -658,7 +695,23 @@ jobs:
           if [ "${SWEEP_REVIEW_ROUND_CAP_ENABLED:-true}" != "false" ] \
             && [ "${active_snapshot_incomplete}" != "true" ] \
             && type review_sweep_round_counts >/dev/null 2>&1; then
-            round_cap_counts_json="$(GH_TOKEN="${READ_TOKEN}" review_sweep_round_counts "${REPOSITORY}" "${sweep_default_branch}" "${round_cap_window_hours}")"
+            rm -f -- "${round_cap_raw_counts_file}"
+            round_cap_counts_json="$(GH_TOKEN="${READ_TOKEN}" REVIEW_SWEEP_ROUND_RAW_COUNTS_FILE="${round_cap_raw_counts_file}" review_sweep_round_counts "${REPOSITORY}" "${sweep_default_branch}" "${round_cap_window_hours}")"
+            if [ -n "${round_cap_counts_json}" ] && [ -f "${round_cap_raw_counts_file}" ] && [ ! -L "${round_cap_raw_counts_file}" ] \
+              && jq -e 'type == "object"' "${round_cap_raw_counts_file}" >/dev/null 2>&1; then
+              round_cap_raw_counts_json="$(jq -c . "${round_cap_raw_counts_file}")"
+            fi
+          fi
+
+          # Priority lane hold (issue #10048, scripts/review_sweep_head_gate.sh):
+          # one queued-runs read, only while a priority PR is open. Fail-open:
+          # a missing helper or a failed read holds nothing back.
+          # priority_lane_since: when the hold started (the starvation-cap origin).
+          priority_lane_hold=false
+          priority_lane_prs=-
+          priority_lane_since=-
+          if [ "${active_snapshot_incomplete}" != "true" ] && type review_sweep_priority_lane_hold >/dev/null 2>&1; then
+            read -r priority_lane_hold priority_lane_prs priority_lane_since < <(GH_TOKEN="${READ_TOKEN}" review_sweep_priority_lane_hold "${REPOSITORY}" "${sweep_default_branch}" "${prs_json}" "${RUNNER_TEMP}/priority-lane-hold.txt" || echo "false - -") || true
           fi
 
           # Read into an array so counters survive the loop (no subshell pipe).
@@ -827,6 +880,15 @@ jobs:
                 skipped_round_cap=$((skipped_round_cap + 1))
                 continue
               fi
+              # Infra-failed rounds do not count (issue #9917), but a long
+              # broker or credential outage must not dispatch this PR every
+              # tick: at twice the cap in all rounds, skip the dispatch without
+              # a label. Dispatching resumes as old rounds leave the window.
+              round_cap_raw_rounds="$(printf '%s' "${round_cap_raw_counts_json}" | jq -r --arg n "${pr_number}" '(.[$n] // 0) | if type == "number" then . else 0 end' 2>/dev/null || echo 0)"
+              if [[ "${round_cap_raw_rounds}" =~ ^[0-9]+$ ]] && [ "${round_cap_raw_rounds}" -ge $((round_cap_max * 2)) ]; then
+                echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=review_round_infra_backoff rounds=${round_cap_rounds} raw_rounds=${round_cap_raw_rounds} max=${round_cap_max} window_hours=${round_cap_window_hours} head_ref=${head_ref}"
+                continue
+              fi
             fi
 
             # An approved head (ai-review/head-gate success) whose final CI
@@ -847,6 +909,14 @@ jobs:
                 skipped_approved_final_ci_failed=$((skipped_approved_final_ci_failed + 1))
                 continue
               fi
+            fi
+
+            # Priority lane (issue #10048): a priority PR logs `first`; any
+            # other PR is held back while the hold is active, until the cap.
+            if type _pr_priority_lane_decide >/dev/null 2>&1 \
+              && ! _pr_priority_lane_decide sweep "${pr_number}" "$(printf '%s' "${row}" | jq -r '.priority_lane == true')" "${priority_lane_hold:-false}" "$(printf '%s' "${row}" | jq -r '.updated_at // ""')" "" "${priority_lane_since:-}"; then
+              skipped_priority_lane=$((skipped_priority_lane + 1))
+              continue
             fi
 
             if [ "${DRY_RUN}" = "true" ]; then
@@ -882,7 +952,7 @@ jobs:
             fi
           done
 
-          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete} closed_smoke=${closed_smoke} skipped_approved_final_ci_failed=${skipped_approved_final_ci_failed} skipped_round_cap=${skipped_round_cap}"
+          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete} closed_smoke=${closed_smoke} skipped_approved_final_ci_failed=${skipped_approved_final_ci_failed} skipped_round_cap=${skipped_round_cap} skipped_priority_lane=${skipped_priority_lane}"
 
       # Non-retryable failure backfill (issue #7291): re-send a review/autofix
       # failure whose trusted current-head marker names a non-retryable reason
@@ -909,24 +979,11 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: bash .ci-rerun-support/scripts/workflow_failure_heal_non_retryable_backfill.sh
 
-      - name: Record GH_PAT budget at sweep end
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
-        run: |
-          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
-            source scripts/gh_helpers.sh
-            gh_pat_budget end review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
-          else
-            echo 'GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
-          fi
-
       - name: Re-run cancelled CI failed jobs once
         env:
           GH_TOKEN: ${{ github.token }}
+          # Issue #9887: GH_TOKEN carries the job token here, not GH_PAT.
+          GH_CALL_COUNTER_TOKEN_KIND: github_token
           REPOSITORY: ${{ github.repository }}
           CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}
           CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}
@@ -970,11 +1027,27 @@ jobs:
           FINAL_CI_SWEEP_HELPERS_DIR: .ci-rerun-support/scripts
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
+          # The base sync can renew a merge lease, so it gets the full lease
+          # set (issue #10078, tests/test_merge_lease_env_contract.py).
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
+          MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           # Soft path class off here (merge-lease Phase 4, Refs #9781): the
           # sweep's base sync treats `clean` and `overlap` alike, so a
           # merge-tree probe (private repository plus a fetch per PR) could
           # never change its decision.
           MERGE_LEASE_SOFT_PATHS: none
+          # Priority lane (issue #10048): priority heads first; the hold file
+          # the enumerate step wrote defers other heads (missing file: no hold).
+          MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security,ai:priority' }}
+          PRIORITY_LANE_ENABLED: ${{ vars.PRIORITY_LANE_ENABLED || 'true' }}
+          PRIORITY_LANE_WAIT_MINUTES: ${{ vars.PRIORITY_LANE_WAIT_MINUTES || '15' }}
+          PRIORITY_LANE_MAX_DEFER_MINUTES: ${{ vars.PRIORITY_LANE_MAX_DEFER_MINUTES || '120' }}
+          FINAL_CI_SWEEP_PRIORITY_LANE_FILE: ${{ runner.temp }}/priority-lane-hold.txt
         run: bash .ci-rerun-support/scripts/review_final_ci_sweep.sh
 
       - name: Re-dispatch stale security holds
@@ -989,3 +1062,19 @@ jobs:
           # The PR-named wrapper keeps the judge run visible to the active-run guards.
           SECURITY_HOLD_REVIEW_WORKFLOW: internal-review.yml
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/review_security_hold_sweep.py
+
+      - name: Record GH_PAT budget at sweep end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi

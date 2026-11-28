@@ -205,6 +205,12 @@ def _bootstrap(tmp_dir: Path) -> Path:
 	extract_fn 'close_linked_pr'               >> helpers.sh
 	echo                                       >> helpers.sh
 	extract_fn 'surface_reissue_closed_without_pr' >> helpers.sh
+	echo                                       >> helpers.sh
+	extract_fn '_stall_judge_pick_linked_pr'   >> helpers.sh
+	echo                                       >> helpers.sh
+	extract_fn '_stall_pr_ai_hold_reason'      >> helpers.sh
+	echo                                       >> helpers.sh
+	extract_fn '_stall_merge_lease_label_age_minutes' >> helpers.sh
 	""")
 	r = _run_bash(script, cwd=tmp_dir)
 	assert r.returncode == 0, f"extraction failed: {r.stderr}\n{r.stdout}"
@@ -221,6 +227,7 @@ def _invoke(body: str, cwd: Path, extra_env: dict[str, str] | None = None) -> su
 	declare -gA PR_HEAD_REF_MAP=()
 	declare -gA PR_BASE_REF_MAP=()
 	declare -gA PR_BODY_MAP=()
+	declare -gA PR_JSON_MAP=()
 	{_STUBS}
 	source helpers.sh
 	{body}
@@ -507,6 +514,411 @@ def test_surface_noops_when_reissue_has_at_least_one_pr():
 		assert r.returncode == 0, r.stderr
 		assert "REISSUE_CLOSED_WITHOUT_PR" not in r.stdout
 		assert comment_log.read_text(encoding="utf-8").strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# Issue #9892: the stall judge's diagnostics describe the issue's own
+# implementation PR (_stall_judge_pick_linked_pr), and a PR waiting for the
+# merge lease is a hold, not a stall (_stall_pr_ai_hold_reason).
+# ---------------------------------------------------------------------------
+
+_PICK_FETCH_STUB = """
+_fetch_pr_json() { local v="${PR_JSON_MAP[$1]:-}"; [ -n "$v" ] || v='{}'; printf '%s' "$v"; }
+_issue_cross_ref_pr_number_last() { printf '%s' "${CROSS_REF_LAST:-}"; }
+"""
+
+_PICK_REPORT = """
+_stall_judge_pick_linked_pr "$ISSUE"
+echo "PICK=${STALL_JUDGE_PICKED_PR} SRC=${STALL_JUDGE_PICKED_SOURCE} CANDS=${STALL_JUDGE_PICKED_CANDIDATES}"
+if [ -n "${STALL_JUDGE_PICKED_PR_JSON}" ]; then echo "PICKED_JSON=yes"; else echo "PICKED_JSON=no"; fi
+"""
+
+
+def _pr_payload(number: int, state: str, head_ref: str, body: str = "", labels: list | None = None, **extra) -> str:
+	payload = {
+		"number": number,
+		"state": state,
+		"merged": False,
+		"draft": False,
+		"title": f"PR {number}",
+		"head": {"ref": head_ref, "sha": "f4ed803b" + "0" * 32},
+		"base": {"ref": "main"},
+		"body": body,
+		"labels": [{"name": name} for name in (labels or [])],
+	}
+	payload.update(extra)
+	return json.dumps(payload)
+
+
+def _bash_single_quote(text: str) -> str:
+	return "'" + text.replace("'", "'\\''") + "'"
+
+
+def test_stall_judge_pick_prefers_open_implementation_pr_over_last_cross_ref():
+	"""Replays the 2026-11-21 #9398 shape: the timeline's LAST cross-ref is
+	#9685 (closed, unrelated branch) but #9402 on ai/issue-9398 is open. The
+	judge must see #9402 with source=implementation and every candidate."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _invoke(
+			body=_PICK_FETCH_STUB + f"""
+			ISSUE=9398
+			CROSS_REF_PR_NUMBERS=$'9402\\n9685'
+			CROSS_REF_LAST=9685
+			export GH_PR_LIST_HEAD_JSON='[{{"number":9402}}]'
+			export GH_PR_LIST_SEARCH_JSON='[]'
+			PR_JSON_MAP[9402]={_bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"]))}
+			PR_JSON_MAP[9685]={_bash_single_quote(_pr_payload(9685, "closed", "claude/unblock-chain-depth-cap", "Refs #9398"))}
+			""" + _PICK_REPORT,
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "PICK=9402 SRC=implementation CANDS=[9402,9685]" in r.stdout, (r.stdout, r.stderr)
+		assert "PICKED_JSON=yes" in r.stdout, r.stdout
+		assert "STALL_JUDGE_LINKED_PR issue=9398 pr=9402 source=implementation candidates=9402,9685" in r.stderr, r.stderr
+
+
+def test_stall_judge_pick_falls_back_to_last_cross_ref_without_implementation_pr():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _invoke(
+			body=_PICK_FETCH_STUB + f"""
+			ISSUE=3990
+			CROSS_REF_PR_NUMBERS="3991"
+			CROSS_REF_LAST=3991
+			export GH_PR_LIST_HEAD_JSON='[]'
+			export GH_PR_LIST_SEARCH_JSON='[]'
+			PR_JSON_MAP[3991]={_bash_single_quote(_pr_payload(3991, "open", "claude/tooling-fix", "Refs #3990"))}
+			""" + _PICK_REPORT,
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "PICK=3991 SRC=cross_ref_last CANDS=[3991]" in r.stdout, r.stdout
+		# The loop already fetched #3991, so its payload is reused (no
+		# second pulls/<n> read in invoke_stall_judge).
+		assert "PICKED_JSON=yes" in r.stdout, r.stdout
+		assert "STALL_JUDGE_LINKED_PR issue=3990 pr=3991 source=cross_ref_last candidates=3991" in r.stderr, r.stderr
+
+
+def test_stall_judge_pick_tries_branch_hits_before_many_cross_refs():
+	"""25 lower-numbered PRs that only cite the issue must not push the
+	`ai/issue-<n>` PR past the 20-fetch cap: branch hits are fetched first."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		xrefs = "\\n".join(str(n) for n in range(100, 125))
+		r = _invoke(
+			body=_PICK_FETCH_STUB + f"""
+			ISSUE=9398
+			CROSS_REF_PR_NUMBERS=$'{xrefs}'
+			CROSS_REF_LAST=124
+			export GH_PR_LIST_HEAD_JSON='[{{"number":9402}}]'
+			export GH_PR_LIST_SEARCH_JSON='[]'
+			PR_JSON_MAP[9402]={_bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398"))}
+			""" + _PICK_REPORT,
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "PICK=9402 SRC=implementation" in r.stdout, (r.stdout, r.stderr)
+
+
+def test_stall_judge_pick_reports_none_when_nothing_is_linked():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _invoke(
+			body=_PICK_FETCH_STUB + """
+			ISSUE=77
+			CROSS_REF_PR_NUMBERS=""
+			CROSS_REF_LAST=""
+			export GH_PR_LIST_HEAD_JSON='[]'
+			export GH_PR_LIST_SEARCH_JSON='[]'
+			""" + _PICK_REPORT,
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "PICK= SRC=none CANDS=[]" in r.stdout, r.stdout
+		assert "STALL_JUDGE_LINKED_PR issue=77 pr=none source=none candidates=none" in r.stderr, r.stderr
+
+
+def test_stall_judge_pick_fails_open_on_api_errors():
+	"""`gh pr list` failing and `pulls/<n>` returning the `{}` failure
+	sentinel fall back to today's last-cross-ref pick without an error."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _invoke(
+			body=_PICK_FETCH_STUB + """
+			gh() { return 1; }
+			ISSUE=9398
+			CROSS_REF_PR_NUMBERS="9402"
+			CROSS_REF_LAST=9402
+			""" + _PICK_REPORT,
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "PICK=9402 SRC=cross_ref_last CANDS=[9402]" in r.stdout, (r.stdout, r.stderr)
+
+
+def _hold(cwd: Path, pr_json: str, stall_minutes: str | None, extra: str = "") -> subprocess.CompletedProcess:
+	arg = "" if stall_minutes is None else f" {_bash_single_quote(stall_minutes)}"
+	return _invoke(
+		body=extra + f"""
+		out="$(_stall_pr_ai_hold_reason {_bash_single_quote(pr_json)}{arg})"
+		echo "HOLD=[${{out}}]"
+		""",
+		cwd=cwd,
+	)
+
+
+def test_hold_reason_reports_merge_lease_wait_for_every_label_shape():
+	rest = _pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"])
+	graphql_strings = json.dumps({"number": 9402, "state": "OPEN", "title": "x", "labels": ["ai:merge-lease-wait"]})
+	graphql_nodes = json.dumps({"number": 9402, "state": "open", "labels": {"nodes": [{"name": "ai:merge-lease-wait"}]}})
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		for payload in (rest, graphql_strings, graphql_nodes):
+			r = _hold(tmp, payload, "130")
+			assert r.returncode == 0, r.stderr
+			assert "HOLD=[merge_lease_wait]" in r.stdout, (payload, r.stdout, r.stderr)
+
+
+def test_hold_reason_without_stall_clock_ignores_lease_label():
+	"""The one-argument form (conflict sweep) keeps its exact old output."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _hold(tmp, _pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"]), None)
+		assert "HOLD=[]" in r.stdout, r.stdout
+
+
+def test_hold_reason_draft_and_skip_ai_title_keep_priority():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _hold(tmp, _pr_payload(1, "open", "ai/issue-1", labels=["ai:merge-lease-wait"], draft=True), "10")
+		assert "HOLD=[draft]" in r.stdout, r.stdout
+		r = _hold(tmp, _pr_payload(1, "open", "ai/issue-1", labels=["ai:merge-lease-wait"], title="[skip ai] wip"), "10")
+		assert "HOLD=[skip_ai_title]" in r.stdout, r.stdout
+
+
+def test_hold_reason_ignores_closed_or_merged_prs():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _hold(tmp, _pr_payload(1, "closed", "ai/issue-1", labels=["ai:merge-lease-wait"]), "10")
+		assert "HOLD=[]" in r.stdout, r.stdout
+		r = _hold(tmp, _pr_payload(1, "open", "ai/issue-1", labels=["ai:merge-lease-wait"], merged=True), "10")
+		assert "HOLD=[]" in r.stdout, r.stdout
+
+
+def test_hold_reason_lease_wait_lapses_on_label_age_and_logs_once():
+	"""The lapse is measured on the label's age, not on the stall clock: a
+	huge stall clock with a young label holds, an old label lapses."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		payload = _pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"])
+		q = _bash_single_quote(payload)
+		# updated_at is a lower bound on the label's age (labelling updates the PR).
+		q_quiet = _bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"], updated_at="2026-01-01T00:00:00Z"))
+		import datetime
+		fresh = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+		q_fresh = _bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"], updated_at=fresh))
+		r = _invoke(
+			body=f"""
+			_stall_merge_lease_label_age_minutes() {{ [ -z "${{LABEL_RC:-}}" ] || return "${{LABEL_RC}}"; [ -n "${{LABEL_AGE:-}}" ] || return 1; printf '%s\\n' "${{LABEL_AGE}}"; }}
+			export STALL_MERGE_LEASE_WAIT_MAX_MINUTES=60
+			export _STALL_MERGE_LEASE_LAPSE_LOG_FILE="{tmp}/lapse.log"
+			a="$(LABEL_AGE=60 _stall_pr_ai_hold_reason {q} 5000)"
+			b="$(LABEL_AGE=61 _stall_pr_ai_hold_reason {q} 1)"
+			c="$(LABEL_AGE=90 _stall_pr_ai_hold_reason {q} 1)"
+			d="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 120)"
+			e="$(STALL_MERGE_LEASE_WAIT_MAX_MINUTES=0 LABEL_AGE=1 _stall_pr_ai_hold_reason {q} 1)"
+			f="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 121)"
+			g="$(LABEL_AGE= _stall_pr_ai_hold_reason {q} 0)"
+			h="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q} 5000)"
+			i="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q_quiet} 1)"
+			j="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q_quiet} 0)"
+			k="$(LABEL_RC=2 _stall_pr_ai_hold_reason {q_fresh} 5000)"
+			echo "A=[$a] B=[$b] C=[$c] D=[$d] E=[$e] F=[$f] G=[$g] H=[$h] I=[$i] J=[$j] K=[$k]"
+			""",
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		# D: no readable age (rc 1), stall clock at 2x max -> hold kept. F: no
+		# readable age (rc 1), stall clock past 2x max -> backstop lapse. G: the
+		# review-blocked `0` form never hits the backstop. H: a read error (rc 2)
+		# with no updated_at keeps the hold whatever the issue's stall clock
+		# says. I: a read error on a PR not updated for longer than the max
+		# lapses (deduped: #9402 already logged). J: the `0` form keeps the
+		# hold on a read error. K: a freshly updated (young) PR keeps the hold
+		# on a read error even with a huge stall clock.
+		assert (
+			"A=[merge_lease_wait] B=[] C=[] D=[merge_lease_wait] E=[] F=[] G=[merge_lease_wait] H=[merge_lease_wait]"
+			" I=[] J=[merge_lease_wait] K=[merge_lease_wait]"
+			in r.stdout
+		), (r.stdout, r.stderr)
+		lapse_lines = [ln for ln in r.stderr.splitlines() if ln.startswith("STALL_MERGE_LEASE_HOLD_LAPSED")]
+		assert lapse_lines == ["STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=61 max_minutes=60"], r.stderr
+
+
+def test_label_age_reads_the_newest_labeled_event():
+	import datetime
+
+	now = datetime.datetime.now(datetime.timezone.utc)
+	older = (now - datetime.timedelta(minutes=300)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	newer = (now - datetime.timedelta(minutes=120)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	resp = json.dumps({"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": [
+		{"createdAt": older, "label": {"name": "ai:merge-lease-wait"}},
+		{"createdAt": newer, "label": {"name": "ai:merge-lease-wait"}},
+		{"createdAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "label": {"name": "other"}},
+	]}}}}})
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _invoke(
+			body=f"""
+			gh() {{ [ "$1 $2" = "api graphql" ] || return 1; [ -n "${{GQL_FAIL:-}}" ] && return 1; printf '%s' {_bash_single_quote(resp)}; }}
+			a="$(_stall_merge_lease_label_age_minutes 9402 ai:merge-lease-wait)"; echo "A=[$a]"
+			rc=0; b="$(_stall_merge_lease_label_age_minutes 9402 missing-label)" || rc=$?; echo "B=[$b] RC=$rc"
+			rc=0; c="$(GQL_FAIL=1 _stall_merge_lease_label_age_minutes 9402 ai:merge-lease-wait)" || rc=$?; echo "C=[$c] RC=$rc"
+			""",
+			cwd=tmp,
+			extra_env={"GITHUB_REPOSITORY": "owner/repo"},
+		)
+		assert r.returncode == 0, r.stderr
+		m = re.search(r"A=\[(\d+)\]", r.stdout)
+		assert m and 119 <= int(m.group(1)) <= 121, (r.stdout, r.stderr)
+		assert "B=[] RC=1" in r.stdout, r.stdout
+		# A GraphQL read error is transient (rc 2), unlike a missing event (rc 1).
+		assert "C=[] RC=2" in r.stdout, r.stdout
+
+
+def test_hold_reason_backstop_lapse_logs_unknown_age():
+	"""A label age that can never be read (rc 1: event outside the last 50)
+	lapses once the stall clock is past twice the maximum, logged as
+	unknown. A read error (rc 2) never lapses on the issue's stall clock;
+	it lapses, logged as read_error, only when the PR's own updated_at is
+	more than the maximum ago."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		q = _bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"]))
+		q_quiet = _bash_single_quote(_pr_payload(9402, "open", "ai/issue-9398", labels=["ai:merge-lease-wait"], updated_at="2026-01-01T00:00:00Z"))
+		r = _invoke(
+			body=f"""
+			_stall_merge_lease_label_age_minutes() {{ return 1; }}
+			export STALL_MERGE_LEASE_WAIT_MAX_MINUTES=60
+			out="$(_stall_pr_ai_hold_reason {q} 200)"
+			echo "OUT=[$out]"
+			_stall_merge_lease_label_age_minutes() {{ return 2; }}
+			err="$(_stall_pr_ai_hold_reason {q} 200)"
+			echo "ERR=[$err]"
+			persist="$(_stall_pr_ai_hold_reason {q} 100000)"
+			echo "PERSIST=[$persist]"
+			quiet="$(_stall_pr_ai_hold_reason {q_quiet} 241)"
+			echo "QUIET=[$quiet]"
+			""",
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "OUT=[]" in r.stdout, (r.stdout, r.stderr)
+		assert "ERR=[merge_lease_wait]" in r.stdout, (r.stdout, r.stderr)
+		# A read error never lapses on the issue's stall clock alone...
+		assert "PERSIST=[merge_lease_wait]" in r.stdout, (r.stdout, r.stderr)
+		# ...only when the PR has not been updated for longer than the maximum.
+		assert "QUIET=[]" in r.stdout, (r.stdout, r.stderr)
+		assert "STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=read_error max_minutes=60" in r.stderr, r.stderr
+		assert "STALL_MERGE_LEASE_HOLD_LAPSED pr=9402 label_age_minutes=unknown max_minutes=60" in r.stderr, r.stderr
+
+
+def test_label_age_is_cached_per_process():
+	"""With the per-process cache file set, the same PR and label are read
+	from GraphQL once; later calls reuse the cached labeled-at epoch."""
+	import datetime
+
+	when = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	resp = json.dumps({"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": [
+		{"createdAt": when, "label": {"name": "ai:merge-lease-wait"}},
+	]}}}}})
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		calls = tmp / "calls.log"
+		r = _invoke(
+			body=f"""
+			gh() {{ printf 'x\\n' >> "{calls}"; [ -n "${{GQL_FAIL:-}}" ] && return 1; printf '%s' {_bash_single_quote(resp)}; }}
+			export _STALL_MERGE_LEASE_AGE_CACHE_FILE="{tmp}/age.cache"
+			: > "$_STALL_MERGE_LEASE_AGE_CACHE_FILE"
+			a="$(_stall_merge_lease_label_age_minutes 9402 ai:merge-lease-wait)"
+			b="$(GQL_FAIL=1 _stall_merge_lease_label_age_minutes 9402 ai:merge-lease-wait)"
+			echo "A=[$a] B=[$b]"
+			""",
+			cwd=tmp,
+			extra_env={"GITHUB_REPOSITORY": "owner/repo"},
+		)
+		assert r.returncode == 0, r.stderr
+		m = re.search(r"A=\[(\d+)\] B=\[(\d+)\]", r.stdout)
+		assert m and 29 <= int(m.group(1)) <= 31 and 29 <= int(m.group(2)) <= 31, (r.stdout, r.stderr)
+		assert calls.read_text(encoding="utf-8").count("x") == 1, calls.read_text(encoding="utf-8")
+
+
+def test_stall_judge_pick_prefers_lower_numbered_timeline_implementation_pr():
+	"""Two open implementation PRs: #100 found only on the timeline (body
+	closes the issue) and #200 on `ai/issue-<n>`. The pick must be #100,
+	the PR close_linked_pr reaches first."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _invoke(
+			body=_PICK_FETCH_STUB + f"""
+			ISSUE=55
+			CROSS_REF_PR_NUMBERS="100"
+			CROSS_REF_LAST=100
+			export GH_PR_LIST_HEAD_JSON='[{{"number":200}}]'
+			export GH_PR_LIST_SEARCH_JSON='[]'
+			PR_JSON_MAP[100]={_bash_single_quote(_pr_payload(100, "open", "feature/manual", "Fixes #55"))}
+			PR_JSON_MAP[200]={_bash_single_quote(_pr_payload(200, "open", "ai/issue-55"))}
+			""" + _PICK_REPORT,
+			cwd=tmp,
+		)
+		assert r.returncode == 0, r.stderr
+		assert "PICK=100 SRC=implementation CANDS=[100,200]" in r.stdout, (r.stdout, r.stderr)
+
+
+def test_hold_reason_honours_custom_label_and_invalid_max():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		payload = _pr_payload(5, "open", "ai/issue-5", labels=["custom:lease"])
+		r = _hold(tmp, payload, "10", extra="export MERGE_LEASE_WAIT_LABEL=custom:lease\n")
+		assert "HOLD=[merge_lease_wait]" in r.stdout, r.stdout
+		r = _hold(tmp, payload, "10")
+		assert "HOLD=[]" in r.stdout, r.stdout
+		r = _hold(
+			tmp,
+			_pr_payload(5, "open", "ai/issue-5", labels=["ai:merge-lease-wait"]),
+			"100",
+			extra="export STALL_MERGE_LEASE_WAIT_MAX_MINUTES=abc\n",
+		)
+		assert "HOLD=[merge_lease_wait]" in r.stdout, r.stdout
+		assert "STALL_MERGE_LEASE_WAIT_MAX_MINUTES is not a non-negative integer; using 1440." in r.stderr, r.stderr
+
+
+def test_stall_judge_diagnostics_carry_linked_pr_source_and_candidates():
+	"""Both diagnostics builders in invoke_stall_judge add the new keys and
+	keep the existing linked_pr object."""
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = text.index("\ninvoke_stall_judge() {")
+	body = text[start : text.index("\n}\n", start)]
+	assert "_stall_judge_pick_linked_pr \"${issue_num}\"" in body
+	assert body.count("linked_pr_source: $linked_pr_source") == 2, body.count("linked_pr_source: $linked_pr_source")
+	assert body.count("linked_pr_candidates: $linked_pr_candidates") == 2
+	assert body.count("linked_pr: {") == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1594,6 +2006,266 @@ def test_implement_workflow_does_not_use_buggy_search_form():
 				f"plan.yml's \"Skip when issue already has a PR\" step "
 				f"for precedent.\n  matched line: {line.rstrip()}"
 			)
+
+
+# ---------------------------------------------------------------------------
+# Issue #9986: the stall judge resolves the issue's implementation PR first
+# (_stall_judge_resolve_linked_pr). The #9212 incident: the last
+# cross-reference was a docs/plans-only PR (#9478) filed after the merged
+# implementation PR (#9262) on ai/issue-9212, and the judge reasoned about
+# the plan PR.
+# ---------------------------------------------------------------------------
+
+
+_RESOLVER_FUNCTIONS = (
+	"_issue_cross_ref_pr_number_last",
+	"_pr_json_closes_issue",
+	"_pr_json_implements_issue",
+	"_pr_json_is_issue_implementation_pr",
+	"_pr_files_all_under_docs_plans",
+	"_stall_judge_resolve_linked_pr",
+)
+
+
+def _extract_poller_function(name: str) -> str:
+	lines = POLLER_SCRIPT.read_text(encoding="utf-8").splitlines()
+	for idx, line in enumerate(lines):
+		if line.startswith(f"{name}()"):
+			out = []
+			for body_line in lines[idx:]:
+				out.append(body_line)
+				if body_line == "}":
+					return "\n".join(out) + "\n"
+	raise AssertionError(f"function not found in poller: {name}")
+
+
+_RESOLVER_HARNESS = r"""
+set -uo pipefail
+source ./resolver.sh
+gh_retry() { "$@"; }
+_review_run_default_branch() { echo main; }
+_linked_prs_by_branch_name() { echo "branch $1" >> "${CALL_LOG}"; printf '%s\n' ${BRANCH_PRS:-}; }
+_issue_timeline_with_cross_refs_json() {
+	echo "timeline $1" >> "${CALL_LOG}"
+	[ "${TIMELINE_FAIL:-0}" = "1" ] && return 1
+	printf '%s' "${TIMELINE_JSON:-[]}"
+}
+_fetch_pr_json() {
+	echo "fetch $1" >> "${CALL_LOG}"
+	if [ -f "${PR_DIR}/$1.json" ]; then cat "${PR_DIR}/$1.json"; else echo '{}'; fi
+}
+gh() {
+	if [ "${1:-}" = "api" ] && [[ "${2:-}" == *"/files?per_page=100" ]]; then
+		local n="${2%/files*}"
+		n="${n##*/}"
+		echo "files ${n}" >> "${CALL_LOG}"
+		[ -f "${PR_DIR}/${n}.files.json" ] || return 1
+		cat "${PR_DIR}/${n}.files.json"
+		return 0
+	fi
+	echo "gh-unexpected $*" >> "${CALL_LOG}"
+	return 1
+}
+for _call in $(seq 1 "${RESOLVE_CALLS:-1}"); do
+	_stall_judge_resolve_linked_pr "${ISSUE_NUM}"
+done
+if [ -n "${STALL_JUDGE_LINKED_PR_JSON:-}" ]; then
+	_json_num="$(printf '%s' "${STALL_JUDGE_LINKED_PR_JSON}" | jq -r '.number')"
+else
+	_json_num="none"
+fi
+echo "RESULT num=${STALL_JUDGE_LINKED_PR_NUM:-none} json=${_json_num}"
+"""
+
+
+def _xref(number: int) -> dict:
+	return {
+		"event": "cross-referenced",
+		"source": {"issue": {"number": number, "state": "closed", "pull_request": {"url": f"x/{number}"}}},
+	}
+
+
+def _pr(number: int, head_ref: str, body: str = "", changed_files: int = 3, state: str = "closed") -> dict:
+	return {
+		"number": number,
+		"state": state,
+		"head": {"ref": head_ref, "sha": "a" * 40},
+		"base": {"ref": "main"},
+		"body": body,
+		"changed_files": changed_files,
+	}
+
+
+def _resolve(
+	issue: int,
+	prs: dict[int, dict],
+	timeline: list[int],
+	*,
+	files: dict[int, list] | None = None,
+	branch_prs: str = "",
+	env: dict[str, str] | None = None,
+	calls: int = 1,
+) -> tuple[subprocess.CompletedProcess, list[str]]:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		(tmp / "resolver.sh").write_text(
+			"\n".join(_extract_poller_function(name) for name in _RESOLVER_FUNCTIONS), encoding="utf-8"
+		)
+		pr_dir = tmp / "prs"
+		pr_dir.mkdir()
+		for number, pr_json in prs.items():
+			(pr_dir / f"{number}.json").write_text(json.dumps(pr_json), encoding="utf-8")
+		for number, names in (files or {}).items():
+			(pr_dir / f"{number}.files.json").write_text(
+				json.dumps([
+					name if isinstance(name, dict) else {"filename": name, "status": "added"} for name in names
+				]),
+				encoding="utf-8",
+			)
+		call_log = tmp / "calls.log"
+		call_log.write_text("", encoding="utf-8")
+		run_env = {
+			"ISSUE_NUM": str(issue),
+			"PR_DIR": str(pr_dir),
+			"CALL_LOG": str(call_log),
+			"TIMELINE_JSON": json.dumps([_xref(n) for n in timeline]),
+			"BRANCH_PRS": branch_prs,
+			"RESOLVE_CALLS": str(calls),
+		}
+		run_env.update(env or {})
+		proc = _run_bash(_RESOLVER_HARNESS, cwd=tmp, env=run_env)
+		return proc, [ln for ln in call_log.read_text(encoding="utf-8").splitlines() if ln]
+
+
+def _linked_pr_line(proc: subprocess.CompletedProcess) -> str:
+	lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("STALL_JUDGE_LINKED_PR ")]
+	assert lines, proc.stdout + proc.stderr
+	return lines[-1]
+
+
+def test_stall_judge_prefers_implementation_pr_over_plan_doc_xref():
+	"""#9212 shape: merged #9262 on ai/issue-9212, then a docs/plans-only
+	#9478 cross-referenced last. The judge must reason about #9262 and reuse
+	its fetched JSON; the docs-only PR is counted as skipped when it claims
+	the issue, and rejected by the predicate when it only mentions it."""
+	for plan_body, skipped in (
+		("Plan for the follow-up work. Fixes #9212", 1),
+		("Plan for the follow-up work. Refs #9212", 0),
+	):
+		prs = {
+			9262: _pr(9262, "ai/issue-9212", "Automated implementation.", changed_files=12),
+			9478: _pr(9478, "claude/write-plan-pipeline-human-wait-elimination", plan_body, changed_files=1, state="open"),
+		}
+		proc, calls = _resolve(
+			9212, prs, [9262, 9478], files={9478: ["docs/plans/pipeline-human-wait-elimination-plan.md"]}
+		)
+		assert proc.returncode == 0, proc.stderr
+		line = _linked_pr_line(proc)
+		assert line == (
+			f"STALL_JUDGE_LINKED_PR issue=9212 pr=9262 source=cross_ref_impl skipped_docs_plans={skipped}"
+		), (plan_body, line)
+		assert "RESULT num=9262 json=9262" in proc.stdout, proc.stdout
+		# The ai/issue-<n> PR is never docs-checked.
+		assert "files 9262" not in calls, calls
+
+
+def test_stall_judge_picks_open_branch_pr_without_timeline():
+	prs = {9300: _pr(9300, "ai/issue-9212", state="open")}
+	proc, calls = _resolve(9212, prs, [9478], branch_prs="9300")
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=9212 pr=9300 source=branch skipped_docs_plans=0"
+	assert "RESULT num=9300 json=9300" in proc.stdout
+	assert not any(c.startswith("timeline") for c in calls), calls
+
+
+def test_stall_judge_uses_last_xref_when_only_mentions_exist():
+	prs = {
+		500: _pr(500, "claude/tooling-a", "Refs #77", changed_files=2),
+		501: _pr(501, "claude/tooling-b", "Refs #77", changed_files=2),
+	}
+	files = {500: ["scripts/a.sh", "docs/plans/x.md"], 501: ["scripts/b.sh"]}
+	proc, _ = _resolve(77, prs, [501, 500], files=files)
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=500 source=cross_ref_last skipped_docs_plans=0"
+	assert "RESULT num=500 json=500" in proc.stdout
+
+
+def test_stall_judge_takes_no_pr_when_every_xref_is_docs_only():
+	prs = {
+		600: _pr(600, "claude/plan-a", "Closes #77", changed_files=1),
+		601: _pr(601, "claude/plan-b", "Refs #77", changed_files=2),
+	}
+	files = {600: ["docs/plans/a.md"], 601: ["docs/plans/b.md", "docs/plans/c.md"]}
+	proc, calls = _resolve(77, prs, [600, 601], files=files, calls=2)
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=none source=none skipped_docs_plans=2"
+	assert "RESULT num=none json=none" in proc.stdout
+	# The file lists are cached per tick: two resolutions, one read per PR.
+	assert sorted(c for c in calls if c.startswith("files")) == ["files 600", "files 601"], calls
+
+
+def test_stall_judge_keeps_candidate_when_files_read_fails():
+	prs = {700: _pr(700, "claude/fix", "Closes #77", changed_files=2)}
+	proc, calls = _resolve(77, prs, [700])
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=700 source=cross_ref_impl skipped_docs_plans=0"
+	assert "files 700" in calls
+
+
+def test_stall_judge_skips_files_read_for_large_or_empty_change_sets():
+	for changed in (0, 101):
+		prs = {710: _pr(710, "claude/fix", "Closes #77", changed_files=changed)}
+		proc, calls = _resolve(77, prs, [710], files={710: ["docs/plans/x.md"]})
+		assert _linked_pr_line(proc).startswith("STALL_JUDGE_LINKED_PR issue=77 pr=710 "), proc.stdout
+		assert not any(c.startswith("files") for c in calls), calls
+
+
+def test_stall_judge_keeps_docs_only_pr_on_issue_branch():
+	prs = {800: _pr(800, "ai/issue-77", "Automated implementation.", changed_files=1)}
+	proc, calls = _resolve(77, prs, [800], files={800: ["docs/plans/x.md"]})
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=800 source=cross_ref_impl skipped_docs_plans=0"
+	assert not any(c.startswith("files") for c in calls), calls
+
+
+def test_stall_judge_rename_out_of_docs_plans_is_not_docs_only():
+	"""A file moved into docs/plans/ from elsewhere changes more than plans,
+	so the PR stays a candidate."""
+	prs = {820: _pr(820, "claude/move", "Closes #77", changed_files=1)}
+	proc, _ = _resolve(77, prs, [820], files={820: ["docs/plans/moved.md"]})
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=none source=none skipped_docs_plans=1"
+	renamed = {"filename": "docs/plans/moved.md", "previous_filename": "scripts/old.sh", "status": "renamed"}
+	proc, _ = _resolve(77, prs, [820], files={820: [renamed]})
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=820 source=cross_ref_impl skipped_docs_plans=0"
+
+
+def test_stall_judge_switch_off_restores_last_cross_reference():
+	prs = {
+		9262: _pr(9262, "ai/issue-9212", changed_files=12),
+		9478: _pr(9478, "claude/write-plan", "Refs #9212", changed_files=1),
+	}
+	for value in ("false", "FALSE"):
+		proc, calls = _resolve(
+			9212, prs, [9262, 9478], files={9478: ["docs/plans/x.md"]},
+			branch_prs="9262", env={"STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED": value},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=9212 pr=9478 source=legacy skipped_docs_plans=0"
+		# The caller fetches the PR as before.
+		assert "RESULT num=9478 json=none" in proc.stdout
+		assert not any(c.startswith(("fetch", "branch", "files")) for c in calls), calls
+
+
+def test_invoke_stall_judge_uses_resolver_and_reuses_pr_json():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = script.split("\ninvoke_stall_judge() {\n", 1)[1].split("\n}\n", 1)[0]
+	assert '_stall_judge_resolve_linked_pr "${issue_num}" || true' in body
+	assert 'linked_pr="${STALL_JUDGE_LINKED_PR_NUM:-}"' in body
+	assert 'linked_pr_json="${STALL_JUDGE_LINKED_PR_JSON}"' in body
+	assert "_issue_cross_ref_pr_number_last" not in body
+	# The resolver must run in the main shell, not in a command substitution.
+	assert "$(_stall_judge_resolve_linked_pr" not in body
+	assert 'STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED="${STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED:-true}"' in script
 
 
 # ---------------------------------------------------------------------------

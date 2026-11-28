@@ -665,6 +665,83 @@ def _extract_latest_standalone_state(comments: list[dict]) -> dict | None:
 	return None
 
 
+# #10019: the fake `gh`, `git` and `python3` that `_run_poller` writes, and
+# its `tg_cleanup_msgs` / `tg_send_tracked` helpers, all read-modify-write the
+# shared GH_MOCK_STORE JSON. Each `_run_poller` call keeps that store in its own
+# temp directory, so separate tests and shards never share it; the race is
+# inside one poller run. Unlocked, two overlapping fakes there (process
+# substitution, background calls, a fake that starts another fake) could lose
+# a counter update (`pr_get_calls`, `git_fetch_calls`) or read a half-written
+# store. Every one of them prepends this snippet: it takes an exclusive flock on
+# `<store>.lock` before the load, holds it until the fake exits (or calls
+# `_mock_store_lock_release()`), and replaces the store atomically.
+# GH_MOCK_STORE_LOCK_HELD=1 is inherited by children, so a fake started by a
+# fake that holds the lock does not wait on its own parent. The wait is bounded
+# so that a fake-to-fake pipeline cannot hang a shard; past the bound the fake
+# continues unlocked (the behaviour before #10019) and says so on stderr.
+_POLLER_MOCK_STORE_LOCK_SNIPPET = r'''import fcntl as _mock_store_fcntl
+import os as _mock_store_os
+import sys as _mock_store_sys
+import tempfile as _mock_store_tempfile
+import time as _mock_store_time
+
+_MOCK_STORE_LOCK_HANDLE = None
+# Test-only override so the fail-open path can be exercised quickly; 30s default.
+try:
+	_mock_store_wait_override = float(_mock_store_os.environ.get("GH_MOCK_STORE_LOCK_WAIT_SECONDS", "30") or "30")
+except ValueError:
+	_mock_store_wait_override = 30.0
+# A non-numeric, non-positive, nan or inf value would crash every fake or
+# defeat the bounded wait; fall back to the 30s default instead.
+_MOCK_STORE_LOCK_WAIT_SECONDS = _mock_store_wait_override if 0 < _mock_store_wait_override < float("inf") else 30.0
+
+
+def _mock_store_lock_acquire(store_path):
+	global _MOCK_STORE_LOCK_HANDLE
+	if _MOCK_STORE_LOCK_HANDLE is not None:
+		return
+	if _mock_store_os.environ.get("GH_MOCK_STORE_LOCK_HELD") == "1":
+		return
+	lock_handle = open(f"{store_path}.lock", "a+", encoding="utf-8")
+	lock_deadline = _mock_store_time.monotonic() + _MOCK_STORE_LOCK_WAIT_SECONDS
+	while True:
+		try:
+			_mock_store_fcntl.flock(lock_handle.fileno(), _mock_store_fcntl.LOCK_EX | _mock_store_fcntl.LOCK_NB)
+			break
+		except BlockingIOError:
+			if _mock_store_time.monotonic() >= lock_deadline:
+				lock_handle.close()
+				_mock_store_sys.stderr.write(
+					f"poller mock store: lock wait exceeded {_MOCK_STORE_LOCK_WAIT_SECONDS:g}s for {store_path}; continuing unlocked\n"
+				)
+				return
+			_mock_store_time.sleep(0.005)
+	_MOCK_STORE_LOCK_HANDLE = lock_handle
+	_mock_store_os.environ["GH_MOCK_STORE_LOCK_HELD"] = "1"
+
+
+def _mock_store_lock_release():
+	global _MOCK_STORE_LOCK_HANDLE
+	if _MOCK_STORE_LOCK_HANDLE is None:
+		return
+	_mock_store_os.environ.pop("GH_MOCK_STORE_LOCK_HELD", None)
+	# Closing the only descriptor drops the flock.
+	_MOCK_STORE_LOCK_HANDLE.close()
+	_MOCK_STORE_LOCK_HANDLE = None
+
+
+def _mock_store_write_atomic(store_path, text):
+	store_dir = _mock_store_os.path.dirname(_mock_store_os.path.abspath(str(store_path)))
+	with _mock_store_tempfile.NamedTemporaryFile(
+		"w", encoding="utf-8", dir=store_dir, prefix=".mock-store-", suffix=".tmp", delete=False
+	) as tmp_store_handle:
+		tmp_store_handle.write(text)
+		tmp_store_name = tmp_store_handle.name
+	_mock_store_os.replace(tmp_store_name, str(store_path))
+
+'''
+
+
 def _write_exec(path: Path, body: str) -> None:
 	path.write_text(body, encoding="utf-8")
 	path.chmod(0o755)
@@ -1370,10 +1447,12 @@ esac
 					'\ntg_cleanup_msgs() {\n'
 					'\tprintf \'%s\\n\' "$1" >> "${TG_CLEANUP_CAPTURE}"\n'
 					'\t"${REAL_PYTHON_BIN}" - "${GH_MOCK_STORE}" "$1" <<\'PY\'\n'
+					+ _POLLER_MOCK_STORE_LOCK_SNIPPET +
 					'import json\n'
 					'import sys\n'
 					'from pathlib import Path\n'
 					'telegram_store_path = Path(sys.argv[1])\n'
+					'_mock_store_lock_acquire(telegram_store_path)\n'
 					'telegram_store = json.loads(telegram_store_path.read_text(encoding="utf-8"))\n'
 					'telegram_issue = telegram_store["issues"][sys.argv[2]]\n'
 					'telegram_issue["comments"] = [\n'
@@ -1381,7 +1460,7 @@ esac
 					'\tif "<!-- tg_cleanup:" not in telegram_comment.get("body", "")\n'
 					'\tand "<!-- tg_phase:" not in telegram_comment.get("body", "")\n'
 					']\n'
-					'telegram_store_path.write_text(json.dumps(telegram_store), encoding="utf-8")\n'
+					'_mock_store_write_atomic(telegram_store_path, json.dumps(telegram_store))\n'
 					'PY\n'
 					'}\n'
 					'tg_send_tracked() {\n'
@@ -1391,10 +1470,12 @@ esac
 					'\tjq -cn --arg issue "${tracked_issue_num}" --arg message "${tracked_message_text}" --arg level "${tracked_level}" '
 					"'{issue: $issue, message: $message, level: $level}' >> \"${TG_NOTIFICATION_CAPTURE}\"\n"
 					'\t"${REAL_PYTHON_BIN}" - "${GH_MOCK_STORE}" "${tracked_issue_num}" <<\'PY\'\n'
+					+ _POLLER_MOCK_STORE_LOCK_SNIPPET +
 					'import json\n'
 					'import sys\n'
 					'from pathlib import Path\n'
 					'tracked_store_path = Path(sys.argv[1])\n'
+					'_mock_store_lock_acquire(tracked_store_path)\n'
 					'tracked_store = json.loads(tracked_store_path.read_text(encoding="utf-8"))\n'
 					'tracked_issue = tracked_store["issues"][sys.argv[2]]\n'
 					'tracked_comment_id = int(tracked_store.get("next_comment_id", 1))\n'
@@ -1415,7 +1496,7 @@ esac
 					'\t\t"user": {"login": "github-actions[bot]"},\n'
 					'\t})\n'
 					'tracked_store["next_comment_id"] = tracked_comment_id + 1\n'
-					'tracked_store_path.write_text(json.dumps(tracked_store), encoding="utf-8")\n'
+					'_mock_store_write_atomic(tracked_store_path, json.dumps(tracked_store))\n'
 					'PY\n'
 					'}\n'
 				)
@@ -1686,8 +1767,7 @@ esac
 			encoding="utf-8",
 		)
 
-		gh_mock = r'''#!/usr/bin/env python3
-import json
+		gh_mock = "#!/usr/bin/env python3\n" + _POLLER_MOCK_STORE_LOCK_SNIPPET + r'''import json
 import os
 import re
 import subprocess
@@ -1695,12 +1775,13 @@ import sys
 from pathlib import Path
 
 store_path = Path(__import__('os').environ['GH_MOCK_STORE'])
+_mock_store_lock_acquire(store_path)
 store = json.loads(store_path.read_text(encoding='utf-8'))
 args = sys.argv[1:]
 
 
 def save():
-	store_path.write_text(json.dumps(store), encoding='utf-8')
+	_mock_store_write_atomic(store_path, json.dumps(store))
 
 
 def get_issue(num):
@@ -1996,7 +2077,18 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 		for key in ('event', 'displayTitle', 'createdAt', 'startedAt', 'databaseId'):
 			if key in run:
 				entry[key] = run[key]
+		# Issue #10149: optional fields the stall judge's branch listing reads;
+		# only a run that sets them carries them.
+		for key in ('name', 'workflowName', 'headSha', 'headBranch'):
+			if key in run:
+				entry[key] = run[key]
 		runs.append(entry)
+	if branch and '--json' in args and 'headSha' in (args[args.index('--json') + 1] if args.index('--json') + 1 < len(args) else ''):
+		store.setdefault('stall_judge_run_listings', []).append(branch)
+		save()
+		if store.get('stall_judge_run_listing_fail'):
+			print('run listing unavailable', file=sys.stderr)
+			sys.exit(1)
 	if jq_query:
 		import subprocess as _sp
 		p = _sp.run(['jq', '-r', jq_query], input=json.dumps(runs), capture_output=True, text=True)
@@ -2385,6 +2477,12 @@ if args[0] == 'api':
 				issue_payload['number'] = issue_num
 			if re.search(r'(?m)^\s*state\s*$', query):
 				issue_payload['state'] = issue_state
+			# Issue #10059: issue stateReason (opt-in via issue_extra_fields[n].state_reason
+			# or the issue's own state_reason); null when neither is set.
+			if re.search(r'(?m)^\s*stateReason\s*$', query):
+				sr_ext = (store.get('issue_extra_fields') or {}).get(str(issue_num), {}) or {}
+				sr_val = sr_ext.get('state_reason', issue.get('state_reason'))
+				issue_payload['stateReason'] = str(sr_val).upper() if sr_val else None
 			# Issue #8808: issue createdAt (opt-in per issue via issue_created_at).
 			if re.search(r'(?m)^\s*createdAt\s*$', query):
 				issue_payload['createdAt'] = str((store.get('issue_created_at') or {}).get(str(issue_num), '2026-01-01T00:00:00Z'))
@@ -3435,14 +3533,14 @@ sys.exit(1)
 		assert real_python is not None
 		_write_exec(
 			bin_dir / "git",
-			r'''#!/usr/bin/env python3
-import json
+			"#!/usr/bin/env python3\n" + _POLLER_MOCK_STORE_LOCK_SNIPPET + r'''import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 store_path = Path(os.environ['GH_MOCK_STORE'])
+_mock_store_lock_acquire(store_path)
 store = json.loads(store_path.read_text(encoding='utf-8'))
 raw_args = sys.argv[1:]
 real_git = os.environ.get('REAL_GIT_BIN', 'git')
@@ -3474,12 +3572,12 @@ if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and 
 
 if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCESS', '') == 'true':
 	store.setdefault('git_push_calls', []).append(args[1:])
-	store_path.write_text(json.dumps(store), encoding='utf-8')
+	_mock_store_write_atomic(store_path, json.dumps(store))
 	sys.exit(0)
 
 if args and args[0] == 'commit' and any('[orchestrator-fix]' in arg for arg in args[1:]):
 	store.setdefault('review_blocked_fix_commit_calls', []).append(args[1:])
-	store_path.write_text(json.dumps(store), encoding='utf-8')
+	_mock_store_write_atomic(store_path, json.dumps(store))
 
 if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
 	sys.exit(1)
@@ -3492,7 +3590,7 @@ if args[:2] == ['worktree', 'add'] and os.environ.get('MOCK_GIT_WORKTREE_ADD_FAI
 	sys.exit(1)
 if args[:2] == ['worktree', 'add']:
 	store.setdefault('git_worktree_add_calls', []).append(args[2:])
-	store_path.write_text(json.dumps(store), encoding='utf-8')
+	_mock_store_write_atomic(store_path, json.dumps(store))
 
 if args and args[0] == 'fetch' and len([a for a in args[1:] if a not in ('--no-tags', 'origin')]) > 1:
 	# Several refspecs in one call (the integration judge fetches both
@@ -3519,7 +3617,7 @@ if args and args[0] == 'fetch':
 		calls = store.setdefault('git_fetch_calls', {})
 		calls[refspec] = int(calls.get(refspec, 0)) + 1
 		fail_after = store.get('mock_git_fetch_fail_after', {}).get(refspec)
-		store_path.write_text(json.dumps(store), encoding='utf-8')
+		_mock_store_write_atomic(store_path, json.dumps(store))
 		if fail_after is not None and calls[refspec] > int(fail_after):
 			sys.exit(1)
 	if refspec and ':' in refspec:
@@ -3567,6 +3665,9 @@ if args and args[0] == 'fetch':
 					sys.exit(update_ref.returncode)
 				sys.exit(1)
 
+# The store is not touched past this point; let a concurrent fake (for
+# example a `done < <(git diff ...)` loop body) run while real git works.
+_mock_store_lock_release()
 proc = subprocess.run([real_git, *raw_args])
 sys.exit(proc.returncode)
 ''',
@@ -3634,6 +3735,7 @@ print(json.dumps(parsed))
 			# Use the interpreter running the tests (not a hardcoded /usr/bin/python3);
 			# an env shebang would resolve to this shim itself on PATH and recurse.
 			f"#!{sys.executable}\n"
+			+ _POLLER_MOCK_STORE_LOCK_SNIPPET
 			+ r'''import json
 import os
 import subprocess
@@ -3656,12 +3758,14 @@ def _load_store() -> dict:
 		return {}
 	if not store_path.exists():
 		return {}
+	if os.environ.get("GH_MOCK_STORE", ""):
+		_mock_store_lock_acquire(store_path)
 	return json.loads(store_path.read_text(encoding="utf-8"))
 
 def _save_store(store: dict) -> None:
 	if not store_path:
 		return
-	store_path.write_text(json.dumps(store), encoding="utf-8")
+	_mock_store_write_atomic(store_path, json.dumps(store))
 
 if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "actions-runs-cache":
 	store = _load_store()
@@ -4080,6 +4184,7 @@ if len(args) >= 2 and _script_matches(args[0], "scripts/orchestrate_state_v2.py"
 		}))
 		sys.exit(0)
 
+_mock_store_lock_release()
 proc = subprocess.run([real_python, *args])
 sys.exit(proc.returncode)
 ''',
@@ -10385,6 +10490,92 @@ def test_security_pass_external_finalize_route_blocks_then_clean_pass_completes(
 			assert f"Security pass audited `{head_sha}`." in complete_bodies[0]
 
 
+def test_poller_mock_store_concurrent_writers_keep_every_update() -> None:
+	"""#10019: the poller sandbox's fakes share one GH_MOCK_STORE. Concurrent
+	read-modify-write must not lose an update or expose a half-written store,
+	a nested fake (GH_MOCK_STORE_LOCK_HELD=1) must not wait on its parent, and
+	every store writer `_run_poller` installs must use the shared lock."""
+	import fcntl
+	import inspect
+
+	writer_count = 24
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_dir = Path(tmp)
+		store_file = tmp_dir / "gh_store.json"
+		store_file.write_text(json.dumps({"pr_get_calls": {}}), encoding="utf-8")
+		writer_script = tmp_dir / "mock_store_writer.py"
+		writer_script.write_text(
+			_POLLER_MOCK_STORE_LOCK_SNIPPET
+			+ "import json\n"
+			"import os\n"
+			"import time\n"
+			"from pathlib import Path\n"
+			"store_path = Path(os.environ['GH_MOCK_STORE'])\n"
+			"_mock_store_lock_acquire(store_path)\n"
+			"store = json.loads(store_path.read_text(encoding='utf-8'))\n"
+			"calls = store.setdefault('pr_get_calls', {})\n"
+			"calls['395'] = int(calls.get('395', 0)) + 1\n"
+			"time.sleep(0.01)\n"
+			"_mock_store_write_atomic(store_path, json.dumps(store))\n",
+			encoding="utf-8",
+		)
+		writer_env = {key: value for key, value in os.environ.items() if key != "GH_MOCK_STORE_LOCK_HELD"}
+		writer_env["GH_MOCK_STORE"] = str(store_file)
+		writer_procs = [
+			subprocess.Popen(
+				[sys.executable, str(writer_script)],
+				env=writer_env,
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE,
+				text=True,
+			)
+			for _ in range(writer_count)
+		]
+		writer_results = []
+		for writer_proc in writer_procs:
+			writer_stdout, writer_stderr = writer_proc.communicate(timeout=120)
+			writer_results.append((writer_proc.returncode, writer_stdout, writer_stderr))
+		assert all(result[0] == 0 for result in writer_results), writer_results
+		assert not any("continuing unlocked" in result[2] for result in writer_results), writer_results
+		final_store = json.loads(store_file.read_text(encoding="utf-8"))
+		assert final_store["pr_get_calls"]["395"] == writer_count, final_store
+
+		# A nested fake inherits GH_MOCK_STORE_LOCK_HELD=1 from its parent and
+		# must proceed while the parent still holds the lock.
+		with open(f"{store_file}.lock", "a+", encoding="utf-8") as parent_lock_handle:
+			fcntl.flock(parent_lock_handle.fileno(), fcntl.LOCK_EX)
+			nested_result = subprocess.run(
+				[sys.executable, str(writer_script)],
+				env={**writer_env, "GH_MOCK_STORE_LOCK_HELD": "1"},
+				capture_output=True,
+				text=True,
+				check=False,
+				timeout=20,
+			)
+			# Past the bounded wait a fake must say on stderr that it continues
+			# unlocked, so a degraded run is visible rather than a silent race.
+			timed_out_result = subprocess.run(
+				[sys.executable, str(writer_script)],
+				env={**writer_env, "GH_MOCK_STORE_LOCK_WAIT_SECONDS": "0.2"},
+				capture_output=True,
+				text=True,
+				check=False,
+				timeout=20,
+			)
+		assert nested_result.returncode == 0, nested_result.stderr
+		assert timed_out_result.returncode == 0, timed_out_result.stderr
+		assert "lock wait exceeded" in timed_out_result.stderr and "continuing unlocked" in timed_out_result.stderr
+		assert json.loads(store_file.read_text(encoding="utf-8"))["pr_get_calls"]["395"] == writer_count + 2
+		assert not list(tmp_dir.glob(".mock-store-*.tmp"))
+
+	run_poller_source = inspect.getsource(_run_poller)
+	# gh, git and python3 fakes plus the tg_cleanup_msgs / tg_send_tracked heredocs.
+	assert run_poller_source.count("_POLLER_MOCK_STORE_LOCK_SNIPPET") == 5
+	assert run_poller_source.count("_mock_store_lock_acquire(") == 5
+	assert "store_path.write_text(" not in run_poller_source
+	assert '"#!/usr/bin/env python3\\n" + _POLLER_MOCK_STORE_LOCK_SNIPPET' in run_poller_source
+
+
 def test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted() -> None:
 	final_pr = {
 		"number": 395,
@@ -10417,12 +10608,56 @@ def test_security_pass_external_finalize_uses_verified_pr_head_when_integration_
 		pull_ref_shas={395: "__integration_head__"},
 	)
 
-	assert result["latest_state"]["status"] == "complete"
-	assert result["latest_state"]["security_pass_status"] == "passed"
-	assert result["latest_state"]["security_pass_head_sha"] == result["security_audit_capture"]["diff_head"]
-	assert result["pr_get_calls"]["395"] == 1
-	assert result["git_fetch_calls"]["refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head"] == 2
-	assert "EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=branch_deleted reason=branch_absent" in result["stdout"] + result["stderr"]
+	# Diagnostics only (issue #9869): a CI failure of this test printed an
+	# empty message, so each assert below names the values it saw. Every
+	# lookup here is safe, so building it never changes which assert fails.
+	_fc_result = result if isinstance(result, dict) else {}
+	_fc_state = _fc_result.get("latest_state") or {}
+	if not isinstance(_fc_state, dict):
+		_fc_state = {}
+	_fc_capture = _fc_result.get("security_audit_capture") or {}
+	if not isinstance(_fc_capture, dict):
+		_fc_capture = {}
+	_fc_output = f"{_fc_result.get('stdout') or ''}\n{_fc_result.get('stderr') or ''}"
+	_fc_lines = [
+		line[:400]
+		for line in _fc_output.splitlines()
+		if "EXTERNAL_FINALIZE_DELIVERY" in line or "SECURITY_PASS" in line or "security-pass" in line
+	][-40:]
+	failure_context = (
+		"state="
+		+ json.dumps(
+			{
+				key: _fc_state.get(key)
+				for key in (
+					"status",
+					"security_pass_status",
+					"security_pass_head_sha",
+					"final_merge_status",
+					"final_merge_pr",
+				)
+			},
+			sort_keys=True,
+			default=str,
+		)
+		+ f" diff_head={_fc_capture.get('diff_head')!r}"
+		+ f" pr_get_calls={_fc_result.get('pr_get_calls')!r}"
+		+ f" git_fetch_calls={_fc_result.get('git_fetch_calls')!r}"
+		+ " log_lines="
+		+ "\n".join(_fc_lines)
+	)
+
+	# The asserts read the safe copies so a missing key or None container
+	# fails as an AssertionError carrying failure_context, not a bare
+	# KeyError/TypeError. The explicit key/dict checks keep each assert as
+	# strict as the raw subscripts were (None == None must not pass).
+	assert _fc_state.get("status") == "complete", failure_context
+	assert _fc_state.get("security_pass_status") == "passed", failure_context
+	assert isinstance(_fc_result.get("security_audit_capture"), dict) and "diff_head" in _fc_capture, failure_context
+	assert "security_pass_head_sha" in _fc_state and _fc_state.get("security_pass_head_sha") == _fc_capture.get("diff_head"), failure_context
+	assert (_fc_result.get("pr_get_calls") or {}).get("395") == 1, failure_context
+	assert (_fc_result.get("git_fetch_calls") or {}).get("refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head") == 2, failure_context
+	assert "EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=branch_deleted reason=branch_absent" in (_fc_result.get("stdout") or "") + (_fc_result.get("stderr") or ""), failure_context
 
 
 def _external_finalize_delivery_run(
@@ -34578,7 +34813,8 @@ def test_heal_stale_close_wiring() -> None:
 	assert hold.index("_heal_stale_close_check ") < hold.index("_heal_counterfactual_hold_notify ")
 	assert 'if [ "${HEAL_STALE_CLOSE_OUTCOME:-}" != "closed" ]; then' in hold
 	# The batched details map carries the issue createdAt (no new call).
-	assert "          state\n          createdAt\n          body\n" in poller
+	# Issue #10059 added stateReason between state and createdAt (same call).
+	assert "          state\n          stateReason\n          createdAt\n          body\n" in poller
 	assert "created_at: (.value.createdAt // null)," in poller
 	body = poller.split("_heal_stale_close_check()\n{", 1)[1].split("\n}\n", 1)[0]
 	assert "-f state=closed -f state_reason=completed" in body
@@ -35063,6 +35299,77 @@ def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
 	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=not_final_merge_exhausted" in log
 	assert "Project already failed, skipping." in log
 	assert result["latest_state"]["status"] == "failed"
+
+
+# Issue #9534: judge-created issues get the scope companions (tests/**,
+# changelog.d/*, agents.d/*) in their files_touched block.
+def _judge_companions_run(body: str, *, enabled: str | None = None, scripts_dir: Path | None = None) -> tuple[str, str]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	source = _extract_bash_function(script, "add_files_touched_companions() {") \
+		+ _extract_bash_function(script, "apply_judge_files_touched_companions() {")
+	program = source + '\napply_judge_files_touched_companions "$1" fixup "fix-1"\nprintf "%s" "${JUDGE_COMPANIONS_BODY_OUT}" > "$2"\n'
+	with tempfile.TemporaryDirectory() as tmp:
+		out_file = Path(tmp) / "body.txt"
+		env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONDONTWRITEBYTECODE": "1"}
+		if enabled is not None:
+			env["JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED"] = enabled
+		# The helper finds files_touched_scope_guard.py next to the script ($0's directory).
+		cwd = scripts_dir if scripts_dir is not None else REPO_ROOT / "scripts"
+		result = subprocess.run(["bash", "-c", program, "./poller", body, str(out_file)], cwd=cwd, env=env,
+			capture_output=True, text=True, check=False, timeout=60)
+		assert result.returncode == 0, result.stderr
+		return result.stdout, out_file.read_text(encoding="utf-8")
+
+
+def test_judge_companions_added_at_the_block_indent() -> None:
+	body = "Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n\nNotes after."
+	log, out = _judge_companions_run(body)
+	assert out == ("Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n  - tests/**\n"
+		"  - changelog.d/*\n  - agents.d/*\n\nNotes after.")
+	assert "JUDGE_SCOPE_COMPANIONS outcome=added issue_kind=fixup local_id=fix-1 added=3" in log
+
+
+def test_judge_companions_only_missing_entries_are_added() -> None:
+	body = "files_touched:\n  - tests/**\n  - src/a.py"
+	log, out = _judge_companions_run(body)
+	assert out == "files_touched:\n  - tests/**\n  - src/a.py\n  - changelog.d/*\n  - agents.d/*"
+	assert "added=2" in log
+	full = "files_touched:\n  - agents.d/*\n  - tests/**\n  - changelog.d/*"
+	log, out = _judge_companions_run(full)
+	assert out == full and "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=fixup local_id=fix-1 added=0" in log
+
+
+def test_judge_companions_flush_list_and_no_block() -> None:
+	log, out = _judge_companions_run("Body\nfiles_touched:\n- src/a.py\n- src/b.py\nTrailer")
+	assert out == "Body\nfiles_touched:\n- src/a.py\n- src/b.py\n- tests/**\n- changelog.d/*\n- agents.d/*\nTrailer"
+	log, out = _judge_companions_run("No scope list in this body.")
+	assert out == "No scope list in this body."
+	assert "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=fixup local_id=fix-1 added=0 reason=no_block" in log
+
+
+def test_judge_companions_disabled_and_helper_failure_keep_the_body() -> None:
+	body = "files_touched:\n  - src/a.py"
+	for value in ("false", "FALSE", " false "):
+		log, out = _judge_companions_run(body, enabled=value)
+		assert out == body
+		assert "outcome=skipped issue_kind=fixup local_id=fix-1 added=0 reason=disabled" in log
+	with tempfile.TemporaryDirectory() as tmp:
+		log, out = _judge_companions_run(body, scripts_dir=Path(tmp))
+	assert out == body
+	assert "outcome=skipped issue_kind=fixup local_id=fix-1 added=0 reason=helper_failed" in log
+
+
+def test_judge_companions_wired_at_both_judge_issue_sites() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED="${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}"' in script
+	fixup = _extract_bash_function(script, "create_judge_fixup_issues_from_verdict() {")
+	call = 'apply_judge_files_touched_companions "${FIX_BODY}" fixup "${FIX_ID}"\n          FIX_BODY="${JUDGE_COMPANIONS_BODY_OUT}"'
+	assert call in fixup and fixup.index(call) < fixup.index('FULL_FIX_BODY="${FIX_BODY}')
+	addition = 'apply_judge_files_touched_companions "${NEW_BODY}" addition "${NEW_ID}"\n          NEW_BODY="${JUDGE_COMPANIONS_BODY_OUT}"'
+	assert script.count(addition) == 1
+	assert script.index(addition) < script.index('FULL_NEW_BODY="${NEW_BODY}')
+	helper = _extract_bash_function(script, "add_files_touched_companions() {")
+	assert "python3 -I -B -c" in helper and "PIPELINE_PLAN_GRANT_COMPANIONS" in helper and "gh " not in helper
 
 
 # ---------------------------------------------------------------------------
@@ -35832,6 +36139,379 @@ def _check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths
 	assert res.returncode == 0, res.stdout + res.stderr
 	assert res.stdout.strip().splitlines()[-1] == "after=unset"
 	assert log.read_text(encoding="utf-8").splitlines() == ["fresh wf=ci.yml", "wait wf=ci.yml", "merge wf="]
+
+
+# Issue #10149 (re-implementation of #9546): the stall judge lists the linked
+# PR's review runs once, flags a review of the current head that waits for a
+# runner, and holds escalate_human / close_and_reissue while it does.
+_SJ_LIVE_PR = {
+	"number": 77,
+	"body": "Closes #10",
+	"state": "open",
+	"title": "AI implementation for issue #10",
+	"mergeable": True,
+	"mergeable_state": "clean",
+	"headRefName": "feature/stall-judge",
+	"headRefFromApi": "feature/stall-judge",
+	"headSha": "deadbeef",
+	"baseRefName": "main",
+}
+
+
+def _sj_live_review_run(**changes) -> dict:
+	run = {
+		"branch": "feature/stall-judge",
+		"name": "AI Review",
+		"workflowName": "AI Review",
+		"status": "queued",
+		"conclusion": "",
+		"headSha": "deadbeef",
+		"headBranch": "feature/stall-judge",
+		"databaseId": 555,
+		"createdAt": "2999-01-01T00:00:00Z",
+	}
+	run.update(changes)
+	return run
+
+
+def _run_stall_judge_live_review_poller(action: str = "escalate_human", **overrides):
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	kwargs = {
+		"state": state,
+		"enable_validation": "false",
+		"max_validate_cycles": "3",
+		"issue_labels": {10: ["ai:implementing"]},
+		"issue_linked_prs": {10: 77},
+		"prs": [dict(_SJ_LIVE_PR)],
+		"enable_stall_human_terminalization": "true",
+		"mock_stall_judge_json": {"action": action, "justification": "stuck", "target_pr": None, "head_ref": None},
+	}
+	kwargs.update(overrides)
+	return _run_poller(**kwargs)
+
+
+def _sj_judge_comment_bodies(result: dict) -> list[str]:
+	bodies = []
+	for issue in result["issues"].values():
+		for comment in issue.get("comments", []):
+			body = comment.get("body", "") if isinstance(comment, dict) else str(comment)
+			if body.startswith("## 🧑‍⚖️ Stall Judge"):
+				bodies.append(body)
+	return bodies
+
+
+def test_stall_judge_live_review_runs_holds_escalate_when_review_queued():
+	result = _run_stall_judge_live_review_poller(active_autofix_runs=[_sj_live_review_run()])
+	out = result["stdout"]
+	assert result["stall_judge_run_listings"] == ["feature/stall-judge"], out[-4000:]
+	assert "STALL_JUDGE_LIVE_REVIEW_RUNS issue=10 pr=77 outcome=ok runs=1 waiting=true" in out, out[-4000:]
+	assert "STALL_RECOVERY issue=10 reason=review_waiting_for_runner held=escalate_human pr=77 run=555 phase=ai:implementing" in out, out[-4000:]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+	bodies = _sj_judge_comment_bodies(result)
+	assert bodies, "the judge comment still posts"
+	assert "**Decision (effective):** escalate_human (held: review_waiting_for_runner)" in bodies[-1]
+	assert '"review_waiting_for_runner":true' in bodies[-1]
+	assert '"head_sha":"deadbeef"' in bodies[-1]
+
+
+def test_stall_judge_live_review_runs_holds_normalized_escalate_with_terminalization_off():
+	# Default config: the judge's escalate_human is normalized to the ladder
+	# action, which must be held too while the review waits for a runner.
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		enable_stall_human_terminalization="false",
+	)
+	out = result["stdout"]
+	assert "outcome=ok runs=1 waiting=true" in out, out[-4000:]
+	assert "STALL_RECOVERY issue=10 reason=review_waiting_for_runner held=" in out, out[-4000:]
+	assert "held=escalate_human" not in out, out[-4000:]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+	bodies = _sj_judge_comment_bodies(result)
+	assert bodies and "**Decision (judge):** escalate_human" in bodies[-1]
+	assert "(held: review_waiting_for_runner)" in bodies[-1]
+
+
+def test_stall_judge_live_review_runs_holds_close_and_reissue_when_review_queued():
+	result = _run_stall_judge_live_review_poller(action="close_and_reissue", active_autofix_runs=[_sj_live_review_run()])
+	out = result["stdout"]
+	assert "reason=review_waiting_for_runner held=close_and_reissue pr=77" in out, out[-4000:]
+	# Held, not mapped to skip: the linked PR is never closed.
+	assert not any("pulls/77" in json.dumps(call) and "state=closed" in json.dumps(call) for call in result["api_calls"])
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+
+
+def test_stall_judge_live_review_runs_switch_off_keeps_cached_outcomes():
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		env_overrides={"STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED": "false"},
+	)
+	out = result["stdout"]
+	assert result.get("stall_judge_run_listings", []) == []
+	assert "STALL_JUDGE_LIVE_REVIEW_RUNS issue=10 pr=77 outcome=disabled runs=0 waiting=false" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner" not in out
+	bodies = _sj_judge_comment_bodies(result)
+	assert bodies
+	assert "review_waiting_for_runner" not in bodies[-1]
+	assert '"head_sha"' not in bodies[-1]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_listing_failure_fails_open():
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		mock_store_extra={"stall_judge_run_listing_fail": True},
+	)
+	out = result["stdout"]
+	assert "STALL_JUDGE_LIVE_REVIEW_RUNS issue=10 pr=77 outcome=listing_unavailable runs=0 waiting=false" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner" not in out
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_completed_runs_listed_and_capped():
+	runs = [
+		_sj_live_review_run(databaseId=600 + idx, status="completed", conclusion="failure", createdAt=f"2026-11-2{idx}T00:00:00Z")
+		for idx in range(7)
+	]
+	result = _run_stall_judge_live_review_poller(active_autofix_runs=runs)
+	out = result["stdout"]
+	assert "outcome=ok runs=7 waiting=false" in out, out[-4000:]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	body = _sj_judge_comment_bodies(result)[-1]
+	diag = json.loads(body.split("```json", 1)[1].split("```", 1)[0])
+	outcomes = diag["recent_review_workflow_outcomes"]
+	assert [entry["id"] for entry in outcomes] == [606, 605, 604, 603, 602]
+	assert all(entry["head_sha"] == "deadbeef" for entry in outcomes)
+	assert diag["review_waiting_for_runner"] is False
+
+
+def test_stall_judge_live_review_runs_wedged_queued_run_does_not_hold():
+	result = _run_stall_judge_live_review_poller(active_autofix_runs=[_sj_live_review_run(createdAt="2000-01-01T00:00:00Z")])
+	out = result["stdout"]
+	assert "outcome=ok runs=1 waiting=false" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner" not in out
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_old_waiting_run_does_not_hold():
+	# The wedged-queued cutoff bounds every unstarted status, not only `queued`.
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run(status="waiting", createdAt="2000-01-01T00:00:00Z")]
+	)
+	out = result["stdout"]
+	assert "outcome=ok runs=1 waiting=false" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner" not in out
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_held_cache_replay_keeps_replay_count():
+	# A held tick that replays the cached verdict must not use up the replay
+	# budget, or MAX_JUDGE_REPLAY forces escalate_human once the review starts.
+	first = _run_stall_judge_live_review_poller(active_autofix_runs=[_sj_live_review_run()])
+	cache = first["latest_state"].get("judge_decision_cache") or {}
+	assert cache and all(entry.get("replay_count", 0) == 0 for entry in cache.values()), cache
+	second = _run_stall_judge_live_review_poller(
+		state=json.loads(json.dumps(first["latest_state"])),
+		active_autofix_runs=[_sj_live_review_run()],
+	)
+	out = second["stdout"]
+	assert "replaying cached decision 'escalate_human'" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner held=escalate_human" in out, out[-4000:]
+	replayed = second["latest_state"].get("judge_decision_cache") or {}
+	assert replayed and all(entry.get("replay_count", 0) == 0 for entry in replayed.values()), replayed
+	assert "ai:needs-human" not in second["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_holds_unparseable_judge_fallback_escalate():
+	# With terminalization on, the ai:implementing ladder's fallback at
+	# recovery count 2 is escalate_human; an unparseable judge reply must not
+	# escalate while a review of the PR's head waits for a runner.
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		env_overrides={"MOCK_STALL_JUDGE_JSON": "no verdict here"},
+	)
+	out = result["stdout"]
+	assert "Could not parse stall judge output for #10; falling back to escalate_human" in out, out[-4000:]
+	assert "STALL_RECOVERY issue=10 reason=review_waiting_for_runner held=escalate_human pr=77 run=555 phase=ai:implementing" in out, out[-4000:]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Issue #10059: a wave item closed as already delivered (closed as completed,
+# ai:closed, no blocking failure label) gets a WARNING and its own completion
+# comment heading instead of `State: failed` and the CRITICAL page.
+# ---------------------------------------------------------------------------
+
+_CLOSED_DELIVERED_JUDGE_JSON = {
+	"status": "in_progress",
+	"justification": "closed item delivered by another PR",
+	"assessment": "judge reviews the wave",
+	"new_issues": [],
+	"issues_to_revert": [],
+}
+
+
+def _closed_kind_state(issue_nums: list[int]) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": f"issue-{n}", "github_issue": n, "status": "pending"} for n in issue_nums
+	]
+	state["issue_number_map"] = {f"issue-{n}": n for n in issue_nums}
+	state["total_issues"] = len(issue_nums)
+	return state
+
+
+def _run_closed_kind_poller(state: dict, reasons: dict[int, str | None], labels: dict[int, list[str]]) -> dict:
+	extra_fields = {str(n): {"state_reason": r} for n, r in reasons.items() if r}
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels=labels,
+		issue_closed={n: True for n in labels},
+		capture_telegram_calls=True,
+		codex_json=_CLOSED_DELIVERED_JUDGE_JSON,
+		mock_store_extra={"issue_extra_fields": extra_fields},
+	)
+
+
+def _completion_comment(result: dict) -> str:
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	return next(body for body in bodies if "<!-- orchestrator:completion-status -->" in body)
+
+
+def _closed_without_merge_criticals(result: dict) -> list[dict]:
+	return [
+		n for n in result["telegram_notifications"]
+		if n.get("level") == "CRITICAL" and "closed without merge" in n.get("message", "")
+	]
+
+
+def _delivered_warnings(result: dict) -> list[dict]:
+	return [
+		n for n in result["telegram_notifications"]
+		if n.get("level") == "WARNING" and "closed as already delivered" in n.get("message", "")
+	]
+
+
+def _assert_wave_judge_ran(result: dict, case: object = None) -> None:
+	"""The wave judge was called and its verdict parsed, not only prompted.
+
+	judge_prompt.txt is written before the over-cap skip and the isolation
+	skip, so its existence alone does not prove the judge ran. A parsed
+	verdict is what sets judge_last_fingerprint (from the mock justification).
+	"""
+	combined = result["stdout"] + result["stderr"]
+	assert "Judge attempt 1/" in combined, case
+	assert "Wave judge isolation unavailable" not in combined, case
+	assert "Judge failed for tracking issue" not in combined, case
+	assert "Could not parse judge output" not in combined, case
+	state = result["latest_state"] or result.get("state_on_disk") or {}
+	assert state.get("judge_last_fingerprint"), case
+
+
+def test_completion_status_closed_as_delivered_warns_once() -> None:
+	first = _run_closed_kind_poller(_closed_kind_state([10]), {10: "completed"}, {10: ["ai:closed"]})
+	comment = _completion_comment(first)
+	assert "<!-- status:failed -->" not in comment
+	assert "**State:** `failed`" not in comment
+	assert "Wave issues closed without merge / implementation-failed" not in comment
+	assert "Project cannot complete until these are resolved" not in comment
+	assert "**Wave issues closed as already delivered:**" in comment
+	assert "- #10: closed (" in comment
+	assert _closed_without_merge_criticals(first) == []
+	warnings = _delivered_warnings(first)
+	assert len(warnings) == 1
+	assert "#10" in warnings[0]["message"]
+	assert "project judge will decide" in warnings[0]["message"]
+	latest = first["latest_state"]
+	assert latest.get("completion_status_delivered_closed_alerted") == [10]
+	assert latest.get("completion_status_failure_alert_sent") is not True
+	combined = first["stdout"] + first["stderr"]
+	assert "COMPLETION_DELIVERED_CLOSED tracking_issue=192 items=10 alert=sent" in combined
+	assert '"any_failed": true' in combined or '"any_failed":true' in combined
+	assert '"any_failed_blocking": false' in combined or '"any_failed_blocking":false' in combined
+
+	second = _run_closed_kind_poller(latest, {10: "completed"}, {10: ["ai:closed"]})
+	assert _delivered_warnings(second) == []
+	assert _closed_without_merge_criticals(second) == []
+	assert "COMPLETION_DELIVERED_CLOSED tracking_issue=192 items=10 alert=already_sent" in second["stdout"] + second["stderr"]
+
+	# The judge path is unchanged: same invocation as the blocking case.
+	blocking = _run_closed_kind_poller(_closed_kind_state([10]), {10: "not_planned"}, {10: ["ai:closed"]})
+	assert first["judge_prompt"]
+	_assert_wave_judge_ran(first)
+	_assert_wave_judge_ran(blocking)
+	assert bool(first["judge_prompt"]) == bool(blocking["judge_prompt"])
+	assert first["latest_state"].get("judge_cycle") == blocking["latest_state"].get("judge_cycle")
+
+
+def test_completion_status_closed_not_planned_keeps_critical() -> None:
+	for reasons, labels in (
+		({10: "not_planned"}, {10: ["ai:closed"]}),
+		({10: None}, {10: ["ai:closed"]}),
+		({10: "completed"}, {10: ["ai:closed", "ai:plan-failed"]}),
+	):
+		result = _run_closed_kind_poller(_closed_kind_state([10]), reasons, labels)
+		comment = _completion_comment(result)
+		assert "<!-- status:failed -->" in comment
+		assert "**Wave issues closed without merge / implementation-failed:**" in comment
+		assert "Project cannot complete until these are resolved" in comment
+		assert "closed as already delivered" not in comment
+		assert len(_closed_without_merge_criticals(result)) == 1
+		assert _delivered_warnings(result) == []
+		assert result["latest_state"].get("completion_status_failure_alert_sent") is True
+		# The judge is invoked as today for every blocking variant.
+		assert result["judge_prompt"], (reasons, labels)
+		_assert_wave_judge_ran(result, (reasons, labels))
+
+
+def test_completion_status_mixed_closed_kinds_keeps_critical() -> None:
+	result = _run_closed_kind_poller(
+		_closed_kind_state([10, 11]),
+		{10: "completed", 11: "not_planned"},
+		{10: ["ai:closed"], 11: ["ai:closed"]},
+	)
+	comment = _completion_comment(result)
+	assert "<!-- status:failed -->" in comment
+	assert "**Wave issues closed without merge / implementation-failed:**" in comment
+	assert "- #10: closed (" in comment and "- #11: closed (" in comment
+	assert "Project cannot complete until these are resolved" in comment
+	assert "closed as already delivered" not in comment
+	assert len(_closed_without_merge_criticals(result)) == 1
+	assert _delivered_warnings(result) == []
+	# The judge is invoked as today for the mixed case too.
+	assert result["judge_prompt"]
+	_assert_wave_judge_ran(result)
+
+
+def test_completion_status_two_delivered_items_warn_once_each() -> None:
+	"""One WARNING per project and item, not one combined message per tick."""
+	result = _run_closed_kind_poller(
+		_closed_kind_state([10, 11]),
+		{10: "completed", 11: "completed"},
+		{10: ["ai:closed"], 11: ["ai:closed"]},
+	)
+	comment = _completion_comment(result)
+	assert "**Wave issues closed as already delivered:**" in comment
+	assert "- #10: closed (" in comment and "- #11: closed (" in comment
+	assert _closed_without_merge_criticals(result) == []
+	warnings = _delivered_warnings(result)
+	assert len(warnings) == 2
+	assert ["#10" in w["message"] for w in warnings] == [True, False]
+	assert ["#11" in w["message"] for w in warnings] == [False, True]
+	assert result["latest_state"].get("completion_status_delivered_closed_alerted") == [10, 11]
+	combined = result["stdout"] + result["stderr"]
+	assert "COMPLETION_DELIVERED_CLOSED tracking_issue=192 items=10,11 alert=sent" in combined
+	# The judge is invoked as today when several delivered items warn.
+	_assert_wave_judge_ran(result)
 
 
 if __name__ == "__main__":

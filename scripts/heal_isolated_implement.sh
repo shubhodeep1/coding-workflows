@@ -83,6 +83,20 @@ mkdir -m 0755 "${root}/source"
 host_git_dir="${GIT_DIR:-}"
 snapshot_args=()
 [ -z "${host_git_dir}" ] || snapshot_args+=("${host_git_dir}")
+# Issue #9920 (plan Phase 5 / R3): freeze the trusted plan grant's literal
+# .github/ai/<file> paths into the snapshot. review_untrusted_workspace.py
+# writes them to a manifest sidecar that the gate/repro manifest copies below
+# carry, so no transfer needs the flag. Switch
+# GITHUB_AI_PLAN_GRANT_WRITE_ENABLED (default true; the helper re-validates the
+# value and every entry). Any failure here means no grant, as before.
+heal_github_ai_grant_switch="${GITHUB_AI_PLAN_GRANT_WRITE_ENABLED:-true}"
+heal_github_ai_grant_file="${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}"
+if [ "${heal_github_ai_grant_switch,,}" = true ] && [ -f "${heal_github_ai_grant_file}" ] && [ ! -L "${heal_github_ai_grant_file}" ]; then
+	if jq -c '[select(.trusted == true and ((.open // false) == false)) | .paths[]? | strings | select(test("^\\.github/ai/[^/]+$"))]' \
+		"${heal_github_ai_grant_file}" > "${root}/github_ai_grants.json" 2>/dev/null; then
+		snapshot_args+=(--granted-paths-file "${root}/github_ai_grants.json")
+	fi
+fi
 PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" "${snapshot_args[@]}"
 # Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh).
 heal_sandbox_context="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox"
@@ -630,8 +644,10 @@ def cmd_scope(support, workspace, manifest, scope_file):
 		man = Path(manifest)
 		commands = ruw.load_admitted_commands(man)
 		baseline = json.loads(man.read_text(encoding="utf-8"))
+		# Issue #9920: the same frozen plan grant transfer reads (manifest sidecar).
+		granted = ruw.frozen_granted_paths(man)
 		try:
-			results = {name: (data, mode) for name, data, mode in ruw.enumerate_workspace(Path(workspace), None, commands, strict=True)}
+			results = {name: (data, mode) for name, data, mode in ruw.enumerate_workspace(Path(workspace), None, commands, strict=True, granted=granted)}
 		except ValueError:
 			# The host transfer enumerates the same snapshot strictly and
 			# fails the same way, which the caller maps to exit 42.
@@ -642,12 +658,13 @@ def cmd_scope(support, workspace, manifest, scope_file):
 			new = results.get(name)
 			if new is not None and old == [hashlib.sha256(new[0]).hexdigest(), new[1]]:
 				continue
-			if not ruw.allowed(name, None, commands):
+			if not ruw.allowed(name, None, commands, granted=granted):
 				# The host transfer refuses it as unsafe_result_path (exit 42).
 				print("out_of_scope")
 				return 0
 			git_control = any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in name.split("/"))
-			if name.startswith((".github/ai/", ".claude/")) or git_control or not any(entry_matches(entry, name) for entry in scope):
+			github_ai_denied = name.startswith(".github/ai/") and name not in granted
+			if github_ai_denied or name.startswith(".claude/") or git_control or not any(entry_matches(entry, name) for entry in scope):
 				print("out_of_scope")
 				return 0
 			if new is not None and old is not None and new[1] != old[1]:

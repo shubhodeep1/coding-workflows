@@ -72,6 +72,10 @@ if "followup_comment" in fail and len(args) > 1 and args[1].startswith("repos/o/
 if args[:3] == ["api", "-X", "PATCH"]:
 	sys.exit(1 if "close" in fail else 0)
 if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
+	if os.environ.get("FAKE_GH_SIG_STDERR"):
+		# Issue #10176: what the signing shim writes on a fallback, plus an
+		# error body the gate must not echo.
+		sys.stderr.write("AI_COMMENT_SIG outcome=fallback reason=job_token_rate_limited issue=42 status=403\nHTTP 403: private error body\n")
 	if "comment_write" in fail and (fail != "comment_write_once" or sum(
 		json.loads(line)[:2] == args[:2] for line in open(os.environ["FAKE_GH_LOG"])
 	) == 1):
@@ -113,6 +117,22 @@ if args[0] == "api" and any("/actions/workflows/" in arg for arg in args):
 	if "runs" in fail or not os.environ.get("FAKE_GH_RUNS"):
 		sys.exit(1)
 	print(open(os.environ["FAKE_GH_RUNS"]).read())
+	sys.exit(0)
+if args[0] == "api" and "--paginate" in args and "repos/o/r/issues/42/comments?per_page=100" in args:
+	# Issue #10176: the gate's fresh comments read.
+	if "fresh_comments" in fail:
+		sys.exit(1)
+	if os.environ.get("FAKE_GH_FRESH_COMMENTS"):
+		print(open(os.environ["FAKE_GH_FRESH_COMMENTS"]).read())
+		sys.exit(0)
+# Issue #10017: the merge-lease read (git/matching-refs, then git/commits).
+if args[0] == "api" and len(args) > 1 and args[1] == "repos/o/r/git/matching-refs/merge-lease/main":
+	if "lease" in fail:
+		sys.exit(1)
+	print(os.environ.get("FAKE_GH_LEASE_REFS", "[]"))
+	sys.exit(0)
+if args[0] == "api" and len(args) > 1 and args[1].startswith("repos/o/r/git/commits/"):
+	print(os.environ.get("FAKE_GH_LEASE_COMMIT", "{}"))
 	sys.exit(0)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
@@ -172,13 +192,16 @@ def _comment(body: str, association: str = "OWNER", login: str = "owner", age_ho
 	return {"id": comment_id, "body": body, "author_association": association, "user": {"login": login}, "created_at": created}
 
 
-def _pr(base: str = "main", head_ref: str = "ai/issue-7", head_repo: str = "o/r", labels: tuple = ()) -> dict:
-	return {
+def _pr(base: str = "main", head_ref: str = "ai/issue-7", head_repo: str = "o/r", labels: tuple = (), comments: int | None = None) -> dict:
+	pr = {
 		"state": "open",
 		"base": {"ref": base},
 		"head": {"ref": head_ref, "sha": HEAD, "repo": {"full_name": head_repo}},
 		"labels": [{"name": name} for name in labels],
 	}
+	if comments is not None:
+		pr["comments"] = comments
+	return pr
 
 
 def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False, security_issues: list | str | None = None, branch_prs: list | str | None = None, head_prs: list | str | None = None, cwd: Path | None = None, real_git: bool = False):
@@ -234,6 +257,8 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY", "FAKE_GIT_DIFF_FILES", "GITHUB_ENV", "SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED", "SECURITY_PASS_DELTA_SINCE", "SECURITY_PASS_PRIOR_FINDINGS_FILE", "SECURITY_PASS_FINDINGS_FILE", "SECURITY_PASS_DELTA_SINCE_INPUT", "SECURITY_PASS_PRIOR_FINDINGS_INPUT", "SECURITY_PASS_AUDIT_CHECKOUT"):
 		run_env.pop(name, None)
 	for name in ("FAKE_GH_RUNS", "SECURITY_PASS_MAX_AUDIT_ATTEMPTS", "SECURITY_PASS_MAX_CONCURRENT_AUDITS", "SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES"):
+		run_env.pop(name, None)
+	for name in ("MERGE_LEASE_ENABLED", "MERGE_LEASE_MAX_HOLDERS", "MERGE_LEASE_REF_PREFIX", "PR_CHECKS_REPOSITORY", "FAKE_GH_LEASE_REFS", "FAKE_GH_LEASE_COMMIT"):
 		run_env.pop(name, None)
 	run_env["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] = "0"
 	# The pass defaults to off; tests that exercise it opt in, and None unsets a name.
@@ -322,6 +347,182 @@ def test_first_clean_review_dispatches_the_audit(tmp_path: Path) -> None:
 	assert ["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42", "-f", f"audit_diff_since={OLD}"] in calls
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert posted and posted[0][-1].endswith(_marker("pending", HEAD, 2))
+
+
+# ---------------------------------------------------------------------------
+# Issue #10176: a stale or unusable comments snapshot is read again, fresh,
+# before the gate dispatches an audit or posts a marker.
+# ---------------------------------------------------------------------------
+
+def _fresh_comments(tmp_path: Path, comments: list) -> str:
+	path = tmp_path / "fresh_comments.json"
+	path.write_text(json.dumps(comments), encoding="utf-8")
+	return str(path)
+
+
+def _comment_posts(calls: list) -> list:
+	return [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+
+
+def _audit_dispatches(calls: list) -> list:
+	return [call for call in calls if call[:2] == ["workflow", "run"]]
+
+
+@pytest.mark.parametrize("snapshot", ["empty", "missing", "unreadable"])
+def test_empty_or_unreadable_snapshot_with_fresh_clean_marker_ends_clean(tmp_path: Path, snapshot: str) -> None:
+	# The 2026-11-26 20:22 case (PR #10175): the job-start snapshot predates the
+	# audit's markers, while the PR already carries status=clean for the head.
+	env = {"FAKE_GH_FRESH_COMMENTS": _fresh_comments(tmp_path, [
+		_comment(_marker("pending", HEAD, 1), age_hours=0.5, comment_id=1),
+		_comment("ok\n" + _marker("clean", HEAD, 1), comment_id=2),
+	])}
+	if snapshot == "missing":
+		env["PR_ISSUE_COMMENTS_FILE"] = str(tmp_path / "missing.json")
+	elif snapshot == "unreadable":
+		(tmp_path / "garbage.json").write_text("not json", encoding="utf-8")
+		env["PR_ISSUE_COMMENTS_FILE"] = str(tmp_path / "garbage.json")
+	result, calls, output = _run(tmp_path, "gate", env=env)
+	assert result.returncode == 0, result.stderr
+	assert output == "hold=false\n" and "outcome=clean" in result.stdout
+	assert not _audit_dispatches(calls) and not _comment_posts(calls)
+	assert "source=fresh" in result.stdout
+	# One fresh read, and a re-entry repeats neither /user nor the read.
+	assert sum("--paginate" in call and "repos/o/r/issues/42/comments?per_page=100" in call for call in calls) == 1
+	assert sum(call[:2] == ["api", "user"] for call in calls) == 1
+
+
+@pytest.mark.parametrize("case", ["read_failed", "read_empty", "missing_snapshot_read_failed", "missing_snapshot_read_empty"])
+def test_failed_or_empty_fresh_comments_read_holds_markers_unverifiable(tmp_path: Path, case: str) -> None:
+	pr = _pr()
+	env: dict = {}
+	if case.endswith("read_failed"):
+		env["FAKE_GH_FAIL"] = "fresh_comments"
+		detail = "fresh_read_failed"
+	else:
+		env["FAKE_GH_FRESH_COMMENTS"] = _fresh_comments(tmp_path, [])
+		pr = _pr(comments=3)
+		detail = "fresh_read_empty"
+	if case.startswith("missing_snapshot"):
+		env["PR_ISSUE_COMMENTS_FILE"] = str(tmp_path / "missing.json")
+	result, calls, output = _run(tmp_path, "gate", pr=pr, env=env)
+	assert result.returncode == 0, result.stderr
+	assert output == "hold=true\nhold_reason=markers_unverifiable\n"
+	assert f"reason=markers_unverifiable detail={detail}" in result.stdout
+	# The hold still logs the view it rejects with the four fields.
+	assert re.search(r"outcome=markers_read comments=(unreadable|[0-9]+) markers=[0-9]+ author=owner source=[a-z_]+ ", result.stdout), result.stdout
+	if detail == "fresh_read_empty":
+		assert "outcome=markers_read comments=0 markers=0 author=owner source=fresh age_s=0 " in result.stdout
+	# No dispatch, no marker, so no cycle is counted.
+	assert not _audit_dispatches(calls) and not _comment_posts(calls)
+
+
+def test_empty_fresh_read_on_a_pr_without_comments_still_dispatches(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", pr=_pr(comments=0), env={"FAKE_GH_FRESH_COMMENTS": _fresh_comments(tmp_path, [])})
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert _comment_posts(calls)[0][-1].endswith(_marker("pending", HEAD, 1))
+
+
+def test_marker_reread_switch_off_holds_on_an_unusable_snapshot_as_before(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={
+		"PR_ISSUE_COMMENTS_FILE": str(tmp_path / "missing.json"),
+		"SECURITY_PASS_MARKER_REREAD_ENABLED": "false",
+		"FAKE_GH_FRESH_COMMENTS": _fresh_comments(tmp_path, [_comment(_marker("clean", HEAD, 1))]),
+	})
+	assert output == "hold=true\nhold_reason=markers_unverifiable\n"
+	assert "detail=" not in result.stdout
+	assert not any("--paginate" in call for call in calls)
+
+
+@pytest.mark.parametrize("dispatch_fails", [True, False])
+@pytest.mark.parametrize("reread, guard, expected_cycle", [("true", "true", 2), ("false", "true", 2), ("false", "false", 1)])
+def test_marker_cycle_number_is_never_reused(tmp_path: Path, reread: str, guard: str, expected_cycle: int, dispatch_fails: bool) -> None:
+	env = {
+		"FAKE_GH_FRESH_COMMENTS": _fresh_comments(tmp_path, [_comment(_marker("failed", HEAD, 1))]),
+		"SECURITY_PASS_MARKER_REREAD_ENABLED": reread,
+		"SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED": guard,
+	}
+	if dispatch_fails:
+		env["FAKE_GH_FAIL"] = "dispatch"
+	result, calls, output = _run(tmp_path, "gate", env=env)
+	posts = _comment_posts(calls)
+	status = "failed" if dispatch_fails else "pending"
+	assert len(posts) == 1 and posts[0][-1].endswith(_marker(status, HEAD, expected_cycle)), result.stdout
+	assert output == f"hold=true\nhold_reason={'dispatch_failed' if dispatch_fails else 'audit_dispatched'}\n"
+	if reread == "false" and guard == "true":
+		assert "outcome=cycle_renumbered from=1 to=2" in result.stdout
+	if reread == "false" and guard == "false":
+		# Both switches off: no fresh read at all, today's numbering.
+		assert not any("--paginate" in call for call in calls)
+
+
+def test_cycle_guard_without_reread_continues_when_the_fresh_read_fails(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={
+		"FAKE_GH_FAIL": "fresh_comments", "SECURITY_PASS_MARKER_REREAD_ENABLED": "false",
+	})
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert "outcome=cycle_guard result=unverified detail=fresh_read_failed" in result.stdout
+
+
+def test_gate_logs_the_markers_view(tmp_path: Path) -> None:
+	stale = [_comment(_marker("clean", OLD, 1)), _comment(_marker("clean", HEAD, 1), association="NONE", login="someone", comment_id=2)]
+	epoch = int(dt.datetime.now(dt.timezone.utc).timestamp()) - 30
+	(tmp_path / "comments.json.source").write_text(f"cache {epoch}\n", encoding="utf-8")
+	result, calls, output = _run(tmp_path, "gate", comments=stale)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert re.search(
+		r"SINGLE_ISSUE_SECURITY_PASS mode=gate pr=42 head=" + HEAD
+		+ r" outcome=markers_read comments=2 markers=1 author=owner source=cache age_s=[0-9]+ sig_shim=(on|off)$",
+		result.stdout, re.MULTILINE,
+	), result.stdout
+	assert re.search(r"outcome=markers_read comments=2 markers=1 author=owner source=fresh age_s=0 sig_shim=(on|off)$", result.stdout, re.MULTILINE)
+	# A sidecar outside the fixed set is not trusted.
+	bad = tmp_path / "bad"
+	bad.mkdir()
+	(bad / "comments.json.source").write_text("$(evil) 12x\n", encoding="utf-8")
+	result, calls, output = _run(bad, "gate", comments=stale)
+	assert re.search(r"outcome=markers_read comments=2 markers=1 author=owner source=unknown age_s=[0-9]+ ", result.stdout)
+	assert "evil" not in result.stdout
+
+
+def test_reentry_logs_the_fresh_view_once(tmp_path: Path) -> None:
+	# Snapshot: no marker for the head; fresh view: the head is clean.
+	env = {"FAKE_GH_FRESH_COMMENTS": _fresh_comments(tmp_path, [_comment("ok\n" + _marker("clean", HEAD, 1))])}
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("clean", OLD, 1))], env=env)
+	assert output == "hold=false\n" and "outcome=reread reason=markers_changed" in result.stdout, result.stdout
+	assert not _audit_dispatches(calls) and not _comment_posts(calls)
+	assert len(re.findall(r"outcome=markers_read .*source=fresh age_s=0 ", result.stdout)) == 1, result.stdout
+
+
+@pytest.mark.parametrize("token", ["cache_hit", "cache_miss", "fallback", "direct"])
+def test_markers_read_reports_the_sidecar_provenance(tmp_path: Path, token: str) -> None:
+	epoch = int(dt.datetime.now(dt.timezone.utc).timestamp()) - 600
+	(tmp_path / "comments.json.source").write_text(f"{token} {epoch}\n", encoding="utf-8")
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("clean", OLD, 1))])
+	match = re.search(rf"outcome=markers_read comments=1 markers=1 author=owner source={token} age_s=([0-9]+) ", result.stdout)
+	assert match and int(match.group(1)) >= 600, result.stdout
+
+
+def test_sig_shim_is_on_behind_the_gh_call_counter(tmp_path: Path) -> None:
+	# Production keeps the gh call counter first on PATH, ahead of the shim.
+	counter = tmp_path / "gh_call_counter.abc123"
+	shim = tmp_path / "ai_comment_sig_shim.def456"
+	for directory in (counter, shim):
+		directory.mkdir()
+		(directory / "gh").write_text("#!/usr/bin/env bash\nexec \"${FAKE_REAL_GH}\" \"$@\"\n", encoding="utf-8")
+		(directory / "gh").chmod(0o755)
+	bin_dir = tmp_path / "bin"
+	env = {"FAKE_REAL_GH": str(bin_dir / "gh"), "PATH": f"{counter}:{shim}:{bin_dir}:{os.environ['PATH']}"}
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("clean", OLD, 1))], env=env)
+	assert re.search(r"outcome=markers_read .* sig_shim=on$", result.stdout, re.MULTILINE), result.stdout
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("clean", OLD, 1))])
+	assert re.search(r"outcome=markers_read .* sig_shim=off$", result.stdout, re.MULTILINE), result.stdout
+
+
+@pytest.mark.parametrize("fail", ["", "dispatch"])
+def test_gate_echoes_only_allow_listed_signing_shim_lines(tmp_path: Path, fail: str) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_SIG_STDERR": "1", "FAKE_GH_FAIL": fail})
+	assert "AI_COMMENT_SIG outcome=fallback reason=job_token_rate_limited issue=42 status=403" in result.stdout
+	assert "private error body" not in result.stdout + result.stderr
 
 
 def test_pending_marker_write_failure_fails_closed_with_distinct_reason(tmp_path: Path) -> None:
@@ -1034,6 +1235,9 @@ def test_review_wiring() -> None:
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] == gate["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"]
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"] == gate["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"]
 	assert gate["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
+	# Issue #10017: the merge-lease holder exception to the audit throttle.
+	assert gate["env"]["MERGE_LEASE_ENABLED"] == "${{ vars.MERGE_LEASE_ENABLED || 'true' }}"
+	assert gate["env"]["MERGE_LEASE_MAX_HOLDERS"] == "${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}"
 	assert gate["if"] == steps["Enable auto-merge on PR"]["if"].replace(" && steps.single_issue_security_pass.outputs.hold != 'true'", "")
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
 		assert steps[name]["if"].endswith("&& steps.single_issue_security_pass.outputs.hold != 'true'")
@@ -2589,6 +2793,101 @@ def test_concurrent_audits_are_throttled_without_using_a_cycle(tmp_path: Path, a
 		assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
 	else:
 		assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=1" in result.stdout
+
+
+def _lease(holder_pr: int, expires_in: int = 3600) -> dict:
+	# Issue #10017: a held single-holder `merge-lease v1` record for main,
+	# built at test time so its expiry is relative to now.
+	now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+	message = "\n".join([
+		"merge-lease v1", "state=held", f"pr={holder_pr}", f"head={HEAD}", f"expires={now + expires_in}",
+		f"acquired={now - 600}", f"updated={now - 60}", "paths:", "scripts/x.sh",
+	])
+	return {
+		"FAKE_GH_LEASE_REFS": json.dumps([{"ref": "refs/merge-lease/main", "object": {"sha": "a" * 40}}]),
+		"FAKE_GH_LEASE_COMMIT": json.dumps({"tree": {"sha": "b" * 40}, "message": message}),
+	}
+
+
+def _lease_reads(calls: list) -> int:
+	return sum(1 for call in calls if any("git/matching-refs/merge-lease" in arg for arg in call))
+
+
+def _throttle_runs(tmp_path: Path, active: int) -> str:
+	runs = [_audit_run("in_progress" if n % 2 else "queued", None, 5, 1, pr=100 + n) for n in range(active)]
+	return _runs(tmp_path, runs)
+
+
+def test_lease_holder_skips_the_audit_throttle(tmp_path: Path) -> None:
+	env = {"FAKE_GH_RUNS": _throttle_runs(tmp_path, 3), "MERGE_LEASE_ENABLED": "true", "GH_RETRY_MAX_ATTEMPTS": "1", **_lease(42)}
+	result, calls, output = _run(tmp_path, "gate", env=env)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n", result.stdout + result.stderr
+	assert sum(call[:2] == ["workflow", "run"] for call in calls) == 1
+	assert any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	assert "outcome=dispatched cycle=1 " in result.stdout and "throttle=lease_holder_exempt" in result.stdout
+	assert "audit_throttled" not in result.stdout
+	assert _lease_reads(calls) == 1
+
+
+@pytest.mark.parametrize(
+	"case, active, extra, note, reads",
+	[
+		("other_holder", 3, {}, "", 1),
+		("no_ref", 3, {}, "", 1),
+		("read_fails", 3, {"FAKE_GH_FAIL": "lease"}, "lease_check=read_failed", 1),
+		("expired", 3, {}, "", 1),
+		("disabled_false", 3, {"MERGE_LEASE_ENABLED": "false"}, "", 0),
+		("disabled_unset", 3, {"MERGE_LEASE_ENABLED": None}, "", 0),
+		("over_cap", 4, {"MERGE_LEASE_MAX_HOLDERS": "1"}, "throttle=lease_holder_over_cap", 1),
+	],
+)
+def test_lease_holder_exemption_falls_back_to_the_throttle(tmp_path: Path, case: str, active: int, extra: dict, note: str, reads: int) -> None:
+	lease = {
+		"other_holder": _lease(77),
+		"no_ref": {"FAKE_GH_LEASE_REFS": "[]"},
+		"expired": _lease(42, expires_in=-60),
+	}.get(case, _lease(42))
+	env = {"FAKE_GH_RUNS": _throttle_runs(tmp_path, active), "MERGE_LEASE_ENABLED": "true", "GH_RETRY_MAX_ATTEMPTS": "1", **lease, **extra}
+	result, calls, output = _run(tmp_path, "gate", env=env)
+	assert output == "hold=true\nhold_reason=audit_throttled\n", result.stdout + result.stderr
+	assert f"reason=audit_throttled active={active} max=3 cycle=0" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	assert "throttle=lease_holder_exempt" not in result.stdout
+	if note:
+		assert note in result.stdout
+	else:
+		assert "throttle=" not in result.stdout and "lease_check=" not in result.stdout
+	assert _lease_reads(calls) == reads
+
+
+def test_lease_is_not_read_below_the_limit(tmp_path: Path) -> None:
+	env = {"FAKE_GH_RUNS": _throttle_runs(tmp_path, 2), "MERGE_LEASE_ENABLED": "true", "GH_RETRY_MAX_ATTEMPTS": "1", **_lease(42)}
+	result, calls, output = _run(tmp_path, "gate", env=env)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=1" in result.stdout
+	assert "throttle=" not in result.stdout
+	assert _lease_reads(calls) == 0
+
+
+def test_lease_check_never_sources_the_pr_checkouts_emit_event(tmp_path: Path) -> None:
+	# Issue #10017 review: the det-skip gate runs from the PR-head checkout with
+	# a sparse support copy that lacks emit_event.sh. gh_helpers.sh falls back
+	# to a cwd-relative scripts/emit_event.sh, so the lease check must cd into
+	# the support directory before sourcing it.
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("gh_helpers.sh", "pr_checks_lib.sh"):
+		(support / name).write_text((ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8")
+	pr_head = tmp_path / "pr_head"
+	(pr_head / "scripts").mkdir(parents=True)
+	sentinel = tmp_path / "pr_code_ran"
+	(pr_head / "scripts" / "emit_event.sh").write_text(f"touch {str(sentinel)!r}\n", encoding="utf-8")
+	env = {"FAKE_GH_RUNS": _throttle_runs(tmp_path, 3), "MERGE_LEASE_ENABLED": "true", "GH_RETRY_MAX_ATTEMPTS": "1", **_lease(42)}
+	result, calls, output = _run(tmp_path, "gate", env=env, cwd=pr_head)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n", result.stdout + result.stderr
+	assert "throttle=lease_holder_exempt" in result.stdout
+	assert _lease_reads(calls) == 1
+	assert not sentinel.exists()
 
 
 def test_throttle_fails_open_when_runs_cannot_be_listed(tmp_path: Path) -> None:

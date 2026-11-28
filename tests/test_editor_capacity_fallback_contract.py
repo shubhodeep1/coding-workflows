@@ -54,7 +54,9 @@ def test_fallback_model_declared_in_catalog() -> None:
 	# model_catalog_json at the catalog file. If apply_patch resolution or
 	# xhigh support is missing, the switched attempt regresses relative to
 	# the primary. These mirror the primary (same OpenAI family).
-	assert entry.get("apply_patch_tool_type") == "function"
+	# "freeform": Codex CLI v0.171.0 removed the "function" variant
+	# (upstream openai/codex#21651, issue #10129).
+	assert entry.get("apply_patch_tool_type") == "freeform"
 	assert entry.get("support_verbosity") is True
 	assert entry.get("supported_in_api") is True
 	efforts = {

@@ -73,6 +73,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Assemble failure evidence": ("review_autofix_step_assemble_failure_evidence.sh", "warning"),
 	"Record model-provider outage": ("review_autofix_step_provider_outage_record.sh", "warning"),
 	"Mark linked issues review-blocked (workflow failure)": ("review_autofix_step_mark_review_blocked_workflow_failure.sh", "error"),
+	"Mark linked issues review-blocked (autofix exhaustion)": ("review_autofix_step_mark_review_blocked_exhaustion.sh", "error"),
 	"Post review-blocked comment on PR (workflow failure)": ("review_autofix_step_failure_comment.sh", "error"),
 	"Record Claude pool capacity": ("review_autofix_step_claude_pool_capacity.sh", "warning"),
 	"Defer review on Claude capacity": ("review_autofix_step_claude_capacity_wait.sh", "error"),
@@ -83,6 +84,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Preflight: Verify required files before reviewer invocation": ("review_autofix_step_preflight_required_files.sh", "error"),
 	"Decide partial-finalize validation/push safety": ("review_autofix_step_partial_finalize_safety.sh", "error"),
 	"Validate editor no-op disposition": ("review_autofix_step_editor_noop_disposition.sh", "error"),
+	"Telegram editor-noop-suspicious warning": ("review_autofix_step_editor_noop_suspicious_warning.sh", "error"),
 	"Stage codex logs for upload (failure or empty-editor)": ("review_autofix_step_stage_codex_logs.sh", "warning"),
 	"Initialize runtime workspace": ("review_autofix_step_init_runtime_workspace.sh", "error"),
 	"Post review-blocked comment on PR (autofix exhaustion)": ("review_autofix_step_post_review_blocked_comment.sh", "error"),
@@ -94,6 +96,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Integration post-sync test repair": ("review_autofix_step_prepush_test_gate.sh", "error"),
 	"Single-issue security pass (deterministic skip)": ("review_autofix_step_deterministic_skip_security_pass.sh", "error"),
 	"Checkout PR head branch": ("review_autofix_step_checkout_pr_head_branch.sh", "error"),
+	"Push all pending commits": ("review_autofix_step_push_pending_commits.sh", "error"),
 }
 
 # Gate-job step scripts -> the verified checkout directory their wrapper reads.

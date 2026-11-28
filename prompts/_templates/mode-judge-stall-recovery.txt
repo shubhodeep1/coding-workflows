@@ -7,7 +7,10 @@ Context provided in the prompt includes:
 - Issue metadata (issue number, local id, phase, stall minutes, recovery count)
 - Recent tracking comments
 - Linked PR metadata (state, mergeability, head/base refs)
-- Recent review/autofix workflow outcomes for the linked PR (last 3)
+- Recent review/autofix workflow outcomes for the linked PR (last 3; with live review-run listing on, at most 5
+  newest first, including queued and completed runs, each with `head_sha`)
+- `review_waiting_for_runner` (when present): `true` means a review run of the linked PR's current head is
+  queued and waiting for a runner
 - Current wave and prior recovery metadata from state
 
 Decision goals (ordered):
@@ -40,6 +43,8 @@ Action guidance:
 - Choose `close_and_reissue` when the issue path appears irrecoverably stuck
   but still suitable for autonomous restart.
 - Choose `escalate_human` when automation is likely unsafe/insufficient.
+- When `review_waiting_for_runner` is `true`, do not choose `escalate_human` or `close_and_reissue`:
+  the review has not started yet, and the pipeline holds both actions until it does.
 
 Rules:
 - Use only the listed actions.

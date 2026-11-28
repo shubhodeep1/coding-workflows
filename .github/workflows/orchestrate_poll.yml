@@ -75,7 +75,7 @@ env:
   # policy. Override per-repo via vars.THINKING_LEVEL_JUDGE.
   MODEL_REASONING_EFFORT_JUDGE: ${{ vars.THINKING_LEVEL_JUDGE || 'high' }}
   # Codex version baked into the isolated judge image (scripts/codex_isolated_exec.sh).
-  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
@@ -280,6 +280,19 @@ jobs:
             fi
           done
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Release merge-queued PRs (merge train backstop)
         # Runs on EVERY tick, before the tracking-issue gate below exits early
         # for repos with no active orchestrator project, because the merge
@@ -298,6 +311,10 @@ jobs:
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASE_ENABLED: ${{ vars.MERGE_LEASE_CONFLICT_RELEASE_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
+          REVIEW_FINAL_CI_WORKFLOW: ${{ vars.REVIEW_FINAL_CI_WORKFLOW || (github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '') }}
           MERGE_LEASE_HOLD_LABELS: ${{ vars.MERGE_LEASE_HOLD_LABELS || 'ai:needs-human,ai:security-pass-failed,ai:review-blocked,ai:scope-blocked' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
@@ -314,7 +331,11 @@ jobs:
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
           MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
           MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
-          MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
+          MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security,ai:priority' }}
+          # Priority lane at the lease grant (issue #10048; scripts/pr_checks_lib.sh).
+          PRIORITY_LANE_ENABLED: ${{ vars.PRIORITY_LANE_ENABLED || 'true' }}
+          PRIORITY_LANE_WAIT_MINUTES: ${{ vars.PRIORITY_LANE_WAIT_MINUTES || '15' }}
+          PRIORITY_LANE_MAX_DEFER_MINUTES: ${{ vars.PRIORITY_LANE_MAX_DEFER_MINUTES || '120' }}
           MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
           MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           # Daily queue-age note (review_merge_train.sh _mt_release_stall_alert).
@@ -374,12 +395,18 @@ jobs:
         # The step timeout (issue #9393): a hung gh call would otherwise hold
         # the poll job until GitHub's 360-minute job limit and fail it;
         # continue-on-error turns the step timeout into a warning.
+        # The signing secret lets the helper verify signed github-actions[bot]
+        # entry comments (PR #9643); without it this step read none of them and
+        # closed tracker #9647 with 7 open entries (2026-11-23). The helper
+        # keeps the tracker open when signed entries cannot be verified.
         continue-on-error: true
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPERATOR_STEP_AUTO_RESOLVE_ENABLED: ${{ vars.OPERATOR_STEP_AUTO_RESOLVE_ENABLED || 'true' }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           helper=".codex-workflow-src/scripts/operator_step_issue.py"
@@ -584,7 +611,7 @@ jobs:
 
       - name: Setup Node.js
         if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -598,9 +625,9 @@ jobs:
         if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         # Pinned by commit (tele-funtoken-msg-scoring#4566); bump it in the PR
         # that changes the action.
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       # Idle ticks also install it while standalone stall recovery and its
       # stall judge are on, because that judge can run on OpenCode (#7174).
@@ -1088,6 +1115,9 @@ jobs:
       - name: Replay failed trusted reclarify commands
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1104,6 +1134,9 @@ jobs:
           RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1462,7 +1495,7 @@ jobs:
         id: pool_daily_seen
         if: steps.pool_daily_slot.outputs.in_slot == 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ steps.pool_daily_slot.outputs.date }}
@@ -1472,6 +1505,9 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1551,6 +1587,9 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1603,8 +1642,14 @@ jobs:
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
           # Merge-base freshness gate (scripts/pr_checks_lib.sh, Q35: A).
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
+          MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASE_ENABLED: ${{ vars.MERGE_LEASE_CONFLICT_RELEASE_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
@@ -1622,6 +1667,11 @@ jobs:
           STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES: ${{ vars.STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES || '' }}
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
+          # Issue #9892: merge-lease hold lapse, close_and_reissue green-PR guard
+          # kill switch, and the lease-wait label the hold reads (script defaults:
+          # 1440, true, ai:merge-lease-wait).
+          STALL_MERGE_LEASE_WAIT_MAX_MINUTES: ${{ vars.STALL_MERGE_LEASE_WAIT_MAX_MINUTES || '' }}
+          STALL_REISSUE_GREEN_PR_GUARD_ENABLED: ${{ vars.STALL_REISSUE_GREEN_PR_GUARD_ENABLED || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
           STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
@@ -1629,6 +1679,7 @@ jobs:
           # Standalone conflict sweep: page once per PR head after this many
           # automatic resolution attempts (0 disables the alert).
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}
           # Issue-less review retry pass (issue #9487): re-dispatches per cycle at
           # most this many failed reviews of PRs with no linked issue (0 logs only).
           ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE || '5' }}
@@ -1654,6 +1705,7 @@ jobs:
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
           ORCHESTRATOR_CLOSE_COMPLETED_TRACKING: ${{ vars.ORCHESTRATOR_CLOSE_COMPLETED_TRACKING || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}
           # Issue #6680 kill switch for closing and re-issuing a PR whose only
           # host-only conflicts are retired files the base no longer has.
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
@@ -1744,6 +1796,9 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1815,6 +1870,9 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1860,8 +1918,14 @@ jobs:
           JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
+          MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASE_ENABLED: ${{ vars.MERGE_LEASE_CONFLICT_RELEASE_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
@@ -1873,11 +1937,17 @@ jobs:
           STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES: ${{ vars.STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES || '' }}
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
+          # Issue #9892: merge-lease hold lapse, close_and_reissue green-PR guard
+          # kill switch, and the lease-wait label the hold reads (script defaults:
+          # 1440, true, ai:merge-lease-wait).
+          STALL_MERGE_LEASE_WAIT_MAX_MINUTES: ${{ vars.STALL_MERGE_LEASE_WAIT_MAX_MINUTES || '' }}
+          STALL_REISSUE_GREEN_PR_GUARD_ENABLED: ${{ vars.STALL_REISSUE_GREEN_PR_GUARD_ENABLED || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
           STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
           STALL_FINGERPRINT_REPEAT_MAX: ${{ vars.STALL_FINGERPRINT_REPEAT_MAX || '2' }}
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}
           ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE || '5' }}
           ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS || '7' }}
           STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
@@ -1889,6 +1959,7 @@ jobs:
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
           ORCHESTRATOR_CLOSE_COMPLETED_TRACKING: ${{ vars.ORCHESTRATOR_CLOSE_COMPLETED_TRACKING || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
           # PR #7709: stall recovery's check-triage resolution gate; false turns it off.
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
@@ -1934,6 +2005,9 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -1946,6 +2020,9 @@ jobs:
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1960,6 +2037,9 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1988,6 +2068,9 @@ jobs:
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -2009,6 +2092,9 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -2018,13 +2104,21 @@ jobs:
           STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           STANDALONE_PR_SWEEP_ONLY: "true"
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}
           ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE || '5' }}
           ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS || '7' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
           REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
+          MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASE_ENABLED: ${{ vars.MERGE_LEASE_CONFLICT_RELEASE_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
+          REVIEW_FINAL_CI_WORKFLOW: ${{ vars.REVIEW_FINAL_CI_WORKFLOW || '' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
@@ -2093,7 +2187,7 @@ jobs:
         id: consumer_health_day
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != ''
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
@@ -2106,7 +2200,7 @@ jobs:
         id: consumer_health_alerted
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health_day.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
@@ -2149,7 +2243,7 @@ jobs:
       - name: Record today's consumer health check
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outcome == 'success'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
@@ -2157,7 +2251,7 @@ jobs:
       - name: Record today's consumer health failure alert
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outputs.failure_alerted == 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
@@ -2272,7 +2366,7 @@ jobs:
         # `if-no-files-found: error` is kept so a genuinely missing snapshot,
         # which is a real defect, still surfaces as a failed-step annotation.
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: state-snapshot
           path: ${{ env.RUNTIME_DIR }}/state-snapshot/state.json
@@ -2454,20 +2548,6 @@ jobs:
 
           tg_send_msg "${msg}" "ERROR" >/dev/null || true
 
-      - name: Record GH_PAT budget at poll end
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
-        run: |
-          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
-            source scripts/gh_helpers.sh
-            gh_pat_budget end orchestrate_poll poll "${GH_PAT_BUDGET_FILE}"
-          else
-            echo 'GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown'
-          fi
       # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
       # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
       # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
@@ -2491,6 +2571,22 @@ jobs:
               bash "${fallback_report}" || true
           else
             echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi
+
+      - name: Record GH_PAT budget at poll end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end orchestrate_poll poll "${GH_PAT_BUDGET_FILE}"
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
 
   # Daily Claude pool usage report: one Telegram message with every pool
@@ -2519,7 +2615,7 @@ jobs:
       - name: Re-check today's Claude pool daily usage marker
         id: pool_daily_recheck
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
@@ -2579,7 +2675,7 @@ jobs:
       - name: Save today's Claude pool daily usage marker
         if: steps.pool_daily_send.outputs.sent == 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}

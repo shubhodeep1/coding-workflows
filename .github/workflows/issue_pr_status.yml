@@ -1378,9 +1378,9 @@ jobs:
           fetch-depth: 2
 
       - name: Install Codex CLI
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       # The ACTIVATION_VERIFY role runs on Claude unless AI_ENGINE_ACTIVATION_VERIFY
       # or AI_ENGINE say codex (scripts/ai_engine.sh, from the trusted support
@@ -1452,7 +1452,7 @@ jobs:
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           # Codex version baked into the isolated verifier image (scripts/codex_isolated_exec.sh).
-          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           # A caller without id-token: write (the consumer wrapper before its sync)
           # gets no pool credential (oidc_unavailable); the documented behaviour is

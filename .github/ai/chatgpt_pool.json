@@ -1,1 +1,1 @@
-{"reviewer_slot_enabled": false, "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
+{"reviewer_slot_enabled": false, "model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}

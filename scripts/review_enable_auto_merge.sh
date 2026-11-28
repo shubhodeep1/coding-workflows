@@ -127,11 +127,55 @@ reviewed_head_is_current_for_labels()
 	return 0
 }
 
+# Issue #10057: a security finding on a path the review editor may not change
+# (ledger STATUS: unreachable with UNREACHABLE_SECURITY: true, written by
+# scripts/review_issue_ledger.sh) keeps the PR blocked. Checked before every
+# path that posts the head-gate success, allows merge labels or enables
+# auto-merge. The durable ledger is the source, so a same-head partial resume
+# keeps the hold; the runtime TSV is read too. Off with
+# REVIEW_UNREACHABLE_FOLLOWUP_ENABLED=false (the ledger then has no such
+# entries either). A missing ledger means no hold was ever recorded.
+review_unreachable_security_hold_active()
+{
+	local hold_ledger="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
+	case "$(printf '%s' "${REVIEW_UNREACHABLE_FOLLOWUP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		false|0|no|off) return 1 ;;
+	esac
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/review_unreachable_all.tsv" ] \
+		&& awk -F '\t' '$5 == "true" { found = 1 } END { exit !found }' "${RUNTIME_DIR}/review_unreachable_all.tsv" 2>/dev/null; then
+		return 0
+	fi
+	[ -f "${hold_ledger}" ] || return 1
+	awk '/^=== ENTRY / { st = 0; sec = 0 } /^STATUS: unreachable$/ { st = 1 } /^UNREACHABLE_SECURITY: true$/ { sec = 1 } /^=== END ENTRY ===$/ { if (st && sec) found = 1 } END { exit !found }' "${hold_ledger}" 2>/dev/null
+}
+if review_unreachable_security_hold_active; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=refuse reason=unreachable_security_hold"
+	echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: a security finding on a file the review editor may not change is still open (review ledger status unreachable, security hold). It is tracked in the PR's follow-up issue; the PR stays open."
+	# Auto-merge armed by an earlier round would still fire once checks pass,
+	# and the head gate withdraws it only on synchronize. Withdraw it here
+	# (best effort: one PR read, plus the disable call only when armed).
+	if type review_head_gate_withdraw_auto_merge >/dev/null 2>&1; then
+		review_head_gate_withdraw_auto_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "" \
+			|| echo "::warning::Could not withdraw an existing auto-merge on PR #${PR_NUMBER} during the unreachable security hold."
+	else
+		# No inline fallback merge call: every merge call in this script is
+		# bound to the reviewed head (--match-head-commit), and the contract
+		# tests pin that the first one runs after the head-gate checks.
+		echo "::warning::review_head_gate.sh unavailable; could not check for or withdraw an existing auto-merge on PR #${PR_NUMBER} during the unreachable security hold."
+	fi
+	exit 0
+fi
+
 if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
 	if reviewed_head_is_current_for_labels; then
 		review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 		record_auto_merge_ready_labels_allowed "true"
-		review_enable_auto_merge_ensure_final_ci
+		# Issue #9993: this exit never merges, so it takes no merge lease and
+		# pushes no new head; a head whose CI wiring is behind the base is held
+		# (no final CI on the stale workflow) and a merge path or the sweep
+		# updates it. Otherwise the final CI is dispatched as before.
+		# shellcheck disable=SC2119  # no head ref known here; the helper reads it
+		PR_FINAL_CI_WIRING_NO_UPDATE=true review_enable_auto_merge_ensure_final_ci
 	fi
 	echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
 	exit 0
@@ -178,7 +222,11 @@ if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issue
 		if reviewed_head_is_current_for_labels; then
 			review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 			record_auto_merge_ready_labels_allowed "true"
-			review_enable_auto_merge_ensure_final_ci
+			# Issue #9993: never update an e2e PR's branch mid-gate (the race
+			# this opt-out exists to prevent); a head whose CI wiring is behind
+			# is held instead of getting a final CI on the stale workflow.
+			# shellcheck disable=SC2119  # no head ref known here; the helper reads it
+			PR_FINAL_CI_WIRING_NO_UPDATE=true review_enable_auto_merge_ensure_final_ci
 		fi
 		echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
 		exit 0
@@ -328,10 +376,13 @@ PR_CHECKS_HEAD_REF="${_orch_pr_head_ref}"
 # update and stop here. The synchronize run re-validates the combined tree
 # and reaches this step again with a current head. Integration PRs are
 # synced by the orchestrator itself and never auto-merged here, so they
-# skip the two reads.
+# skip the two reads. Merge-lease Phase 4: when this job made the update, it
+# merges the update head itself (_pr_base_sync_inline_merge) and continues
+# below with INITIAL_HEAD_SHA set to that head; any failure there is today's
+# "updated, waiting" (the helper hands the PR to a review run).
 _orch_pr_base_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
 if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
-	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	&& ! { PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && _pr_base_sync_inline_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${_orch_pr_base_ref}}" && INITIAL_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches since its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
@@ -360,7 +411,7 @@ fi
 # freshness once more when the wait actually polled.
 if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
 	&& ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
-	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	&& ! { PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && _pr_base_sync_inline_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${_orch_pr_base_ref}}" && INITIAL_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches while its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
