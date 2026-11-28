@@ -377,8 +377,12 @@ def test_review_editor_never_commits_to_updater_branches() -> None:
 
 
 def test_review_never_pushes_or_resolves_on_updater_branches() -> None:
-	text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
-	push = text.index("- name: Push all pending commits")
+	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	push_step = workflow[workflow.index("- name: Push all pending commits"):]
+	assert '"${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_push_pending_commits.sh"' in push_step.split("\n      - name:", 1)[0]
+	# The step body lives in its step script (moved for the workflow size guard).
+	text = (REPO_ROOT / "scripts" / "review_autofix_step_push_pending_commits.sh").read_text(encoding="utf-8")
+	push = 0
 	guard = text.index('[[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]', push)
 	assert "AUTOFIX_PUSH_SKIPPED" in text[guard:guard + 300]
 	assert guard < text.index("git push", push)

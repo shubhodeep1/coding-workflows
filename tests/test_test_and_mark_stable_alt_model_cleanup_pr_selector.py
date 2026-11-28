@@ -107,7 +107,9 @@ def _alt_wait_run_body(wf: str) -> str:
 # on PATH: the pre-push gate container mounts the temp dir noexec, so PATH
 # shims there were skipped and the loop ran the real `sleep 20` (and any real
 # `gh`) until the 60s subprocess timeout.
-_FAKE_GH = r"""gh() {
+_FAKE_GH = r"""# Issue #10225: the step reads go through gh_api_retry; pass them to the stub gh unchanged.
+gh_api_retry() { gh api "$@"; }
+gh() {
   local state="${FAKE_GH_DIR:?}"
   case "${2:-}" in
     */comments)

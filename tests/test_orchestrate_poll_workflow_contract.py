@@ -36,6 +36,15 @@ def test_stall_control_env_defaults_are_declared() -> None:
 	assert "RECOVERY_COUNT_DISTINCT_FINDINGS: ${{ vars.RECOVERY_COUNT_DISTINCT_FINDINGS || 'false' }}" in wf
 
 
+def test_stall_judge_live_review_runs_switch_is_forwarded_with_default_true() -> None:
+	# Issue #10149: every poller step that can reach invoke_stall_judge forwards the switch.
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	line = "STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}"
+	assert wf.count(line) >= 6
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	assert '"${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED:-true}"' in poller
+
+
 def test_judge_pr_diff_byte_budgets_are_declared_and_consumed() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")

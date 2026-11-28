@@ -28,8 +28,9 @@ Rules enforced here, for every workflow-level, job-level and step-level
    defaults and are not repository variables (Q1=A on issue #10078). Wiring
    one is a separate, deliberate change.
 5. Optional settings. OPTIONAL_KEYS are read only by the steps that need
-   them (MERGE_LEASE_HOLD_LABELS: the merge-train release steps), so they
-   are not part of the full set. Where one is passed it uses the rule 2 form,
+   them (MERGE_LEASE_HOLD_LABELS: the merge-train release steps; the
+   ready-first grant, conflict-release and inline-sync switches: the tick and
+   inline-merge steps), so they are not part of the full set. Where one is passed it uses the rule 2 form,
    and its default equals the scripts/pr_checks_lib.sh default when the
    script carries exactly one; otherwise every workflow site agrees.
 6. Unknown settings. Any other MERGE_LEASE_* env key must first be
@@ -77,8 +78,18 @@ UNWIRED_KEYS = (
 # Per-step settings outside the full set (rule 5). MERGE_LEASE_HOLD_LABELS is
 # passed by the merge-train release steps of cancel_on_pr_close.yml and
 # orchestrate_poll.yml on main (CI run 45608850132, shard 31).
+# MERGE_LEASE_READY_GRANT_ENABLED, MERGE_LEASE_CONFLICT_RELEASE_ENABLED and
+# MERGE_LEASE_CONFLICT_RELEASED_LABEL (issue #10098) are passed by the steps
+# that run the merge-lease tick (cancel_on_pr_close.yml, orchestrate_poll.yml,
+# review_autofix.yml); MERGE_LEASE_INLINE_SYNC_ENABLED (issue #10198) by the
+# review_autofix.yml gate and inline update-and-merge sites. Each defaults in
+# scripts/pr_checks_lib.sh, so rule 5 compares the workflow default with it.
 OPTIONAL_KEYS = (
 	"MERGE_LEASE_HOLD_LABELS",
+	"MERGE_LEASE_READY_GRANT_ENABLED",
+	"MERGE_LEASE_CONFLICT_RELEASE_ENABLED",
+	"MERGE_LEASE_CONFLICT_RELEASED_LABEL",
+	"MERGE_LEASE_INLINE_SYNC_ENABLED",
 )
 
 # (workflow file name, step name, key) -> the only literal value accepted.

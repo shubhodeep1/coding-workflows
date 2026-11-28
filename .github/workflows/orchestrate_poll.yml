@@ -311,6 +311,10 @@ jobs:
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASE_ENABLED: ${{ vars.MERGE_LEASE_CONFLICT_RELEASE_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
+          REVIEW_FINAL_CI_WORKFLOW: ${{ vars.REVIEW_FINAL_CI_WORKFLOW || (github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '') }}
           MERGE_LEASE_HOLD_LABELS: ${{ vars.MERGE_LEASE_HOLD_LABELS || 'ai:needs-human,ai:security-pass-failed,ai:review-blocked,ai:scope-blocked' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
@@ -1111,6 +1115,9 @@ jobs:
       - name: Replay failed trusted reclarify commands
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1498,6 +1505,9 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1637,6 +1647,9 @@ jobs:
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASE_ENABLED: ${{ vars.MERGE_LEASE_CONFLICT_RELEASE_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}
@@ -1654,6 +1667,11 @@ jobs:
           STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES: ${{ vars.STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES || '' }}
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
+          # Issue #9892: merge-lease hold lapse, close_and_reissue green-PR guard
+          # kill switch, and the lease-wait label the hold reads (script defaults:
+          # 1440, true, ai:merge-lease-wait).
+          STALL_MERGE_LEASE_WAIT_MAX_MINUTES: ${{ vars.STALL_MERGE_LEASE_WAIT_MAX_MINUTES || '' }}
+          STALL_REISSUE_GREEN_PR_GUARD_ENABLED: ${{ vars.STALL_REISSUE_GREEN_PR_GUARD_ENABLED || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
           STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
@@ -1778,6 +1796,9 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1902,6 +1923,9 @@ jobs:
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASE_ENABLED: ${{ vars.MERGE_LEASE_CONFLICT_RELEASE_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}
@@ -1913,6 +1937,11 @@ jobs:
           STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES: ${{ vars.STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES || '' }}
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
+          # Issue #9892: merge-lease hold lapse, close_and_reissue green-PR guard
+          # kill switch, and the lease-wait label the hold reads (script defaults:
+          # 1440, true, ai:merge-lease-wait).
+          STALL_MERGE_LEASE_WAIT_MAX_MINUTES: ${{ vars.STALL_MERGE_LEASE_WAIT_MAX_MINUTES || '' }}
+          STALL_REISSUE_GREEN_PR_GUARD_ENABLED: ${{ vars.STALL_REISSUE_GREEN_PR_GUARD_ENABLED || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
           STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
@@ -1976,6 +2005,9 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -2005,6 +2037,9 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -2057,6 +2092,9 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -2077,6 +2115,10 @@ jobs:
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
+          MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASE_ENABLED: ${{ vars.MERGE_LEASE_CONFLICT_RELEASE_ENABLED || 'true' }}
+          MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
+          REVIEW_FINAL_CI_WORKFLOW: ${{ vars.REVIEW_FINAL_CI_WORKFLOW || '' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}
