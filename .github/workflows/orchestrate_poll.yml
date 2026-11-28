@@ -1116,6 +1116,9 @@ jobs:
       - name: Replay failed trusted reclarify commands
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1503,6 +1506,9 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1788,6 +1794,9 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -1991,6 +2000,9 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -2020,6 +2032,9 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -2072,6 +2087,9 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Issue #10149: the stall judge lists the linked PR's review runs once and
+          # holds escalate_human/close_and_reissue while one waits for a runner.
+          STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED: ${{ vars.STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
