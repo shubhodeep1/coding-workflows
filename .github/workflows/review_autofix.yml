@@ -4518,6 +4518,11 @@ jobs:
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
+          # A red required check on a judge merge goes to the final-CI repair or a
+          # hand-over (issue #10063); false keeps the checks_failed page.
+          RB_JUDGE_RED_CHECK_REPAIR_ENABLED: ${{ vars.RB_JUDGE_RED_CHECK_REPAIR_ENABLED || 'true' }}
+          FINAL_CI_REPAIR_ENABLED: ${{ vars.FINAL_CI_REPAIR_ENABLED || 'true' }}
+          REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED: ${{ vars.PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
@@ -4694,7 +4699,12 @@ jobs:
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
         id: rb_blocked_comment
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
+        # #10063: a merge_with_followup refused on a red head already posted
+        # its own final-CI repair request or hand-over (judge_handled stays
+        # false so the alert keys on the skip reason); the generic cap comment
+        # would contradict it and, as review output newer than the request,
+        # keep the gate from re-arming the dispatched repair run.
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && !contains(fromJSON('["final_ci_repair_requested","final_ci_handover","final_ci_handover_posted"]'), steps.rb_judge.outputs.judge_skip_reason) && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -5084,6 +5094,7 @@ jobs:
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           JUDGE_MERGE_STATUS: ${{ steps.rb_judge.outputs.judge_merge_status }}
+          JUDGE_CI_FAILURE_SUMMARY: ${{ steps.rb_judge.outputs.judge_ci_failure_summary }}
           JUDGE_REISSUE_CREATED: ${{ steps.rb_judge.outputs.judge_reissue_created }}
           RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
           RB_JUDGE_EXIT_CODE: ${{ steps.rb_judge.outputs.rb_judge_exit_code }}
