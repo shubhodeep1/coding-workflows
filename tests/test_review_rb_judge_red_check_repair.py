@@ -636,7 +636,7 @@ def test_ten_verbose_jobs_fit_the_prompt_embed_cap(tmp_path: Path) -> None:
 
 def test_every_judge_support_script_is_staged() -> None:
 	judge = SCRIPT.read_text(encoding="utf-8")
-	referenced = set(re.findall(r"\$\{SUPPORT_SCRIPTS_DIR(?::-)?\}/([A-Za-z0-9_.-]+)", judge))
+	referenced = set(re.findall(r"\$\{SUPPORT_SCRIPTS_DIR(?::-[^}]*)?\}/([A-Za-z0-9_.-]+)", judge))
 	assert referenced, "review_rb_judge.sh no longer refers to any ${SUPPORT_SCRIPTS_DIR} file"
 	stage = STAGE_SUPPORT_HELPER.read_text(encoding="utf-8")
 	staged: set[str] = set()
