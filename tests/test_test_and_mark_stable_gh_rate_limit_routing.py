@@ -238,13 +238,27 @@ def raw_reads(text: str) -> list[str]:
 		if _SAFE_GH_JQ_CALL.search(line):
 			found.append(line)
 			continue
-		if any(
-			_is_raw_read(match.group(1), match.group(2))
-			for segment in _command_segments(line)
-			for match in _GH_CALL.finditer(segment)
-		):
+		if any(_is_raw_read(sub, rest) for segment in _command_segments(line) for sub, rest in _gh_calls(segment)):
 			found.append(line)
 	return found
+
+
+def _gh_calls(segment: str) -> list[tuple[str, str]]:
+	"""Each gh call of a segment with its own arguments only.
+
+	Review of #10225: calls chained inside a quoted `$(...)` or backtick
+	substitution stay in one segment, and the greedy `(.*)` gave the first
+	call the later call's flags (a GET then read as a write). Each call's
+	`rest` now ends where the next gh call starts, and that call is scanned
+	on its own.
+	"""
+	calls: list[tuple[str, str]] = []
+	match = _GH_CALL.search(segment)
+	while match:
+		nxt = _GH_CALL.search(segment, match.start(2))
+		calls.append((match.group(1), segment[match.start(2):nxt.start() if nxt else len(segment)]))
+		match = nxt
+	return calls
 
 
 def _workflow() -> dict:
@@ -381,6 +395,26 @@ def test_scanner_treats_backtick_substitution_as_a_command_start() -> None:
 	)
 	got = raw_reads(text)
 	assert got == ["R=`gh api repos/o/r/issues`", "S=`_safe_gh_jq repos/o/r/runs --jq .x`"], got
+
+
+def test_scanner_splits_calls_chained_inside_a_quoted_substitution() -> None:
+	# Review of #10225: a GET chained to a write inside one quoted `$(...)` or
+	# backtick substitution is judged on its own flags, so it is still a read.
+	text = "\n".join(
+		[
+			'X="$(gh api repos/o/r/issues; gh api repos/o/r/labels -f name=x)"',
+			'Y="`gh api repos/o/r/issues; gh api repos/o/r/labels -f name=x`"',
+			'Z="$(gh api repos/o/r/labels -f name=x; gh api repos/o/r/issues)"',
+			'W="$(gh api repos/o/r/labels -f name=x; gh api repos/o/r/hooks -X POST)"',
+			'V="$(gh_api_retry repos/o/r/issues; gh api repos/o/r/labels -f name=x)"',
+		]
+	)
+	got = raw_reads(text)
+	assert got == [
+		'X="$(gh api repos/o/r/issues; gh api repos/o/r/labels -f name=x)"',
+		'Y="`gh api repos/o/r/issues; gh api repos/o/r/labels -f name=x`"',
+		'Z="$(gh api repos/o/r/labels -f name=x; gh api repos/o/r/issues)"',
+	], got
 
 
 def test_gate_reads_go_through_rate_limit_aware_helpers() -> None:
