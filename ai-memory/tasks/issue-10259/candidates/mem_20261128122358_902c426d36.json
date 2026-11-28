@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan for issue #10259: overwrite `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `main` @ `adc2f40651d20730e6f192adca66da179584d69e` (the integration branch mismatch line reads `unknown`, not `true`).\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check e2e_smoke_canary content\nACCEPTANCE: post-merge none: this canary data file has no post-merge workflow\n\n## Functions or modules to implement\nNone. Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly these bytes:\n`status: ok\\nrun_id: 46140903455\\nupdated-by: ai-pipeline\\n`\nThat is three lines, each ending in a newline, with nothing before or after them.\n\n## Data structures affected\nOnly this one plain-text canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: replace the entire file content, as the issue's `printf` example does.\n- Alternatives considered: editing individual lines of the existing content.\n- Why: the issue asks for exactly these three lines. Editing line by line could leave old lines behind.\n\n## Security considerations\nNo trust boundary, endpoint, secret or external input is involved. The `run_id` is a public workflow run number, not a credential.\n\n## Potential risks or edge cases\n- A missing trailing newline, or an extra blank line at the end, would break the \"exactly\" requirement.\n- The file must not get a header or comment.\n- No other file may change.\n- The first acceptance line names a check called `e2e_smoke_canary content`. I did not confirm that a CI check with this name exists. If it does not, the host drops that done-check and the change counts as done when CI is green.\n\n## Testing considerations\nAfter the edit, confirm the content and the scope:\n- `printf 'status: ok\\nrun_id: 46140903455\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt` should report no difference.\n- `git diff --stat` should show only `tests/e2e_smoke_canary.txt`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a single-file overwrite. No helper or pattern applies, and nothing beyond this one file is in scope, so the scope stays exactly as requested.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "1cddb6ae7dbfa922a7dfc05ba1a6353dad33a4858132ddf6555c527207a79787",
+  "lineage": {
+    "issue_number": 10259,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46143533448",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46143533448",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10259"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261128122358_902c426d36",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10259,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46143533448"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10259",
+  "timestamps": {
+    "created_at": "2026-11-28T12:23:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
