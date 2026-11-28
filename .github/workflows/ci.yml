@@ -3166,7 +3166,8 @@ jobs:
       #
       # Moved again from tests-hooks-and-orchestrator to this job in budget-watch
       # issue #9078, with "Implement post-Codex recovery unit tests"; see its
-      # comment (that step runs in orchestrate-poll group 0 since #10182).
+      # comment (that step ran in orchestrate-poll group 0 from #10182 and runs
+      # in group 2 since #10261).
       # Names and bodies unchanged.
       - name: Merge-base freshness gate (pr_checks_lib) tests
         run: |
@@ -3233,6 +3234,9 @@ jobs:
     # Since #10200, group 2 also pins the tracking comment cap and workflow
     # log analysis steps, and group 3 the three review conflict-resolve /
     # review-blocked judge steps (moved from tests-heal-plan-and-validation).
+    # Since #10261, group 2 runs the merge-train, check-failure triage and
+    # post-Codex recovery steps (moved from group 0); group 0 keeps its slice
+    # and the fast-fail subset.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
     if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
     runs-on: ubuntu-latest
@@ -4228,8 +4232,13 @@ jobs:
       # 10 serial pytest runs). The run's step timings could not be read, so the pick is an estimate from
       # test and subprocess counts, not a measurement, and group 0's headroom
       # is unmeasured. The group guard keeps it to one run per CI run.
+      # Moved from orchestrate-poll group 0 to group 2 in #10261: group 0 took
+      # 27m26s of its 30 minutes on main (run 46015617074). The run's step
+      # timings could not be read, so the pick is an estimate from test and
+      # subprocess counts, not a measurement. Name and body unchanged; only
+      # the group guard changed.
       - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
-        if: strategy.job-index == 0
+        if: strategy.job-index == 2
         # Drives scripts/review_merge_train.sh through a fake `gh` and pins
         # the per-run file-list cache (one GET /pulls/{n}/files per distinct
         # PR per release tick), plus _parse_reset_header's Retry-After
@@ -4373,9 +4382,9 @@ jobs:
       # throwaway `git init` repositories and need no checkout history (this
       # job checks out at depth 1), Node or prepared .claude/ live copies; the
       # shared pip install provides PyYAML. Since #10182 the two #8771 steps
-      # share this job again, in different groups (this step in group 0,
-      # "Orchestrate lib unit tests" in group 3). Name and body unchanged;
-      # the step runs once per CI run.
+      # share this job again, in different groups (this step in group 0, group
+      # 2 since #10261, "Orchestrate lib unit tests" in group 3). Name and
+      # body unchanged; the step runs once per CI run.
       #
       # Moved again from tests-promote-stall-and-review, which took 16m02s of
       # its 20 minutes on main (run 41704793081, budget-watch issue #8771). It
@@ -4394,8 +4403,13 @@ jobs:
       # most bash-driven step after the merge-train step (estimated, not
       # measured). It needs no git history, Node or prepared .claude/ live
       # copies. Name and body unchanged.
+      # Moved from orchestrate-poll group 0 to group 2 in #10261: group 0 took
+      # 27m26s of its 30 minutes on main (run 46015617074). The run's step
+      # timings could not be read, so the pick is an estimate from test and
+      # subprocess counts, not a measurement. Name and body unchanged; only
+      # the group guard changed.
       - name: Check-failure triage workflow security tests
-        if: strategy.job-index == 0
+        if: strategy.job-index == 2
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
@@ -4553,11 +4567,11 @@ jobs:
       # its 20 minutes on main (run 45766722607, budget-watch issue #10182,
       # re-issued from #10162). Same estimate basis as "Orchestrate lib unit
       # tests" (one module, about 162 test functions and 38 subprocess call
-      # sites), not a measurement. It goes to group 0, so the two #10182
-      # steps land in different groups. The "two steps below" in the #9078
-      # paragraph are "Merge-base freshness gate (pr_checks_lib) tests" and
-      # "Conflict-dispatch active-run visibility contract tests", which stay
-      # in tests-release-and-log-analysis. It needs no git history, Node or
+      # sites), not a measurement. It went to group 0 (group 2 since #10261),
+      # so the two #10182 steps land in different groups. The "two steps
+      # below" in the #9078 paragraph are "Merge-base freshness gate
+      # (pr_checks_lib) tests" and "Conflict-dispatch active-run visibility
+      # contract tests", which stay in tests-release-and-log-analysis. It needs no git history, Node or
       # prepared .claude/ live copies. Name and body unchanged; the group
       # guard keeps it to one run per CI run.
       #
@@ -4586,8 +4600,13 @@ jobs:
       # (about 284) and checks out at depth 1 plus the base-history fetch
       # step. None of the three steps needs
       # Node or the prepared .claude/ live copies. Names and bodies unchanged.
+      # Moved from orchestrate-poll group 0 to group 2 in #10261: group 0 took
+      # 27m26s of its 30 minutes on main (run 46015617074). The run's step
+      # timings could not be read, so the pick is an estimate from test and
+      # subprocess counts, not a measurement. Name and body unchanged; only
+      # the group guard changed.
       - name: Implement post-Codex recovery unit tests
-        if: strategy.job-index == 0
+        if: strategy.job-index == 2
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
