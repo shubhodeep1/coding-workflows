@@ -3043,6 +3043,53 @@ class LeaseSourceIssueGuard(unittest.TestCase):
 		self.assertNotIn(WAIT, h.state["labels"]["5"])
 		self.assertEqual(len(self._graphql_calls(h)), 1)
 
+	def _orphan_gate_state(self, issue5: tuple[str, str | None] = ("CLOSED", "NOT_PLANNED")) -> dict:
+		return {"pulls": [_pull(5)], "labels": {"5": [WAIT]}, "files": {"5": ["a"]}, "graphql": _issue_states(i5=issue5)}
+
+	def test_update_gate_does_not_acquire_a_free_lease_for_an_orphan(self) -> None:
+		h = _Harness(self._orphan_gate_state())
+		rc, out = _gate(h, 5, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=update outcome=skipped reason=source_issue_not_planned", out)
+		self.assertIn("outcome=wait reason=source_issue_not_planned", out)
+		self.assertNotIn(REF, h.state.get("refs", {}), "an orphan never writes the lease")
+		self.assertNotIn(WAIT, h.state["labels"]["5"], "the orphan is unlabelled")
+		calls = self._graphql_calls(h)
+		self.assertEqual(len(calls), 1)
+		self.assertIn("i5:issue(number:5)", calls[0])
+
+	def test_update_gate_acquires_when_the_source_issue_is_not_an_orphan_or_unreadable(self) -> None:
+		for issue5 in (("CLOSED", "COMPLETED"), ("OPEN", None)):
+			h = _Harness(self._orphan_gate_state(issue5))
+			rc, out = _gate(h, 5, "update")
+			self.assertEqual(rc, 0, out)
+			self.assertIn("outcome=acquired", out)
+		st = self._orphan_gate_state()
+		st["graphql"] = {"errors": [{"message": "boom"}]}
+		rc, out = _gate(_Harness(st), 5, "update")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("MERGE_LEASE pr=- base=main mode=update outcome=unavailable reason=source_issue_read_failed", out)
+		rc, out = _gate(_Harness(self._orphan_gate_state()), 5, "update", {"MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED": "false"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=acquired", out)
+
+	def test_multi_holder_update_gate_does_not_join_for_an_orphan(self) -> None:
+		st = {"pulls": [_pull(5), _pull(8)], "labels": {"5": [WAIT]}, "files": {"5": ["a"], "8": ["b"]},
+			"graphql": _issue_states(i5=("CLOSED", "NOT_PLANNED"))}
+		_seed_lease(st, _record(8, paths="b"))
+		h = _Harness(st)
+		rc, out = _gate(h, 5, "update", {MAXH: "2"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=update outcome=skipped reason=source_issue_not_planned", out)
+		self.assertNotIn("pr=5\n", h.record())
+
+	def test_empty_reply_is_a_logged_read_failure(self) -> None:
+		h = _Harness({})
+		rows = json.dumps([{"number": 5, "head": "ai/issue-5", "head_repo": "owner/repo", "labels": [WAIT]}])
+		res = h.lib(f"gh_retry() {{ return 1; }}; _merge_lease_not_planned_source_prs '{rows}' main; echo rc=$?")
+		self.assertIn("rc=0", res.stdout)
+		self.assertIn("MERGE_LEASE pr=- base=main mode=tick outcome=unavailable reason=source_issue_read_failed", res.stderr)
+
 	def test_tick_steps_get_the_switch(self) -> None:
 		line = "MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED: ${{ vars.MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED || 'true' }}"
 		for path in (POLL, CLOSE, REVIEW):

@@ -1500,6 +1500,10 @@ if method == "POST" and endpoint.endswith("/comments"):
 	if os.environ.get("FAKE_GH_FAIL_RESUME") and f.get("body", "").startswith(("/answer", "/approved", "/reclarify", "/judge_resume")):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	# #10241: the "Superseded by" comment on a retired own PR fails.
+	if os.environ.get("FAKE_GH_FAIL_SUPERSEDED") and f.get("body", "").startswith("Superseded by #"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if "ai:unblock-park-alert:v1" in f.get("body", ""):
 		# P6b claim: the writer needs the new comment id.
 		if os.environ.get("FAKE_GH_FAIL_PARK_ALERT"):
@@ -7251,13 +7255,25 @@ def test_reissue_is_refused_while_the_own_pr_is_the_work(own_pr_guard_default: N
 
 
 def test_reissue_with_a_non_green_own_pr_retires_it(own_pr_guard_default: None) -> None:
-	for gate in ("pending", "failure", "absent", "unknown"):
+	for gate in ("pending", "failure", "absent"):
 		ops = actions.plan(_verdict("reissue", instructions="redo it"), _ctx(own_prs=_own(_own_pr(40, head_gate=gate))))
 		assert [op["op"] for op in ops] == ["create_issue", "close", "comment", "close"], gate
 		assert ops[1] == {"op": "close", "issue": 7, "reason": "not_planned", "pr": False}
 		assert ops[2]["issue"] == 40 and ops[2]["created_ref"] is True
 		assert ops[2]["body"].startswith("Superseded by #{created_issue}: ")
 		assert ops[3] == {"op": "close", "issue": 40, "reason": "not_planned", "pr": True}
+
+
+def test_reissue_refuses_an_own_pr_whose_head_gate_is_unreadable(own_pr_guard_default: None) -> None:
+	# An unreadable head-gate may be green: neither close it nor duplicate it.
+	ops = actions.plan(_verdict("reissue", instructions="redo it"), _ctx(own_prs=_own(_own_pr(40), _own_pr(41, head_gate="unknown"))))
+	assert [op["op"] for op in ops] == ["comment"]
+	assert ops[0]["body"].splitlines()[-1] == "<!-- ai:unblock-wait:v1 item=7 reason=own_pr_unknown pr=41 -->"
+	# Green and lease-waiting stay the stronger reasons.
+	ops = actions.plan(_verdict("reissue", instructions="x"), _ctx(own_prs=_own(_own_pr(41, head_gate="unknown"), _own_pr(40, head_gate="success"))))
+	assert "reason=own_pr_green pr=40" in ops[0]["body"]
+	# The retire backstop never closes an unreadable PR either.
+	assert actions._own_pr_retire_ops(_ctx(own_prs=_own(_own_pr(41, head_gate="unknown"))), None) == []
 
 
 def test_reissue_without_an_own_pr_is_unchanged(own_pr_guard_default: None) -> None:
@@ -7418,6 +7434,15 @@ def test_judge_reissue_retires_a_non_green_own_pr(tmp_path: Path) -> None:
 	assert len(superseded) == 1 and superseded[0]["body"].startswith(f"Superseded by #{match.group(1)}: ")
 	assert ["repos/o/r/pulls/62", {"state": "closed"}] in state["patched"]
 	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state_reason") == "not_planned" for endpoint, fields in state["patched"])
+
+
+def test_judge_reissue_closes_the_own_pr_when_its_superseded_comment_fails(tmp_path: Path) -> None:
+	payload = _judge_own_payload(_own_node(62, gate="PENDING"))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, FAKE_GH_FAIL_SUPERSEDED="1", UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true")
+	assert len(state["created"]) == 1, result.stdout + result.stderr
+	assert "op=comment issue=62 outcome=failed" in result.stdout
+	assert ["repos/o/r/pulls/62", {"state": "closed"}] in state["patched"], result.stdout + result.stderr
+	assert re.search(r"op=reissue outcome=own_pr_closed pr=62 new=\d+", result.stdout)
 
 
 def test_judge_reissue_does_not_touch_the_own_pr_when_creation_fails(tmp_path: Path) -> None:

@@ -1633,7 +1633,7 @@ unblock_log_target_repo_guard()
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0 heal_planned="false" heal_warned="false" heal_unauth="false"
+	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0 heal_planned="false" heal_warned="false" heal_unauth="false" own_pr_comment_failed="false"
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -1669,7 +1669,14 @@ unblock_run_ops()
 					body="${body//"${created_token}"/${created}}"
 				fi
 				if ! gh api "repos/${REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null 2>&1; then
-					ops_failed="true"
+					# #10241 (G3): a failed "Superseded by" comment must not skip the
+					# own PR's close that follows (the replacement already exists);
+					# the run still reports the failure at the end.
+					if [ "$(jq -r ".ops[${idx}].created_ref // false" "${ops_file}")" = "true" ]; then
+						own_pr_comment_failed="true"
+					else
+						ops_failed="true"
+					fi
 					unblock_log "item=${ITEM} op=comment issue=${issue} outcome=failed"
 					if [ "${body}" = "/approved" ] && [ -n "${unblock_removed_guard}" ]; then
 						# Keep a failed approval discoverable after its trigger label was cleared.
@@ -1989,7 +1996,7 @@ PY
 	elif [ "${heal_unauth}" = "true" ] && [ "${heal_warned}" != "true" ]; then
 		unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity; a heal intake that requires report authentication drops it, so check that the heal issue was filed (${REPOSITORY})."
 	fi
-	[ "${ops_failed}" != "true" ]
+	[ "${ops_failed}" != "true" ] && [ "${own_pr_comment_failed}" != "true" ]
 }
 
 # Normalised evidence for the fingerprint: the block's reason line and, for a

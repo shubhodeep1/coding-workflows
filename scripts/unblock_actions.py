@@ -69,7 +69,8 @@ the network; the shell only executes.
       comment ending in `<!-- ai:unblock-wait:v1 item=<n> reason=own_pr_green|
       own_pr_lease_wait|own_pr_unknown pr=<m|unknown> -->`, nothing created or
       closed) while one of them has an `ai-review/head-gate` success, carries
-      the merge-lease wait label, or the read was `unknown`; a re-issue that
+      the merge-lease wait label, has an `unknown` head-gate, or the read was
+      `unknown`; a re-issue that
       goes ahead comments "Superseded by #<new>" on each other own PR and
       closes it. Switch UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED (only `false`
       turns it off). A malformed value is `unknown`.
@@ -928,8 +929,10 @@ def own_pr_guard(ctx: dict, env: object = None) -> dict | None:
 	"""Refuse a standalone issue's `reissue` while its own PR is the work (#10241, G2), else None.
 
 	First match wins: an `unknown` read, then a PR with an `ai-review/head-gate`
-	success, then one carrying the merge-lease wait label; within a rule the
-	highest number. The body is fixed text and ends with a no-round
+	success, then one carrying the merge-lease wait label, then a PR whose
+	head-gate could not be read on its current head (`unknown`: it may be
+	green, so it is neither closed nor duplicated); within a rule the highest
+	number. The body is fixed text and ends with a no-round
 	`ai:unblock-wait:v1 ... reason=` marker.
 	"""
 	if not _reissue_own_pr_guard_enabled(env) or ctx["kind"] != "issue" or ctx["tracking"]:
@@ -944,11 +947,14 @@ def own_pr_guard(ctx: dict, env: object = None) -> dict | None:
 	else:
 		green = [entry for entry in own["prs"] if entry["head_gate"] == "success"]
 		waiting = [entry for entry in own["prs"] if entry["lease_wait"]]
+		unreadable = [entry for entry in own["prs"] if entry["head_gate"] == "unknown"]
 		if green:
 			reason, pr = "own_pr_green", max(green, key=lambda entry: entry["number"])
 		elif waiting:
 			reason, pr = "own_pr_lease_wait", max(waiting, key=lambda entry: entry["number"])
-	if not reason:
+		elif unreadable:
+			reason, pr = "own_pr_unknown", max(unreadable, key=lambda entry: entry["number"])
+	if reason not in OWN_PR_GUARD_REASONS:
 		return None
 	if pr is None:
 		why = "its open pull requests could not be read, so a replacement could duplicate one of them"
@@ -957,6 +963,8 @@ def own_pr_guard(ctx: dict, env: object = None) -> dict | None:
 		pr_token = str(pr["number"])
 		if reason == "own_pr_green":
 			why = f"pull request #{pr['number']} has an `ai-review/head-gate` success on its current head `{pr['head_sha'][:12]}`"
+		elif reason == "own_pr_unknown":
+			why = f"the `ai-review/head-gate` state of pull request #{pr['number']} could not be read on its current head `{pr['head_sha'][:12]}`, so it may be green"
 		else:
 			why = f"pull request #{pr['number']} (head `{pr['head_sha'][:12]}`) is waiting for the merge lease"
 	body = "\n".join([
@@ -979,8 +987,8 @@ def _own_pr_retire_ops(ctx: dict, owner: dict | None) -> list[dict]:
 	item = ctx["item"]
 	ops: list[dict] = []
 	for pr in own["prs"]:
-		# The guard already refused green and lease-waiting PRs; never close one here.
-		if pr["number"] == keep or pr["head_gate"] == "success" or pr["lease_wait"]:
+		# The guard already refused green, lease-waiting and unreadable PRs; never close one here.
+		if pr["number"] == keep or pr["head_gate"] in ("success", "unknown") or pr["lease_wait"]:
 			continue
 		ops.append({
 			"op": "comment", "issue": pr["number"], "created_ref": True,
