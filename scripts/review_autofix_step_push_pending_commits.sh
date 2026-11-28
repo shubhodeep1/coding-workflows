@@ -189,4 +189,5 @@ while :; do
   fi
   : > "${push_stderr_file}"
 done
+( source "${SUPPORT_SCRIPTS_DIR:-}/gh_helpers.sh" && source "${SUPPORT_SCRIPTS_DIR:-}/pr_checks_lib.sh" && _pr_merge_resolve_marker_post "${PR_NUMBER:-}" "${LOCAL_HEAD_SHA:-}" ) || true
 ( source "${SUPPORT_SCRIPTS_DIR:-}/gh_helpers.sh" && gh_pr_cache_evict "${GITHUB_REPOSITORY}" "${PR_NUMBER:-}" ) >/dev/null 2>&1 || true

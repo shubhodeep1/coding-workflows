@@ -220,7 +220,9 @@ class Wiring(unittest.TestCase):
 
 	def test_review_rb_judge_gates_both_merge_sites(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
-		self.assertEqual(text.count('if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
+		# Merge-lease Phase 4 (#10198): the gated call carries the inline caller
+		# flag and falls back to _pr_base_sync_inline_merge on the update head.
+		self.assertEqual(text.count('if ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && '), 2)
 		# The transient-retry helper (#8524) repeats the head-bound merge call
 		# before the case block; it only runs after a gated site failed, so
 		# count the merge sites in the case block only.
@@ -241,10 +243,12 @@ class Wiring(unittest.TestCase):
 		# (3756 chars with both); 4000 covers the two together.
 		# 4200: the #9987 `lease_wait` branch (judge-decision mark) sits there too.
 		# 4600: all three together (4357 chars).
+		# 5200: the merge-lease Phase 4 inline-merge fallback (#10198) lengthens
+		# the gated line itself by about 400 chars.
 		for call in retry_calls:
-			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 4600):call.start()])
+			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 5200):call.start()])
 		# merge_with_followup's synchronous merge is gated too.
-		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then', text)
+		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}" || { type _pr_base_sync_inline_merge', text)
 
 	def test_poller_gates_its_direct_merge_sites(self) -> None:
 		text = POLLER.read_text(encoding="utf-8")
@@ -263,7 +267,7 @@ class Wiring(unittest.TestCase):
 		self.assertIn("path: .codex-freshness-src", job)
 		self.assertIn("scripts/pr_checks_lib.sh", job)
 		self.assertIn('[ "$(git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}" ]', job)
-		self.assertEqual(job.count('if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then'), 2)
+		self.assertEqual(job.count('if ! PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" "" && ! { type _pr_base_sync_inline_merge >/dev/null 2>&1 && '), 2)
 		self.assertIn("MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}", job)
 
 	def test_codex_agent_auto_merge_step_passes_the_variable(self) -> None:
