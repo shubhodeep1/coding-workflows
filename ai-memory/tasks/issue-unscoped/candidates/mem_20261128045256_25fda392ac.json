@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_deep_verify.sh:113-196 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `dv_listing_read_ok` is set to 1 whenever `gh_api_retry` exits 0 (lines 113-117/115-118 and 159-163/161-163). This happens before `_jobs_json_valid` checks the body (lines 135-141). An rc-0 reply with an invalid body therefore counts as a successful listing read. If a later recheck returns rc 75 or rc 2, the fail-closed guard at lines 184-186 is skipped and lines 193-196 report a \"spurious re-trigger \u2014 OK\".\n  WHY: Deep verification can pass a phase without ever seeing a valid jobs listing, and `test_empty_listing_then_failed_recheck_stays_spurious` only covers a valid empty body. Reviewers disagreed on severity: MAJOR (minimax, openai) vs NIT (glm), so the highest is used. anthropic_claude-sonnet-5_5 considered this finding and did not report it, because `gh_api_retry` returns 0 only on 2xx with a jobs array and the gap existed before the last run.\n- .github/workflows/test-and-mark-stable.yml:4326-4337 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The orchestrate-decompose-test timeout increase to 101 minutes budgets 1,200 s for only one `gh_api_retry` read. The dispatch and cleanup steps contain several independent rate-limit-aware reads (lines 4530-4618 and 4723-4745).\n  WHY: A second rate-limited read could add another 1,200 s past the 101-minute budget, so GitHub could cancel the job before its `always()` cleanup finishes. Rated MAJOR. minimax and glm raised the same concern only as low-risk hardening suggestions (HARDENING_RISK_SCORE 1), on the grounds that a primary reset cannot repeat within the job. anthropic_claude-sonnet-5_5 checked the arithmetic and found at most about 2100 s of waiting against 2700 s budgeted.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- tests/test_dispatch_and_watch_rate_limit.py:41-43 | HARDENING_SUGGESTION | HARDENING_RISK_SCORE=1\n  PROBLEM: The comment above GATE_JOB_OTHER_STEPS_RESERVE_SECS still says \"orchestrate-decompose-test: 3000s watch + 1500s cap + 360s = 4860s = 81m\". The job is now 101 minutes, which disagrees with the comment at test-and-mark-stable.yml line 4326-4330.\n  WHY: No runtime effect. Fix: update the parenthetical to mention the #10225 1200 s read-wait addition and the 6060 s = 101m total (1-2 lines).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stable_e2e_step_deep_verify.sh:lines 113-117 (initial read loop), lines 159-186 (fail-closed guard) | severity=MAJOR | confidence=3 (2 related items: CORRECTNESS & LOGIC and ERROR PATHS & EDGE CASES)\n  PROBLEM: `dv_listing_read_ok` is set to 1 on any `gh_api_retry` rc 0 before the body is schema-validated. The initial 3-attempt loop never runs `_jobs_json_valid`, and the recheck loop breaks on rc 75 or rc 2 before validating.\n  WHY: An rc-0 non-JSON first read (proxy 200, truncated payload, or an HTML-wrapped error) followed by rate-limited rechecks suppresses the \"Jobs listing unavailable\" verdict and reports a \"spurious re-trigger \u2014 OK\". Fix: set the flag only after `_jobs_json_valid \"$JOBS_JSON\"` passes.\n- .github/workflows/test-and-mark-stable.yml:lines 4326-4330, lines 4408-4411; tests/test_test_and_mark_stable_gh_rate_limit_routing.py:344-350 | HARDENING_SUGGESTION | HARDENING_RISK_SCORE=1\n  PROBLEM: The 1,200 s reserve covers one `gh_api_retry` read, but the job contains many independent reads, and `test_pat_jobs_bound_helper_waits` checks only one read's worst-case wait.\n  WHY: Runtime risk is low because the primary core reset cannot repeat within 101 minutes, but the comment does not say why. Fix: a one-line note on reset refill and short secondary retry-afters (2 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:Lines 4326-4337; multiple rate-limit-aware reads at lines 4530-4618 and 4723-4745 | severity=MAJOR | confidence=4\n  PROBLEM: The timeout increase budgets 1,200 s for one `gh_api_retry` read, but the dispatch and cleanup steps contain multiple independent reads, and each can wait twice for up to 600 s.\n  WHY: A second rate-limited read can add another 1,200 s beyond the 101-minute budget, and GitHub can then cancel the job before its `always()` cleanup completes.\n- scripts/stable_e2e_step_deep_verify.sh:Lines 113-117 set `dv_listing_read_ok` before the schema check at lines 139-140; the final failure guard is at lines 184-186 | severity=MAJOR | confidence=4\n  PROBLEM: Any `gh_api_retry` exit-0 response counts as a successful listing before `_jobs_json_valid` verifies its shape.\n  WHY: An invalid payload is replaced with an empty listing but leaves `dv_listing_read_ok=1`. If a later recheck fails, the guard is skipped and lines 193-196 report a spurious re-trigger as OK.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stable_e2e_step_deep_verify.sh:lines 115-118, lines 161-163, lines 135-141, line 186 | severity=NIT | confidence=3\n  PROBLEM: `dv_listing_read_ok` is set on the raw return code before validation. An exit-0 body that fails `_jobs_json_valid` is replaced with `{\"jobs\":[]}` but still counts as \"listing read\". A later rc 75 or rc 2 recheck then skips the line-186 guard, and the phase prints \"Run has no jobs after retries (spurious re-trigger) \u2014 OK\" with `deep_passed=true`.\n  WHY: A 200-classified reply that is not a jobs object counts as evidence the run was indexed, so deep verify passes an unverified phase, which is exactly what the fail-closed change was meant to prevent. Fix: set the flag only when `_jobs_json_valid \"$JOBS_JSON\"` passes, and move the recheck flag into the line-176 validity branch.\n- .github/workflows/test-and-mark-stable.yml:`orchestrate-decompose-test` job comment above `timeout-minutes: 101` (and the dispatch-step budget comment) | HARDENING_SUGGESTION | HARDENING_RISK_SCORE=1\n  PROBLEM: The budget reserves (3-1) x 600 s for one `gh_api_retry` reset wait, but the dispatch and cleanup steps contain several independent reads.\n  WHY: Fix: add a comment line explaining that a second full reset wait cannot occur in one job and that secondary waits are bounded by retry-after (1-2 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1e9d226f1dc4c732495c45128c024508adee38405d38dde53eec305c16340937",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10228,
+    "run_id": "46104529115",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46104529115",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128045256_25fda392ac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10228,
+    "run_id": "46104529115"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T04:52:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
