@@ -1005,11 +1005,6 @@
 			"stage": "Turns on runner image canary (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
 		},
 		{
-			"name": "STABLE_ROLLBACK_ENABLED",
-			"default": "true",
-			"stage": "Turns on stable rollback (added by open pull request #9359; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
 			"name": "STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED",
 			"default": "true",
 			"stage": "Turns on stall judge live review runs (added by open pull request #9573; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
