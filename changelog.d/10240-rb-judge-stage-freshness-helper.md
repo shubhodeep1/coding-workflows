@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The review-blocked judge's final-CI repair request now finds its dispatch helper in the codex-agent job.** `scripts/stage_workflow_support.sh` stages `review_freshness_ci_failed.sh` into `SUPPORT_SCRIPTS_DIR` as an optional bootstrap script, so `scripts/review_rb_judge.sh` can dispatch the repair review instead of logging `RB_JUDGE_RED_CHECK outcome=dispatch_failed` and withdrawing its request. A new contract test checks that every `${SUPPORT_SCRIPTS_DIR}` file the judge loads is staged. Refs #10240.
