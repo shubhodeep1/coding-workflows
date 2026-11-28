@@ -282,5 +282,285 @@ class PromoteStablePushRetryTest(unittest.TestCase):
 		self.assertIn("Refusing to dispatch the release on stale state", script)
 
 
+
+# --- Stable rollback hold gate (issue #10076) -------------------------------
+
+HOLD_GATE_STEP_ID = "stable_hold_gate"
+HOLD_SKIP_IF = "if: steps.stable_hold_gate.outputs.skip != 'true'"
+HOLD_CONTENTS_CALL = "repos/o/r/contents/stable-hold.json?ref=ai%2Fstable-hold"
+
+FAKE_HOLD_GIT = r"""#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+state = os.environ["FAKE_GIT_STATE"]
+with open(os.path.join(state, "git_calls.jsonl"), "a") as fh:
+    fh.write(json.dumps(args) + "\n")
+if args[:1] == ["show"] and len(args) == 2 and args[1].startswith("origin/main:scripts/"):
+    if os.environ.get("FAKE_GIT_SHOW_FAIL") == "1":
+        sys.stderr.write("fatal: path does not exist in 'origin/main'\n")
+        sys.exit(128)
+    rel = args[1][len("origin/main:"):]
+    path = os.path.join(os.environ["FAKE_REPO_ROOT"], rel)
+    if not os.path.isfile(path):
+        sys.stderr.write("fatal: path does not exist in 'origin/main'\n")
+        sys.exit(128)
+    with open(path) as fh:
+        sys.stdout.write(fh.read())
+    sys.exit(0)
+sys.exit(0)
+"""
+
+FAKE_HOLD_GH = r"""#!/usr/bin/env python3
+import base64, json, os, sys
+args = sys.argv[1:]
+state = os.environ["FAKE_GIT_STATE"]
+with open(os.path.join(state, "gh_calls.jsonl"), "a") as fh:
+    fh.write(json.dumps(args) + "\n")
+hold = os.environ.get("FAKE_HOLD", "inactive")
+if args[:1] == ["api"] and any("/contents/stable-hold.json" in a for a in args):
+    if hold == "inactive":
+        sys.stderr.write("gh: Not Found (HTTP 404)\n"); sys.exit(1)
+    if hold == "unknown":
+        sys.stderr.write("HTTP 503: Service Unavailable\n"); sys.exit(1)
+    doc = {"schema": "stable_hold.v1", "active": True, "to_version": "v1.45.0", "from_version": "v1.46.0"}
+    if hold == "malformed":
+        doc["schema"] = "other"
+    if hold == "cleared":
+        doc["active"] = False
+    print(json.dumps({"sha": "a" * 40, "encoding": "base64", "content": base64.b64encode(json.dumps(doc).encode()).decode()}))
+    sys.exit(0)
+sys.stderr.write("unexpected gh call\n")
+sys.exit(1)
+"""
+
+
+def _promote_job_step_blocks() -> list[list[str]]:
+	"""Split the `promote` job's steps into line blocks (one per `- name:`)."""
+	lines = WORKFLOW.read_text().splitlines()
+	start = next(i for i, line in enumerate(lines) if line.rstrip() == "  promote:")
+	steps_idx = next(
+		i for i in range(start, len(lines)) if lines[i].strip() == "steps:"
+	)
+	blocks: list[list[str]] = []
+	current: list[str] | None = None
+	step_indent = None
+	for line in lines[steps_idx + 1 :]:
+		if line.strip() and len(line) - len(line.lstrip()) <= 4:
+			break
+		if line.lstrip().startswith("- name:"):
+			indent = len(line) - len(line.lstrip())
+			if step_indent is None:
+				step_indent = indent
+			if indent == step_indent:
+				current = [line]
+				blocks.append(current)
+				continue
+		if current is not None:
+			current.append(line)
+	return blocks
+
+
+def _step_name(block: list[str]) -> str:
+	return block[0].split("- name:", 1)[1].strip()
+
+
+def _step_block_by_id(step_id: str) -> list[str]:
+	for block in _promote_job_step_blocks():
+		if any(line.strip() == f"id: {step_id}" for line in block):
+			return block
+	raise AssertionError(f"no promote step with id {step_id}")
+
+
+def _step_block_script(block: list[str]) -> str:
+	run_idx = next(i for i, line in enumerate(block) if line.strip() == "run: |")
+	body = block[run_idx + 1 :]
+	indent = min(
+		len(body_line) - len(body_line.lstrip()) for body_line in body if body_line.strip()
+	)
+	return (
+		"\n".join(body_line[indent:] if body_line.strip() else "" for body_line in body)
+		+ "\n"
+	)
+
+
+def _step_block_env(block: list[str]) -> dict:
+	env = {}
+	in_env = False
+	for line in block:
+		stripped = line.strip()
+		if stripped == "env:":
+			in_env = True
+			continue
+		if in_env:
+			if stripped.startswith("run:"):
+				break
+			key, _, value = stripped.partition(": ")
+			env[key] = value
+	return env
+
+
+class PromoteStableHoldGateTest(unittest.TestCase):
+	def _run_gate(self, hold="inactive", extra_env=None):
+		tmp = Path(tempfile.mkdtemp())
+		state = tmp / "state"
+		state.mkdir()
+		bindir = tmp / "bin"
+		bindir.mkdir()
+		for name, body in (("git", FAKE_HOLD_GIT), ("gh", FAKE_HOLD_GH), ("sleep", FAKE_SLEEP)):
+			path = bindir / name
+			path.write_text(body)
+			path.chmod(path.stat().st_mode | stat.S_IEXEC)
+		script = tmp / "gate.sh"
+		script.write_text(_step_block_script(_step_block_by_id(HOLD_GATE_STEP_ID)))
+		output = tmp / "github_output"
+		output.write_text("")
+		summary = tmp / "step_summary"
+		summary.write_text("")
+		env = dict(os.environ)
+		for key in (
+			"PROMOTE_STABLE_HOLD_GATE_ENABLED",
+			"GH_READ_TOKEN",
+			"STABLE_HOLD_BRANCH",
+			"STABLE_HOLD_FILE",
+		):
+			env.pop(key, None)
+		env.update(
+			{
+				"PATH": f"{bindir}:{env.get('PATH', '')}",
+				"FAKE_GIT_STATE": str(state),
+				"FAKE_REPO_ROOT": str(REPO_ROOT),
+				"FAKE_HOLD": hold,
+				"GH_RETRY_MAX_ATTEMPTS": "1",
+				"GITHUB_REPOSITORY": "o/r",
+				"GH_TOKEN": "x",
+				"GITHUB_OUTPUT": str(output),
+				"GITHUB_STEP_SUMMARY": str(summary),
+				"TMPDIR": str(tmp),
+				"PYTHONDONTWRITEBYTECODE": "1",
+			}
+		)
+		env.update(extra_env or {})
+		proc = subprocess.run(
+			["bash", str(script)],
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=120,
+			cwd=str(tmp),
+		)
+
+		def _calls(name):
+			path = state / name
+			if not path.exists():
+				return []
+			return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+		return proc, _calls("gh_calls.jsonl"), output.read_text(), summary.read_text()
+
+	def _hold_calls(self, gh_calls):
+		return [c for c in gh_calls if any("/contents/stable-hold.json" in a for a in c)]
+
+	def test_no_hold_branch_404_promotes(self):
+		proc, gh_calls, out, summary = self._run_gate("inactive")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("skip=false", out)
+		self.assertNotIn("skip=true", out)
+		self.assertNotIn("PROMOTE_SKIPPED", proc.stdout)
+		hold_calls = self._hold_calls(gh_calls)
+		self.assertEqual(len(hold_calls), 1, gh_calls)
+		self.assertIn(HOLD_CONTENTS_CALL, hold_calls[0])
+
+	def test_cleared_hold_promotes(self):
+		proc, gh_calls, out, summary = self._run_gate("cleared")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("skip=false", out)
+		self.assertNotIn("PROMOTE_SKIPPED", proc.stdout)
+
+	def test_hold_read_503_skips_fail_closed(self):
+		proc, gh_calls, out, summary = self._run_gate("unknown")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("PROMOTE_SKIPPED reason=stable_hold_unknown", proc.stdout)
+		self.assertIn("::warning::", proc.stdout)
+		self.assertIn("skip=true", out)
+		self.assertNotIn("skip=false", out)
+		self.assertIn("Promotion skipped", summary)
+
+	def test_active_hold_skips(self):
+		proc, gh_calls, out, summary = self._run_gate("active")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("PROMOTE_SKIPPED reason=stable_hold_active to=v1.45.0", proc.stdout)
+		self.assertIn("::warning::A stable rollback hold is active", proc.stdout)
+		self.assertIn("skip=true", out)
+		self.assertNotIn("skip=false", out)
+		self.assertIn("v1.45.0", summary)
+
+	def test_malformed_hold_skips_as_unknown(self):
+		proc, gh_calls, out, summary = self._run_gate("malformed")
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("PROMOTE_SKIPPED reason=stable_hold_unknown", proc.stdout)
+		self.assertIn("skip=true", out)
+
+	def test_reader_missing_on_main_skips_without_gh(self):
+		proc, gh_calls, out, summary = self._run_gate(
+			"inactive", {"FAKE_GIT_SHOW_FAIL": "1"}
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("PROMOTE_SKIPPED reason=stable_hold_unknown", proc.stdout)
+		self.assertIn("skip=true", out)
+		self.assertEqual(gh_calls, [])
+
+	def test_gate_disabled_promotes_without_reading(self):
+		for value in ("false", "FALSE"):
+			proc, gh_calls, out, summary = self._run_gate(
+				"active", {"PROMOTE_STABLE_HOLD_GATE_ENABLED": value}
+			)
+			self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+			self.assertIn("skip=false", out)
+			self.assertNotIn("PROMOTE_SKIPPED", proc.stdout)
+			self.assertEqual(gh_calls, [])
+
+	def test_unrecognised_switch_value_keeps_gate_on(self):
+		proc, gh_calls, out, summary = self._run_gate(
+			"active", {"PROMOTE_STABLE_HOLD_GATE_ENABLED": "flase"}
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("PROMOTE_SKIPPED reason=stable_hold_active to=v1.45.0", proc.stdout)
+		self.assertIn("skip=true", out)
+
+	def test_static_contract(self):
+		blocks = _promote_job_step_blocks()
+		names = [_step_name(block) for block in blocks]
+		gate_idx = next(
+			i
+			for i, block in enumerate(blocks)
+			if any(line.strip() == f"id: {HOLD_GATE_STEP_ID}" for line in block)
+		)
+		ff_idx = next(
+			i for i, block in enumerate(blocks) if any(line.strip() == "id: ff" for line in block)
+		)
+		self.assertEqual(names[gate_idx], "Check stable rollback hold")
+		self.assertEqual(names[gate_idx - 1], "Validate stable is fast-forwardable to main")
+		self.assertEqual(ff_idx, gate_idx + 1)
+		env = _step_block_env(blocks[gate_idx])
+		self.assertEqual(env.get("GH_TOKEN"), "${{ github.token }}")
+		self.assertEqual(
+			env.get("PROMOTE_STABLE_HOLD_GATE_ENABLED"),
+			"${{ vars.PROMOTE_STABLE_HOLD_GATE_ENABLED || 'true' }}",
+		)
+		for name in (
+			"Fast-forward stable to main",
+			"Resolve version (compute next minor if not provided)",
+			"Dispatch test-and-mark-stable on stable",
+			"Summary",
+		):
+			block = blocks[names.index(name)]
+			self.assertIn(HOLD_SKIP_IF, [line.strip() for line in block], name)
+		gate_script = _step_block_script(blocks[gate_idx])
+		self.assertIn("origin/main:scripts/stable_hold.sh", gate_script)
+		self.assertNotIn("${{", gate_script)
+		for block in blocks:
+			self.assertNotIn("rollback_stable.sh", "\n".join(block))
+
+
 if __name__ == "__main__":
 	unittest.main()
