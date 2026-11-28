@@ -1645,6 +1645,8 @@ jobs:
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
           MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          # Verdict-wait skip for the stall judge dispatch (issue #9991); 'false' restores it.
+          VERDICT_WAIT_DISPATCH_SKIP_ENABLED: ${{ vars.VERDICT_WAIT_DISPATCH_SKIP_ENABLED || 'true' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
           MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
@@ -1916,6 +1918,8 @@ jobs:
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
           MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          # Verdict-wait skip for the stall judge dispatch (issue #9991); 'false' restores it.
+          VERDICT_WAIT_DISPATCH_SKIP_ENABLED: ${{ vars.VERDICT_WAIT_DISPATCH_SKIP_ENABLED || 'true' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
           MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
           MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}

@@ -66,6 +66,11 @@ if args[1:2] == ["graphql"]:
 	for pr in fixture("pulls.json", []):
 		state = gate.get(str(pr["number"]), "PENDING")
 		status = None if state == "ABSENT" else {"context": {"state": state}}
+		# Review-blocked judge deferral status (issue #9991).
+		judge_state = fixture("judge.json", {}).get(str(pr["number"]))
+		if judge_state:
+			status = dict(status or {"context": None})
+			status["judgeMergePending"] = {"state": judge_state, "createdAt": "2026-11-17T00:00:00Z"}
 		commit = {"oid": pr["head"]["sha"], "status": status}
 		committed = commit_dates.get(str(pr["number"]), "2026-11-01T00:00:00Z")
 		if committed is not None:
@@ -569,3 +574,61 @@ def test_workflow_passes_the_cap_knobs_with_defaults() -> None:
 	assert env["SWEEP_REVIEW_ROUND_WINDOW_HOURS"] == "${{ vars.SWEEP_REVIEW_ROUND_WINDOW_HOURS || '48' }}"
 	# The helper comes from the trusted default-branch checkout, like the head gate.
 	assert "source .ci-rerun-support/scripts/review_sweep_round_cap.sh" in _extract_step_script()
+
+
+# ---------------------------------------------------------------------------
+# review_sweep_round_cap_applies (issue #9991)
+# ---------------------------------------------------------------------------
+
+
+def _applies(row: dict, **env: str) -> bool:
+	full_env = {"PATH": os.environ["PATH"], **env}
+	result = subprocess.run(["bash", "-c", f'source "{HELPER}"; review_sweep_round_cap_applies "$1"', "applies", json.dumps(row)],
+		env=full_env, capture_output=True, text=True, check=False)
+	return result.returncode == 0
+
+
+@pytest.mark.parametrize("row, expected", [
+	({"head_gate_state": "pending"}, True),
+	({"head_gate_state": "absent"}, True),
+	({"head_gate_state": "success"}, False),
+	({}, False),
+	({"head_gate_state": "pending", "judge_merge_pending_state": "success"}, False),
+	({"head_gate_state": "pending", "judge_merge_pending_state": "failure"}, True),
+])
+def test_round_cap_applies_only_to_heads_without_a_verdict(row: dict, expected: bool) -> None:
+	assert _applies(row) is expected
+
+
+def test_round_cap_applies_switch_off_keeps_the_old_rule() -> None:
+	row = {"head_gate_state": "pending", "judge_merge_pending_state": "success"}
+	assert _applies(row, VERDICT_WAIT_DISPATCH_SKIP_ENABLED="false") is True
+	assert _applies({"head_gate_state": "success"}, VERDICT_WAIT_DISPATCH_SKIP_ENABLED="false") is False
+
+
+def test_judge_decided_head_is_not_labelled_needs_human(tmp_path: Path) -> None:
+	(tmp_path / "judge.json").write_text(json.dumps({"5": "SUCCESS"}), encoding="utf-8")
+	result = _run_sweep(tmp_path, prs=[_pr(5)], rounds=_rounds(**{"5": 40}), gate={"5": "PENDING"})
+	assert result.returncode == 0, result.stderr
+	# The cap still bounds the dispatches; only the label and comment are skipped.
+	assert "reason=review_round_cap" in result.stdout and "label=skipped_verdict" in result.stdout
+	assert _dispatched(tmp_path) == []
+	assert not _lines(tmp_path, "labels.log") and not _lines(tmp_path, "comments.log")
+
+
+def test_judge_decided_head_under_the_cap_is_dispatched(tmp_path: Path) -> None:
+	(tmp_path / "judge.json").write_text(json.dumps({"5": "SUCCESS"}), encoding="utf-8")
+	result = _run_sweep(tmp_path, prs=[_pr(5)], rounds=_rounds(**{"5": 2}), gate={"5": "PENDING"})
+	assert result.returncode == 0, result.stderr
+	assert "reason=review_round_cap" not in result.stdout
+	assert _dispatched(tmp_path) == ["5"]
+
+
+def test_judge_decided_head_is_capped_with_the_switch_off(tmp_path: Path) -> None:
+	(tmp_path / "judge.json").write_text(json.dumps({"5": "SUCCESS"}), encoding="utf-8")
+	result = _run_sweep(tmp_path, prs=[_pr(5)], rounds=_rounds(**{"5": 40}), gate={"5": "PENDING"},
+		env={"VERDICT_WAIT_DISPATCH_SKIP_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr
+	assert "reason=review_round_cap" in result.stdout
+	assert "label=skipped_verdict" not in result.stdout
+	assert _dispatched(tmp_path) == []

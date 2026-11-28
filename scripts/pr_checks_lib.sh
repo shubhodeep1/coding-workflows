@@ -5917,7 +5917,7 @@ _pr_final_ci_merge_pending_mark()
 }
 
 # ---------------------------------------------------------------------------
-# _pr_judge_merge_pending_mark <pr> <head_sha> <decision> (issue #9987)
+# _pr_judge_merge_pending_mark <pr> <head_sha> <decision> [<base_sha>] (issue #9987)
 #
 # Why: the review-blocked judge waits for the merge lease before it posts
 # ai-review/head-gate ("gates first"), and the lease tick refused a waiter
@@ -5936,10 +5936,18 @@ _pr_final_ci_merge_pending_mark()
 # or on invalid input. Fail-open: every outcome returns 0. Log:
 # `JUDGE_MERGE_PENDING pr=<n> head=<sha> decision=<token>
 # outcome=marked|failed|disabled|skipped reason=<token>`.
+#
+# <base_sha> (optional, issue #9991): the base tip the judge's freshness check
+# compared (PR_BASE_FRESHNESS_BASE_SHA). When it is a full 40-hex SHA the
+# description gains `; base=<sha>` (at most 123 characters, under GitHub's
+# 140), so stall recovery (_rb_judge_verdict_wait_check in
+# scripts/orchestrate_poll_process.sh) can tell whether the base moved under
+# the PR's files since the decision. Without it the text is unchanged.
 # ---------------------------------------------------------------------------
 _pr_judge_merge_pending_mark()
 {
 	local jmp_pr="${1:-}" jmp_head="${2:-}" jmp_decision="${3:-}" jmp_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local jmp_base="${4:-}" jmp_description=""
 	local -a jmp_url_args=()
 	if ! _merge_lease_revoke_enabled; then
 		echo "JUDGE_MERGE_PENDING pr=${jmp_pr:-?} head=${jmp_head:-?} decision=${jmp_decision:-?} outcome=disabled reason=switch_off"
@@ -5959,13 +5967,49 @@ _pr_judge_merge_pending_mark()
 	if [[ "${RUN_URL:-}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+$ ]]; then
 		jmp_url_args=(-f "target_url=${RUN_URL}")
 	fi
+	jmp_description="Review-blocked judge decided ${jmp_decision}; waiting for the merge lease"
+	if [[ "${jmp_base}" =~ ^[0-9a-f]{40}$ ]]; then
+		jmp_description="${jmp_description}; base=${jmp_base}"
+	fi
 	if ! gh_retry _safe_gh_jq -X POST "repos/${jmp_repo}/statuses/${jmp_head}" \
 		-f state=success -f "context=${MERGE_LEASE_JUDGE_DECISION_CONTEXT:-ai-review/judge-merge-pending}" \
-		-f "description=Review-blocked judge decided ${jmp_decision}; waiting for the merge lease" \
+		-f "description=${jmp_description}" \
 		${jmp_url_args[@]+"${jmp_url_args[@]}"} >/dev/null 2>&1; then
 		echo "::warning::JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=${jmp_decision} outcome=failed reason=status_post_failed (stall recovery still re-runs the judge)"
 		return 0
 	fi
 	echo "JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=${jmp_decision} outcome=marked reason=lease_wait"
 	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Verdict-wait dispatch skip switches (issue #9991; Refs #9987, #9939).
+#
+# _pr_verdict_wait_enabled: VERDICT_WAIT_DISPATCH_SKIP_ENABLED (default true;
+# true/1/yes/on, case-insensitive). Shared by the review sweep
+# (scripts/review_sweep_head_gate.sh, scripts/review_sweep_round_cap.sh) and
+# stall recovery (_rb_judge_verdict_wait_check in
+# scripts/orchestrate_poll_process.sh). Off restores the old dispatches, the
+# old round-cap rule and no verdict-wait alerts.
+#
+# _pr_verdict_wait_alert_hours: prints VERDICT_WAIT_ALERT_HOURS (default 6);
+# a value that is not a non-negative integer warns on stderr and prints 6.
+# 0 turns the alert off. No API call in either.
+# ---------------------------------------------------------------------------
+_pr_verdict_wait_enabled()
+{
+	case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) return 0 ;;
+	esac
+	return 1
+}
+
+_pr_verdict_wait_alert_hours()
+{
+	local vwa_hours="${VERDICT_WAIT_ALERT_HOURS:-6}"
+	if ! [[ "${vwa_hours}" =~ ^[0-9]{1,5}$ ]]; then
+		echo "::warning::VERDICT_WAIT_ALERT_HOURS is not a non-negative integer; using 6." >&2
+		vwa_hours=6
+	fi
+	echo "$((10#${vwa_hours}))"
 }

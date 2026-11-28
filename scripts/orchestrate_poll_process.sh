@@ -24152,6 +24152,10 @@ REISSUE_EOF
 		  if [ "${_skip_redirect_rc}" -eq 1 ]; then
 		    return 1
 		  fi
+		  if [ "${_skip_redirect_rc}" -eq 4 ]; then
+		    echo "STALL_SKIP issue=${issue_num} reason=rb_judge_verdict_wait pr=${_skip_pr_num} phase=${phase} action=none requested_action=dispatch_rb_judge"
+		    return 0
+		  fi
 		  if [ "${_skip_redirect_rc}" -eq 2 ] || [ "${_skip_redirect_rc}" -eq 3 ]; then
 		    return 0
 		  fi
@@ -24340,6 +24344,14 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       local rb_dispatch_rc=0
 	      _dispatch_rb_judge_for_pr "${rb_pr_num}" "${issue_num}" || rb_dispatch_rc=$?
 	      if [ "${rb_dispatch_rc}" -eq 1 ]; then
+	        return 1
+	      fi
+	      if [ "${rb_dispatch_rc}" -eq 4 ]; then
+	        # Verdict-wait skip (issue #9991): no dispatch, no attempt counted,
+	        # no "dispatched" note.
+	        echo "STALL_SKIP issue=${issue_num} reason=rb_judge_verdict_wait pr=${rb_pr_num} phase=${phase} action=none requested_action=dispatch_rb_judge"
+	        STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_verdict_wait"
+	        STALL_RECOVERY_SHOULD_INCREMENT="false"
 	        return 1
 	      fi
 	      if [ "${rb_dispatch_rc}" -eq 2 ] || [ "${rb_dispatch_rc}" -eq 3 ]; then
@@ -32014,6 +32026,10 @@ This issue and its linked PR stay open with \`ai:needs-human\`; the unblock judg
 	          elif [ "${_std_rb_rc}" -eq 3 ]; then
 	            echo "STALL_SKIP issue=${issue_num} reason=phase_capped pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge"
 	            STALL_RECOVERY_SHOULD_INCREMENT="false"
+	          elif [ "${_std_rb_rc}" -eq 4 ]; then
+	            # Verdict-wait skip (issue #9991): no attempt counted.
+	            echo "STALL_SKIP issue=${issue_num} reason=rb_judge_verdict_wait pr=${_std_rb_pr_num} phase=${phase} action=none requested_action=dispatch_rb_judge"
+	            STALL_RECOVERY_SHOULD_INCREMENT="false"
 	          else
 	            echo "::warning::[standalone-stall] dispatch_rb_judge for issue #${issue_num} PR #${_std_rb_pr_num} failed (rc=${_std_rb_rc})."
 	            STALL_RECOVERY_SHOULD_INCREMENT="false"
@@ -33301,6 +33317,177 @@ _dispatch_integration_test_repair()
 	return 0
 }
 
+# _rb_judge_verdict_wait_check <pr_number> <pr_json> (issue #9991; Refs #9987)
+#
+# Why: stall recovery re-ran the review-blocked judge on heads it had already
+# decided `merge` on, whose merge only waited for the merge lease (#9573 x21,
+# #9637 x20 on 2026-11-23), and each run reached the same decision.
+#
+# Returns 0 (skip the dispatch) only when all of these hold, else 1:
+#   - VERDICT_WAIT_DISPATCH_SKIP_ENABLED is on (default true);
+#   - <pr_json> is <pr_number>'s own pulls/<n> payload with a 40-hex head (the
+#     skip-redirect caller may hold another PR's payload);
+#   - the PR waits: the MERGE_LEASE_WAIT_LABEL label, the
+#     FINAL_CI_MERGE_PENDING_LABEL label, or auto-merge enabled;
+#   - the current head (unchanged since <pr_json>) carries a verdict posted by
+#     the pipeline login: ai-review/judge-merge-pending success with the lease
+#     label, or ai-review/head-gate success with auto-merge or the final-CI
+#     label;
+#   - no required check run (isRequired for this PR, read in the same query;
+#     an unknown flag counts as required) completed and no required
+#     non-ai-review/ status was posted after the verdict, and the rollup was
+#     not truncated;
+#   - for a judge verdict, the base recorded in its description (`base=<sha>`)
+#     is the current base, or the base moved only outside the PR's files.
+# A lease granted to the PR removes the label, so the judge runs again (G6).
+# Sets RB_JUDGE_VERDICT_WAIT_REASON to the token logged.
+#
+# API (section 14): none when the switch is off, the payload is not this PR's
+# or no waiting state holds (the common case). Otherwise one GraphQL read
+# (head, base, the head's status-check rollup), in place of the workflow
+# dispatch it saves; the pipeline login comes from the tick's shared
+# PERSIST_JOURNAL_LOGIN_CACHE (one `gh api user` per tick at most). Only when
+# the base moved since the judge decision: one compare read plus the PR's
+# files (_merge_lease_pr_paths, one paginated read).
+# Fail-open: any failed or ambiguous read returns 1 (dispatch as before).
+# Logs: `VERDICT_WAIT_SKIP source=stall pr=<n> head=<sha> verdict=<kind>
+# reason=<token> waited_minutes=<m>` on a skip; `VERDICT_WAIT_RECHECK
+# source=stall pr=<n> outcome=dispatch reason=<token>` when a read was made
+# and the judge still runs.
+RB_JUDGE_VERDICT_WAIT_REASON=""
+_rb_judge_verdict_wait_check()
+{
+	local vw_pr="${1:-}" vw_json="${2:-}"
+	RB_JUDGE_VERDICT_WAIT_REASON=""
+	case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) ;;
+		*) return 1 ;;
+	esac
+	[[ "${vw_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+	[ -n "${vw_json}" ] || return 1
+	local vw_fields vw_num vw_head vw_wait vw_auto
+	vw_fields="$(printf '%s' "${vw_json}" | jq -r --arg lw "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" \
+		--arg fcl "${FINAL_CI_MERGE_PENDING_LABEL:-ai:final-ci-merge-pending}" '
+		select(type == "object")
+		| [((.number // "") | tostring), (.head.sha // ""),
+			([(.labels // [])[] | (.name? // .) | strings]
+				| if index($lw) != null then "lease" elif index($fcl) != null then "final_ci" else "none" end),
+			(if (.auto_merge // null) != null then "true" else "false" end)] | @tsv' 2>/dev/null)" || return 1
+	IFS=$'\t' read -r vw_num vw_head vw_wait vw_auto <<< "${vw_fields}"
+	[ "${vw_num}" = "${vw_pr}" ] || return 1
+	[[ "${vw_head}" =~ ^[0-9a-f]{40}$ ]] || return 1
+	if [ "${vw_wait}" = "none" ] && [ "${vw_auto}" != "true" ]; then
+		return 1
+	fi
+	local vw_kind="head_gate" vw_ctx="ai-review/head-gate" vw_wait_reason="auto_merge_waiting"
+	if [ "${vw_wait}" = "lease" ]; then
+		vw_kind="judge_merge_pending"
+		vw_ctx="${MERGE_LEASE_JUDGE_DECISION_CONTEXT:-ai-review/judge-merge-pending}"
+		vw_wait_reason="lease_wait"
+	elif [ "${vw_wait}" = "final_ci" ]; then
+		vw_wait_reason="final_ci_merge_pending"
+	fi
+	local vw_recheck_reason=""
+	local vw_query='query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      headRefOid
+      baseRefOid
+      commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 100) {
+        pageInfo { hasNextPage }
+        nodes { __typename ... on CheckRun { completedAt isRequired(pullRequestNumber: $number) } ... on StatusContext { context state createdAt description creator { login } isRequired(pullRequestNumber: $number) } }
+      } } } } }
+    }
+  }
+}'
+	local vw_raw="" vw_parsed=""
+	vw_raw="$(gh_retry gh api graphql -f query="${vw_query}" -f owner="${GITHUB_REPOSITORY%%/*}" \
+		-f name="${GITHUB_REPOSITORY#*/}" -F number="${vw_pr}" 2>/dev/null)" || vw_raw=""
+	if [ -n "${vw_raw}" ] && [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+		PERSIST_JOURNAL_LOGIN_CACHE="$(gh_retry gh api user --jq .login 2>/dev/null)" || PERSIST_JOURNAL_LOGIN_CACHE=""
+		[[ "${PERSIST_JOURNAL_LOGIN_CACHE}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || PERSIST_JOURNAL_LOGIN_CACHE=""
+	fi
+	if [ -n "${vw_raw}" ]; then
+		vw_parsed="$(printf '%s' "${vw_raw}" | jq -r --arg ctx "${vw_ctx}" --arg login "${PERSIST_JOURNAL_LOGIN_CACHE:-}" '
+			def ep: if type == "string" then (try fromdateiso8601 catch null) else null end;
+			.data.repository.pullRequest as $p
+			| select(($p | type) == "object")
+			| (($p.commits.nodes // [])[0].commit // {}) as $c
+			| ($c.statusCheckRollup.contexts // {}) as $r
+			| ([($r.nodes // [])[] | select(type == "object" and .__typename == "StatusContext" and .context == $ctx)] | first) as $v
+			| ($v.createdAt | ep) as $vt
+			# Only required checks count (G2); a missing isRequired counts (fail-open).
+			| ([($r.nodes // [])[] | select(type == "object" and .isRequired != false)
+				| if .__typename == "CheckRun" then (.completedAt | ep)
+					elif .__typename == "StatusContext" and (((.context // "") | startswith("ai-review/")) | not) then (.createdAt | ep)
+					else null end
+				| select(. != null)] | max) as $latest
+			| [($p.headRefOid // ""), ($p.baseRefOid // ""), ($c.oid // ""),
+				(if ($r.pageInfo.hasNextPage // false) == true then "true" else "false" end),
+				(if $v != null and (($v.state // "") | ascii_upcase) == "SUCCESS" and $login != "" and (($v.creator.login // "") == $login) then "true" else "false" end),
+				(if $vt == null then "" else ($vt | floor | tostring) end),
+				(if $latest == null then "" else ($latest | floor | tostring) end),
+				((($v.description // "") | capture("base=(?<b>[0-9a-f]{40})")? | .b) // "")]
+			# Empty fields become "-": read would merge adjacent tabs.
+			| map(if . == "" then "-" else . end) | @tsv' 2>/dev/null || true)"
+	fi
+	local vw_g_head vw_g_base vw_g_oid vw_g_trunc vw_g_ok vw_g_vt vw_g_latest vw_g_rec
+	if [ -z "${vw_parsed}" ]; then
+		vw_recheck_reason="read_failed"
+	else
+		IFS=$'\t' read -r vw_g_head vw_g_base vw_g_oid vw_g_trunc vw_g_ok vw_g_vt vw_g_latest vw_g_rec <<< "${vw_parsed}"
+		if [ "${vw_g_head}" != "${vw_head}" ] || [ "${vw_g_oid}" != "${vw_head}" ]; then
+			vw_recheck_reason="head_changed"
+		elif [ -z "${PERSIST_JOURNAL_LOGIN_CACHE:-}" ]; then
+			vw_recheck_reason="login_unknown"
+		elif [ "${vw_g_ok}" != "true" ] || ! [[ "${vw_g_vt}" =~ ^[0-9]+$ ]]; then
+			vw_recheck_reason="no_verdict"
+		elif [ "${vw_g_trunc}" = "true" ]; then
+			vw_recheck_reason="checks_truncated"
+		elif [[ "${vw_g_latest}" =~ ^[0-9]+$ ]] && [ "${vw_g_latest}" -gt "${vw_g_vt}" ]; then
+			vw_recheck_reason="checks_changed"
+		elif [ "${vw_kind}" = "judge_merge_pending" ]; then
+			if ! [[ "${vw_g_rec}" =~ ^[0-9a-f]{40}$ ]]; then
+				vw_recheck_reason="base_unknown"
+			elif ! [[ "${vw_g_base}" =~ ^[0-9a-f]{40}$ ]]; then
+				vw_recheck_reason="base_check_failed"
+			elif [ "${vw_g_rec}" != "${vw_g_base}" ]; then
+				local vw_cmp="" vw_base_files="" vw_pr_files="" vw_files_rc=0
+				vw_cmp="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/compare/${vw_g_rec}...${vw_g_base}" 2>/dev/null)" || vw_cmp=""
+				vw_base_files="$(printf '%s' "${vw_cmp}" | jq -r 'select(type == "object" and (.files | type) == "array")
+					| if (.files | length) >= 300 then "*" else ([.files[] | (.filename // empty), (.previous_filename // empty)] | unique | .[]) end' 2>/dev/null)" || vw_base_files=""
+				if [ -z "${vw_cmp}" ] || ! printf '%s' "${vw_cmp}" | jq -e 'type == "object" and (.files | type) == "array"' >/dev/null 2>&1; then
+					vw_recheck_reason="base_check_failed"
+				elif [ -n "${vw_base_files}" ]; then
+					if ! declare -F _merge_lease_pr_paths >/dev/null 2>&1 || ! declare -F _merge_lease_paths_intersect >/dev/null 2>&1; then
+						vw_recheck_reason="base_check_failed"
+					else
+						vw_pr_files="$(_merge_lease_pr_paths "${vw_pr}")" || vw_files_rc=$?
+						if [ "${vw_files_rc}" -ne 0 ] || [ -z "${vw_pr_files}" ]; then
+							vw_recheck_reason="base_check_failed"
+						elif _merge_lease_paths_intersect "${vw_base_files}" "${vw_pr_files}"; then
+							vw_recheck_reason="base_moved_overlap"
+						fi
+					fi
+				fi
+			fi
+		fi
+	fi
+	if [ -n "${vw_recheck_reason}" ]; then
+		RB_JUDGE_VERDICT_WAIT_REASON="${vw_recheck_reason}"
+		echo "VERDICT_WAIT_RECHECK source=stall pr=${vw_pr} outcome=dispatch reason=${vw_recheck_reason}"
+		return 1
+	fi
+	local vw_now vw_waited="unknown"
+	vw_now="$(date -u +%s 2>/dev/null || echo 0)"
+	if [[ "${vw_now}" =~ ^[0-9]+$ ]] && [ "${vw_now}" -ge "${vw_g_vt}" ]; then
+		vw_waited=$(( (vw_now - vw_g_vt) / 60 ))
+	fi
+	RB_JUDGE_VERDICT_WAIT_REASON="${vw_wait_reason}"
+	echo "VERDICT_WAIT_SKIP source=stall pr=${vw_pr} head=${vw_head} verdict=${vw_kind} reason=${vw_wait_reason} waited_minutes=${vw_waited}"
+	return 0
+}
+
 # _dispatch_rb_judge_for_pr <pr_number> [issue_number]
 #
 # Trigger review_rb_judge_dispatch.yml via workflow_dispatch for the
@@ -33321,6 +33508,10 @@ _dispatch_integration_test_repair()
 #   3 — skipped by the optional ai:review-blocked concurrency cap for
 #       this tick. Callers must treat this as a benign deferral and leave
 #       the recovery count unchanged.
+#   4 — skipped because the head already has a verdict that only waits to
+#       merge and nothing relevant changed since (_rb_judge_verdict_wait_check,
+#       issue #9991). Callers log `STALL_SKIP ... reason=rb_judge_verdict_wait`
+#       and leave the recovery count unchanged.
 #
 # API hygiene: reuses the cycle-local _CONFLICT_DISPATCH_TRACKER to
 # prevent duplicate dispatches within the same poll cycle, same as
@@ -33349,6 +33540,15 @@ _dispatch_rb_judge_for_pr()
 
 	if ! phase_cap_can_dispatch "ai:review-blocked" "dispatch_rb_judge" "${issue_num}"; then
 		return 3
+	fi
+
+	# Verdict-wait skip (issue #9991): the head already has a deferred verdict
+	# and nothing relevant changed since; a judge run would decide the same.
+	# After the read-only cap check, so a cap-deferred PR pays no read.
+	if declare -F _rb_judge_verdict_wait_check >/dev/null 2>&1 \
+		&& _rb_judge_verdict_wait_check "${pr_number}" "${STALL_IMPL_PR_JSON:-}"; then
+		echo "  ${log_prefix} Head already has a verdict waiting to merge (${RB_JUDGE_VERDICT_WAIT_REASON}); not re-running the judge."
+		return 4
 	fi
 
 	echo "  ${log_prefix} Dispatching review_rb_judge_dispatch.yml..."

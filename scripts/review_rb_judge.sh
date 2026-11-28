@@ -3366,7 +3366,9 @@ rb_judge_mark_merge_pending() {
   [ "${RB_JUDGE_MERGE_PENDING_MARKED}" = "true" ] && return 0
   declare -F _pr_judge_merge_pending_mark >/dev/null 2>&1 || return 0
   RB_JUDGE_MERGE_PENDING_MARKED="true"
-  PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_judge_merge_pending_mark "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA:-}" "${1:-}" || true
+  # The base tip the freshness check compared (issue #9991): stall recovery
+  # re-runs the judge only when the base moved under the PR's files since.
+  PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_judge_merge_pending_mark "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA:-}" "${1:-}" "${PR_BASE_FRESHNESS_BASE_SHA:-}" || true
   return 0
 }
 # END rb-judge judge-decision lease mark (#9987)
