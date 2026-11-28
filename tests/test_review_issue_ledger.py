@@ -54,6 +54,7 @@ def _run_ledger(
 	floor_tags_fixture: str | None = None,
 	review_ledger_enabled: str = "1",
 	review_issues_text: str | None = None,
+	unreachable_enabled: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
 	_skip_unless_gawk()
 	runtime_dir = workspace_dir / "runtime"
@@ -77,6 +78,8 @@ def _run_ledger(
 	env["REVIEW_ISSUES_FILE"] = str(runtime_dir / "review_issues.txt")
 	env["LEDGER_STATUS_FILE"] = str(runtime_dir / "ledger_status.txt")
 	env["FLOOR_TAGS_FILE"] = str(runtime_dir / "floor_tags.txt")
+	if unreachable_enabled is not None:
+		env["REVIEW_UNREACHABLE_FOLLOWUP_ENABLED"] = unreachable_enabled
 
 	return subprocess.run(
 		["bash", str(LEDGER_SCRIPT)],
@@ -626,6 +629,60 @@ def test_prior_iteration_rollback_preserves_last_seen_and_last_updated() -> None
 
 		entries = _parse_ledger_entries(ledger_path)
 		assert entries["iss_existing"]["LAST_SEEN_ITERATION"] == "2"
+
+
+_UNREACHABLE_PRIOR_LEDGER = """=== LEDGER v1 ===
+PR_NUMBER: 4242
+FIRST_SEEN_ITERATION: 1
+LAST_UPDATED_ITERATION: 1
+UNREACHABLE_FOLLOWUP_ISSUE: 55
+=== END HEADER ===
+
+=== ENTRY iss_00000000000000aa ===
+FILE: .github/workflows/ci.yml
+LINES: 3
+LENS: CORRECTNESS & LOGIC
+SEVERITY: high
+STATUS: unreachable
+FIRST_SEEN_ITERATION: 1
+LAST_SEEN_ITERATION: 1
+PERSIST_COUNT: 1
+UNREACHABLE_REASON: write_guard
+UNREACHABLE_SECURITY: false
+UNREACHABLE_FOLLOWUP: #55
+EDITOR_OUTCOMES:
+  ignored: unreachable (tracked in follow-up)
+=== END ENTRY ===
+"""
+
+
+def test_unreachable_status_and_followup_header_round_trip() -> None:
+	# Issue #10057: the unreachable status, its entry keys and the
+	# UNREACHABLE_FOLLOWUP_ISSUE header key survive a round; switched off the
+	# status maps to PERSISTING (then FIXED when absent) like older code.
+	for switch, expected_status in (("true", "unreachable"), ("false", "FIXED")):
+		with tempfile.TemporaryDirectory() as td:
+			workspace = Path(td)
+			_seed_repo(workspace, ["def sample(a, b):", "    total = a + b", "    return total"])
+			ledger_path = workspace / ".ai" / "review_issue_ledger.txt"
+			ledger_path.parent.mkdir(parents=True, exist_ok=True)
+			ledger_path.write_text(_UNREACHABLE_PRIOR_LEDGER, encoding="utf-8")
+
+			result = _run_ledger(workspace, "review_issues_empty.txt", 2, unreachable_enabled=switch)
+			assert result.returncode == 0, result.stderr
+			assert "ledger_reset=0" in result.stderr
+			entries = _parse_ledger_entries(ledger_path)
+			entry = entries["iss_00000000000000aa"]
+			assert entry["STATUS"] == expected_status
+			assert entry["EDITOR_OUTCOMES"] == "ignored: unreachable (tracked in follow-up)"
+			text = ledger_path.read_text(encoding="utf-8")
+			if switch == "true":
+				assert "UNREACHABLE_FOLLOWUP_ISSUE: 55" in text
+				assert entry["UNREACHABLE_REASON"] == "write_guard"
+				assert entry["UNREACHABLE_FOLLOWUP"] == "#55"
+				assert entry["PERSIST_COUNT"] == "1"
+			else:
+				assert "UNREACHABLE" not in text
 
 
 def main() -> int:

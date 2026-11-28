@@ -256,3 +256,44 @@ def test_review_workflow_passes_the_switch() -> None:
 	text = REVIEW_WF.read_text(encoding="utf-8")
 	assert "AUTOFIX_SKIP_GENERATED_CHORE: ${{ vars.AUTOFIX_SKIP_GENERATED_CHORE }}" in text
 	assert '"${AUTOFIX_SKIP_GENERATED_CHORE:-true}" != "false"' in GATE_SCRIPT.read_text(encoding="utf-8")
+
+
+# --- daily issue/PR audit report (#10153) -------------------------------------
+
+AUDIT_REF = "auto/issue-pr-audit-report-45769001364-1"
+AUDIT_REPORT = {"filename": "analysis/issue-pr-audit-2026-11-27.md", "status": "added"}
+AUDIT_STATE = {"filename": "analysis/issue_pr_audit_state.json", "status": "modified"}
+
+
+def test_issue_pr_audit_report_pr_skips_review(tmp_path: Path) -> None:
+	files = [
+		AUDIT_REPORT,
+		{**AUDIT_STATE, "status": "added"},
+		{"filename": "analysis/issue-pr-audit-2026-09-01.md", "status": "removed"},
+	]
+	fixture = _fixture(AUDIT_REF, files, additions=600, deletions=40)
+	result, outputs, _ = _run_gate(tmp_path, fixture)
+	_assert_skipped(result, outputs, "issue_pr_audit_report")
+
+
+def test_issue_pr_audit_report_alone_skips_review(tmp_path: Path) -> None:
+	result, outputs, _ = _run_gate(tmp_path, _fixture(AUDIT_REF, [AUDIT_REPORT, AUDIT_STATE]))
+	_assert_skipped(result, outputs, "issue_pr_audit_report")
+
+
+@pytest.mark.parametrize("label, fixture", [
+	("audit_extra_file", _fixture(AUDIT_REF, [AUDIT_REPORT, AUDIT_STATE, {"filename": "scripts/tool.sh", "status": "modified"}])),
+	("audit_state_removed", _fixture(AUDIT_REF, [AUDIT_REPORT, {**AUDIT_STATE, "status": "removed"}])),
+	("audit_renamed", _fixture(AUDIT_REF, [{**AUDIT_REPORT, "status": "renamed", "previous_filename": "analysis/issue-pr-audit-2026-11-26.md"}])),
+	("audit_other_author", _fixture(AUDIT_REF, [AUDIT_REPORT, AUDIT_STATE], author="mallory")),
+	("audit_wla_doc_on_audit_branch", _fixture(AUDIT_REF, [REPORT_FILE])),
+	("audit_doc_on_wla_branch", _fixture(REPORT_REF, [AUDIT_REPORT])),
+	("audit_state_on_wla_branch", _fixture(REPORT_REF, [REPORT_FILE, AUDIT_STATE])),
+	("audit_lookalike_branch", _fixture(AUDIT_REF + "-x", [AUDIT_REPORT])),
+	("audit_other_json", _fixture(AUDIT_REF, [AUDIT_REPORT, {"filename": "analysis/other_state.json", "status": "modified"}])),
+])
+def test_issue_pr_audit_anything_else_is_reviewed(tmp_path: Path, label: str, fixture: dict) -> None:
+	result, outputs, _ = _run_gate(tmp_path, fixture)
+	_assert_reviewed(result, outputs)
+	if label == "audit_other_author":
+		assert "AUTOFIX_GATE_GENERATED_CHORE pr=42 kind=issue_pr_audit_report outcome=review reason=author_not_pipeline" in result.stdout

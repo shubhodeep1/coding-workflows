@@ -99,6 +99,11 @@ OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"
 # ci_sync_quick.sh: the sync-quick CI helper (from the default branch),
 # appended the same way.
 OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_sync_quick.sh"
+# review_freshness_ci_failed.sh: the review dispatch helper that
+# review_rb_judge.sh sources for the final-CI repair request (#10063,
+# #10240). Optional so a support ref without it still bootstraps; the
+# judge then logs RB_JUDGE_RED_CHECK outcome=dispatch_failed as today.
+OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} review_freshness_ci_failed.sh"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then

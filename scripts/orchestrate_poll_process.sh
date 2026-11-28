@@ -6119,6 +6119,314 @@ _linked_pr_is_issue_implementation()
 	return 1
 }
 
+# _stall_judge_pick_linked_pr <issue_num> — choose the PR the stall judge's
+# diagnostics describe (issue #9892). Incident 2026-11-21: the diagnostics
+# used _issue_cross_ref_pr_number_last, which named #9685 (an unrelated,
+# already-closed PR that cited #9398 in its body) as "the only linked PR",
+# so the judge ruled close_and_reissue; close_linked_pr then used the wider
+# lookup below, found the green, lease-waiting implementation PR #9402 and
+# closed it unmerged. The judge now sees the PR close_linked_pr would act on.
+#
+# Input:   the issue number.
+# Output (globals, no stdout):
+#   STALL_JUDGE_PICKED_PR          PR number, or empty
+#   STALL_JUDGE_PICKED_PR_JSON     full pulls/<n> payload of the pick when
+#                                  the loop fetched it (always for an
+#                                  `implementation` pick; for `cross_ref_last`
+#                                  only if it was among the fetched
+#                                  candidates), else empty; callers reuse it
+#   STALL_JUDGE_PICKED_SOURCE      implementation | cross_ref_last | none
+#   STALL_JUDGE_PICKED_CANDIDATES  JSON array of the _find_all_linked_prs
+#                                  numbers (ascending)
+#   one `STALL_JUDGE_LINKED_PR issue=<n> pr=<m|none> source=<src>
+#   candidates=<csv|none>` line on stderr.
+# Pick: the lowest-numbered candidate that is open, unmerged and passes
+# _linked_pr_is_issue_implementation (the close_linked_pr predicate);
+# otherwise today's _issue_cross_ref_pr_number_last. Fetch order: branch and
+# body close-keyword hits first (ascending), then the remaining candidates
+# (ascending), so the 20-fetch cap is spent on likely implementation PRs.
+# Once a match is found, only lower-numbered candidates are still fetched
+# (within the cap), so the pick is the numerically lowest implementation PR
+# whenever the cap allows. close_linked_pr closes every open implementation
+# PR (in _find_all_linked_prs' lexicographic order), so the pick is always
+# one of the PRs it acts on; with several, the close guard checks them all.
+# API calls (§14/§15): the three lookups inside _find_all_linked_prs (one
+# timeline read, two `gh pr list`), one `pulls/<n>` per candidate tried
+# (hard cap 20; after a match only lower-numbered candidates are tried), and
+# one more timeline read only on fallback.
+# Runs once per stalled issue on the judge path, never per loop item.
+# Fail-open: any lookup error falls through to the cross_ref_last pick, so
+# the diagnostics are never worse than before this helper existed.
+_stall_judge_pick_linked_pr()
+{
+	local issue_num="$1"
+	STALL_JUDGE_PICKED_PR=""
+	STALL_JUDGE_PICKED_PR_JSON=""
+	STALL_JUDGE_PICKED_SOURCE="none"
+	STALL_JUDGE_PICKED_CANDIDATES="[]"
+	if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+		echo "STALL_JUDGE_LINKED_PR issue=${issue_num:-unknown} pr=none source=none candidates=none" >&2
+		return 0
+	fi
+	# The same three lookups (and API calls) as _find_all_linked_prs, made
+	# directly so the fetch order below can try the `ai/issue-<n>` branch and
+	# body close-keyword hits (open PRs, implementation PRs by construction)
+	# before timeline-only cross-refs. An issue cited by many unrelated PRs
+	# therefore cannot push its implementation PR past the fetch cap.
+	local _sjp_candidates="" _sjp_xref="" _sjp_branch="" _sjp_bodyref="" _sjp_order=""
+	_sjp_xref="$(_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null || true)"
+	_sjp_branch="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null || true)"
+	_sjp_bodyref="$(_linked_prs_by_body_reference "${issue_num}" 2>/dev/null || true)"
+	_sjp_candidates="$(printf '%s\n%s\n%s\n' "${_sjp_xref}" "${_sjp_branch}" "${_sjp_bodyref}" | grep -E '^[0-9]+$' | sort -n -u || true)"
+	if [ -n "${_sjp_candidates}" ]; then
+		STALL_JUDGE_PICKED_CANDIDATES="$(printf '%s\n' "${_sjp_candidates}" | jq -Rnc '[inputs | tonumber? // empty]' 2>/dev/null || echo '[]')"
+		[ -n "${STALL_JUDGE_PICKED_CANDIDATES}" ] || STALL_JUDGE_PICKED_CANDIDATES="[]"
+	fi
+	_sjp_order="$({ printf '%s\n%s\n' "${_sjp_branch}" "${_sjp_bodyref}" | grep -E '^[0-9]+$' | sort -n -u; printf '%s\n' "${_sjp_candidates}"; } | grep -E '^[0-9]+$' | awk '!seen[$0]++' || true)"
+	local -A _sjp_fetched_json=()
+	local _sjp_pr="" _sjp_json="" _sjp_head="" _sjp_body="" _sjp_fetches=0
+	while IFS= read -r _sjp_pr; do
+		[[ "${_sjp_pr}" =~ ^[0-9]+$ ]] || continue
+		# After a match, only a lower-numbered candidate can replace it.
+		if [ -n "${STALL_JUDGE_PICKED_PR}" ] && [ "${_sjp_pr}" -ge "${STALL_JUDGE_PICKED_PR}" ]; then
+			continue
+		fi
+		[ "${_sjp_fetches}" -lt 20 ] || break
+		_sjp_fetches=$((_sjp_fetches + 1))
+		_sjp_json="$(_fetch_pr_json "${_sjp_pr}" 2>/dev/null || echo '{}')"
+		[ -n "${_sjp_json}" ] && [ "${_sjp_json}" != "{}" ] || continue
+		_sjp_fetched_json["${_sjp_pr}"]="${_sjp_json}"
+		printf '%s' "${_sjp_json}" | jq -e '
+			type == "object"
+			and (((.state // "") | tostring | ascii_downcase) == "open")
+			and ((.merged // false) != true)
+		' >/dev/null 2>&1 || continue
+		_sjp_head="$(printf '%s' "${_sjp_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+		_sjp_body="$(printf '%s' "${_sjp_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+		if _linked_pr_is_issue_implementation "${issue_num}" "${_sjp_head}" "${_sjp_body}"; then
+			STALL_JUDGE_PICKED_PR="${_sjp_pr}"
+			STALL_JUDGE_PICKED_PR_JSON="${_sjp_json}"
+			STALL_JUDGE_PICKED_SOURCE="implementation"
+		fi
+	done <<< "${_sjp_order}"
+	if [ -z "${STALL_JUDGE_PICKED_PR}" ]; then
+		local _sjp_last=""
+		_sjp_last="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+		if [[ "${_sjp_last}" =~ ^[0-9]+$ ]]; then
+			STALL_JUDGE_PICKED_PR="${_sjp_last}"
+			STALL_JUDGE_PICKED_SOURCE="cross_ref_last"
+			# Reuse the payload the loop already fetched (no second pulls/<n>).
+			STALL_JUDGE_PICKED_PR_JSON="${_sjp_fetched_json[${_sjp_last}]:-}"
+		fi
+	fi
+	local _sjp_csv=""
+	_sjp_csv="$(printf '%s\n' "${_sjp_candidates}" | grep -E '^[0-9]+$' | paste -sd, - 2>/dev/null || true)"
+	echo "STALL_JUDGE_LINKED_PR issue=${issue_num} pr=${STALL_JUDGE_PICKED_PR:-none} source=${STALL_JUDGE_PICKED_SOURCE} candidates=${_sjp_csv:-none}" >&2
+	return 0
+}
+
+# _stall_reissue_guard_refuse <issue_num> <pr|""> <reason> — record and log
+# one close_and_reissue refusal for _stall_reissue_green_pr_guard. Sets
+# STALL_REISSUE_REFUSED_PR / STALL_REISSUE_REFUSED_REASON and prints the
+# contractual `STALL_REISSUE_REFUSED issue=<n> pr=<m|unknown> reason=<token>`
+# line on stdout. Makes no API calls.
+_stall_reissue_guard_refuse()
+{
+	STALL_REISSUE_REFUSED_PR="${2:-}"
+	STALL_REISSUE_REFUSED_REASON="${3:-check_unavailable}"
+	echo "STALL_REISSUE_REFUSED issue=${1:-unknown} pr=${STALL_REISSUE_REFUSED_PR:-unknown} reason=${STALL_REISSUE_REFUSED_REASON}"
+}
+
+# _stall_reissue_green_pr_guard <issue_num> [stall_minutes] — last line of
+# defence before any close_and_reissue closes the issue's implementation PR
+# (issue #9892, incident #9398/#9402: a green PR waiting for the merge lease
+# was closed unmerged). Returns 0 when the close may go ahead, 1 when it is
+# refused (STALL_REISSUE_REFUSED_PR / _REASON set, one STALL_REISSUE_REFUSED
+# line logged).
+#
+# Enumerates open implementation PRs exactly like close_linked_pr (timeline
+# cross-refs, `ai/issue-<n>` head, body close keyword; filtered by
+# _linked_pr_is_issue_implementation) and refuses when any of them:
+#   - is held per _stall_pr_ai_hold_reason (draft, skip_ai_title, and, when
+#     stall_minutes is given, merge_lease_wait), or
+#   - has a green head: the newest `ai-review/head-gate` commit status on
+#     its head is success AND the required CI check
+#     (_pr_auto_merge_required_ci_check_name; `none` counts as satisfied, as
+#     on the merge path) succeeded on a run of
+#     .github/workflows/<wf> for that head, where <wf> is the step's
+#     final-CI workflow captured at start-up in
+#     _OPP_STALL_MERGE_FINAL_CI_WORKFLOW (default ci.yml; the poller clears
+#     the original variable, #9732) (run-id binding, so a same-name `lint`
+#     from another workflow does not count). The CI state comes from
+#     _pr_checks_completed.
+# Fails CLOSED: any read error refuses with reason=check_unavailable,
+# because closing a good PR unmerged is the costly mistake.
+# Kill switch: STALL_REISSUE_GREEN_PR_GUARD_ENABLED (default true).
+# API calls (only on the rare close_and_reissue path): the three
+# close_linked_pr lookups, one pulls/<n> per candidate, and per open
+# implementation PR one statuses read plus, when the head gate is green, one
+# workflow-runs read and the _pr_checks_completed reads.
+_stall_reissue_green_pr_guard()
+{
+	local issue_num="$1"
+	local stall_minutes="${2:-}"
+	STALL_REISSUE_REFUSED_PR=""
+	STALL_REISSUE_REFUSED_REASON=""
+	case "$(printf '%s' "${STALL_REISSUE_GREEN_PR_GUARD_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		false|0|no|off) return 0 ;;
+	esac
+	if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+		_stall_reissue_guard_refuse "${issue_num}" "" "check_unavailable"
+		return 1
+	fi
+	local _srg_xref="" _srg_branch="" _srg_body=""
+	if ! _srg_xref="$(_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null)"; then
+		_stall_reissue_guard_refuse "${issue_num}" "" "check_unavailable"
+		return 1
+	fi
+	if ! _srg_branch="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null)"; then
+		_stall_reissue_guard_refuse "${issue_num}" "" "check_unavailable"
+		return 1
+	fi
+	# The body close-keyword search runs inline rather than through
+	# _linked_prs_by_body_reference, whose documented fail-open `|| echo "[]"`
+	# would make a failed search look like "no body-linked PRs" and let the
+	# close go ahead. Same query and filter as that helper; a failure refuses.
+	local _srg_body_json=""
+	if ! _srg_body_json="$(gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" --state open \
+		--search "#${issue_num} in:body" \
+		--json number,body --limit 100 2>/dev/null)"; then
+		_stall_reissue_guard_refuse "${issue_num}" "" "check_unavailable"
+		return 1
+	fi
+	if ! _srg_body="$(printf '%s' "${_srg_body_json}" | jq -r --arg n "${issue_num}" '
+		(. // [])
+		| .[]
+		| select((.body // "") | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#" + $n + "\\b"))
+		| .number
+	' 2>/dev/null)"; then
+		_stall_reissue_guard_refuse "${issue_num}" "" "check_unavailable"
+		return 1
+	fi
+	local _srg_candidates=""
+	_srg_candidates="$(printf '%s\n%s\n%s\n' "${_srg_xref}" "${_srg_branch}" "${_srg_body}" | grep -E '^[0-9]+$' | sort -n -u || true)"
+	[ -n "${_srg_candidates}" ] || return 0
+
+	local _srg_pr="" _srg_json="" _srg_open="" _srg_head="" _srg_pr_body="" _srg_sha="" _srg_base=""
+	local _srg_hold="" _srg_statuses="" _srg_gate="" _srg_ci_name="" _srg_wf="" _srg_runs="" _srg_ids=""
+	while IFS= read -r _srg_pr; do
+		[[ "${_srg_pr}" =~ ^[0-9]+$ ]] || continue
+		_srg_json="$(_fetch_pr_json "${_srg_pr}" 2>/dev/null || echo '')"
+		_srg_open="$(printf '%s' "${_srg_json}" | jq -r '
+			if type != "object" or (has("state") | not) then "unknown"
+			elif (((.state // "") | tostring | ascii_downcase) == "open") and ((.merged // false) != true) then "open"
+			else "not_open" end
+		' 2>/dev/null || echo "unknown")"
+		case "${_srg_open}" in
+			open) ;;
+			not_open) continue ;;
+			*)
+				_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+				return 1
+				;;
+		esac
+		_srg_head="$(printf '%s' "${_srg_json}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+		_srg_pr_body="$(printf '%s' "${_srg_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+		_linked_pr_is_issue_implementation "${issue_num}" "${_srg_head}" "${_srg_pr_body}" || continue
+		_srg_hold="$(_stall_pr_ai_hold_reason "${_srg_json}" "${stall_minutes}")"
+		if [ -n "${_srg_hold}" ]; then
+			_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "${_srg_hold}"
+			return 1
+		fi
+		# A lease hold that lapsed while the label-age read fails
+		# (label_age_minutes=read_error) must not let the close go ahead: the
+		# guard fails closed on any read error. A successful read is cached,
+		# so this re-read costs an API call only when the read failed.
+		if [ -n "${stall_minutes}" ] && [ "${STALL_MERGE_LEASE_WAIT_MAX_MINUTES:-1440}" != "0" ] \
+			&& printf '%s' "${_srg_json}" | jq -e --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" '[(.labels // [])[]? | if type == "string" then . else (.name // empty) end] | index($l) != null' >/dev/null 2>&1; then
+			local _srg_age_rc=0
+			_stall_merge_lease_label_age_minutes "${_srg_pr}" "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" >/dev/null 2>&1 || _srg_age_rc=$?
+			if [ "${_srg_age_rc}" -eq 2 ]; then
+				_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+				return 1
+			fi
+		fi
+		_srg_sha="$(printf '%s' "${_srg_json}" | jq -r '.head.sha // ""' 2>/dev/null || echo "")"
+		_srg_base="$(printf '%s' "${_srg_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+		if ! [[ "${_srg_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+			_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+			return 1
+		fi
+		# Review gate: newest ai-review/head-gate status on the head (the same
+		# selection as the gate supersede check in scripts/pr_checks_lib.sh).
+		# §14 audit: no status payload for this head is cached on the stall
+		# path, and this read runs only on the rare close_and_reissue path
+		# (once per open implementation PR), never once per loop item.
+		if ! _srg_statuses="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${_srg_sha}/statuses?per_page=100" 2>/dev/null)"; then
+			_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+			return 1
+		fi
+		_srg_gate="$(printf '%s' "${_srg_statuses}" | jq -r '
+			if type == "array" then
+				([.[] | select(type == "object" and .context == "ai-review/head-gate")]
+				| if length == 0 then "absent"
+				else (max_by([(.created_at // ""), (.id // 0)]) | (.state // "absent") | tostring) end)
+			else "__read_failed__" end
+		' 2>/dev/null || echo "__read_failed__")"
+		if [ -z "${_srg_gate}" ] || [ "${_srg_gate}" = "__read_failed__" ]; then
+			_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+			return 1
+		fi
+		[ "${_srg_gate}" = "success" ] || continue
+		# CI half: `none` (consumer default) counts as satisfied, as on the
+		# merge path; otherwise bind the named check to CI workflow runs.
+		if ! type _pr_auto_merge_required_ci_check_name >/dev/null 2>&1 || ! type _pr_checks_completed >/dev/null 2>&1; then
+			_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+			return 1
+		fi
+		_srg_ci_name="$(_pr_auto_merge_required_ci_check_name "${_srg_base}" 2>/dev/null || echo "")"
+		if [ "${_srg_ci_name}" != "none" ]; then
+			_srg_wf="${_OPP_STALL_MERGE_FINAL_CI_WORKFLOW:-ci.yml}"
+			if ! [[ "${_srg_wf}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+				_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+				return 1
+			fi
+			if ! _srg_runs="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${_srg_wf}/runs?head_sha=${_srg_sha}&per_page=20" 2>/dev/null)"; then
+				_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+				return 1
+			fi
+			_srg_ids="$(printf '%s' "${_srg_runs}" | jq -r --arg path ".github/workflows/${_srg_wf}" --arg sha "${_srg_sha}" '
+				if (type == "object" and (.workflow_runs | type) == "array") then
+					[.workflow_runs[]
+						| select(type == "object")
+						| select(((.path // "") | split("@") | .[0]) == $path)
+						| select((.head_sha // "") == $sha)
+						| (.id // empty | tostring)] | join(",")
+				else "__read_failed__" end
+			' 2>/dev/null || echo "__read_failed__")"
+			if [ "${_srg_ids}" = "__read_failed__" ]; then
+				_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+				return 1
+			fi
+			# No CI run for the head: the CI half is not green.
+			[ -n "${_srg_ids}" ] || continue
+			PR_CHECKS_LAST_CI_STATE="unknown"
+			PR_CHECKS_CI_RUN_IDS="${_srg_ids}" _pr_checks_completed "${_srg_pr}" "${_srg_sha}" "${_srg_base}" >/dev/null || true
+			case "${PR_CHECKS_LAST_CI_STATE:-unknown}" in
+				success) ;;
+				unknown)
+					_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
+					return 1
+					;;
+				*) continue ;;
+			esac
+		fi
+		_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "green_head"
+		return 1
+	done <<< "${_srg_candidates}"
+	return 0
+}
+
 # _resolve_linked_pr_fresh_by_branch — Deterministic fallback for a linked
 # PR's head-commit timestamp when the issue→PR cross-reference timeline (the
 # single source that feeds BOTH stall-freshness guards: the detect_stalls
@@ -21191,9 +21499,15 @@ cancel_zombie_runs_for_issue() {
 }
 
 # Find and close the PR linked to an issue (if any).
+# close_linked_pr <issue_num> [close_reason] [stall_minutes] — the optional
+# third argument (issue #9892, default `0`) is the caller's stall clock for
+# the merge-lease hold check below, so its lapse backstops match the ones
+# the caller's own hold checks and _stall_reissue_green_pr_guard applied.
 close_linked_pr() {
   local issue_num="$1"
   local close_reason="${2:-Closed by orchestrator stall recovery.}"
+  local _clp_stall_minutes="${3:-0}"
+  [[ "${_clp_stall_minutes}" =~ ^[0-9]+$ ]] || _clp_stall_minutes="0"
   # Owner-held PRs (draft / `[skip ai]` title, issue #9733) are never
   # closed: their numbers land here (space-separated) and the first hold
   # detail in CLOSE_LINKED_PR_HELD_DETAIL, so a caller about to close the
@@ -21226,7 +21540,7 @@ close_linked_pr() {
     # The same request also carries draft/title for the owner-hold check.
     local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body pr_hold_reason
     pr_meta_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
-      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // ""), draft: (.draft // false), title: (.title // "")}' || echo "")"
+      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // ""), draft: (.draft // false), title: (.title // ""), number: (.number // null), labels: [(.labels // [])[]? | (.name // empty)], updated_at: (.updated_at // "")}' || echo "")"
     pr_state="$(printf '%s' "${pr_meta_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
     pr_head_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
     pr_base_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
@@ -21243,7 +21557,17 @@ close_linked_pr() {
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (cross-reference only; head=${pr_head_ref:-?} does not match the issue's implementation branch pattern and the body carries no close keyword; base=${pr_base_ref:-?} is shown for context and is not evaluated)."
       continue
     fi
-    pr_hold_reason="$(_stall_pr_ai_hold_reason "${pr_meta_json}")"
+    # Issue #9892: every caller is a stall-recovery close path (the skip and
+    # exhausted close-outs never run _stall_reissue_green_pr_guard), so a
+    # PR waiting for the merge lease is held here too. The caller's stall
+    # clock (third argument) keeps the lapse backstops in step with the
+    # caller's own hold checks and the close guard: with the real clock an
+    # unreadable label age lapses here exactly when it lapsed there, so the
+    # close-outs cannot park the issue forever and close_and_reissue does not
+    # leave the PR open next to its replacement. The default `0` enables the
+    # hold without those backstops (lapse only on the label's readable age).
+    # The projection above carries `number`, `labels` and `updated_at`.
+    pr_hold_reason="$(_stall_pr_ai_hold_reason "${pr_meta_json}" "${_clp_stall_minutes}")"
     if [ -n "${pr_hold_reason}" ]; then
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (owner hold: reason=pr_ai_hold detail=${pr_hold_reason})."
       CLOSE_LINKED_PR_HELD_PRS="${CLOSE_LINKED_PR_HELD_PRS:+${CLOSE_LINKED_PR_HELD_PRS} }${pr_num}"
@@ -23251,6 +23575,19 @@ execute_stall_recovery_action() {
     return 1
   fi
 
+  # Last line of defence before close_and_reissue (issue #9892): never close
+  # an open implementation PR that is held (draft / [skip ai] / waiting for
+  # the merge lease) or whose head is green. Runs before the arm's
+  # ancestor-chain cap, which also calls close_linked_pr. Fails closed; the
+  # refusal is a "no action" return and counts no attempt.
+  if [ "${action}" = "close_and_reissue" ] && ! _stall_reissue_green_pr_guard "${issue_num}" "${stall_minutes}"; then
+    echo "  [stall-recovery] Refusing close_and_reissue for #${issue_num}: PR #${STALL_REISSUE_REFUSED_PR:-unknown} reason=${STALL_REISSUE_REFUSED_REASON:-check_unavailable}. Issue and PR left untouched."
+    tg_notify "Stall recovery: refused close_and_reissue for issue #${issue_num} (PR #${STALL_REISSUE_REFUSED_PR:-unknown}, reason=${STALL_REISSUE_REFUSED_REASON:-check_unavailable})."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+    STALL_RECOVERY_SHOULD_INCREMENT="false"
+    STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_refused"
+    return 1
+  fi
+
   # The actions-runs blob behind ACTIVE_WORKFLOW_ISSUES could not be verified
   # this tick (_ensure_actions_runs_blob_has_self_run): do not escalate to a
   # human over runs that may still be in flight. Other actions are unchanged.
@@ -23527,9 +23864,10 @@ STALL_EOF
         fi
         # Owner hold (draft / `[skip ai]` title): no dispatch, no empty
         # commit, no conflict routing, no attempt counted. Reads the payload
-        # fetched above (0 extra API calls).
+        # fetched above (0 extra API calls, apart from the per-process cached
+        # label-age read for a PR labelled ai:merge-lease-wait).
         local _rtr_ai_hold_reason=""
-        _rtr_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_rtr_pr_json}")"
+        _rtr_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_rtr_pr_json}" "${stall_minutes}")"
         if [ -n "${_rtr_ai_hold_reason}" ]; then
           echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${pr_num} detail=${_rtr_ai_hold_reason} phase=${phase} action=none"
           STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_pr_ai_hold"
@@ -23924,7 +24262,7 @@ STALL_EOF
         echo "  [stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES}). Closing without re-issue — judge will verify."
         ensure_label_exists "ai:closed"
         close_linked_pr "${issue_num}" \
-          "Closed by orchestrator stall recovery — ancestor-chain no-op cap reached (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES})."
+          "Closed by orchestrator stall recovery — ancestor-chain no-op cap reached (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES})." "${stall_minutes}"
         if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
           # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
           echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
@@ -23964,9 +24302,13 @@ STALL_EOF
       # reuses the skip arm's REST implementation-PR lookup (1 `gh pr list
       # --head` + 1 pulls/<n> on the common path) on this rare arm only.
       # A failed or empty lookup fails open to the legacy flow.
+      # The stall clock enables the merge-lease hold here too (issue #9892):
+      # a lease label applied after _stall_reissue_green_pr_guard passed is
+      # caught before the replacement exists (0 extra calls on the full
+      # pulls/<n> payload, apart from the cached label-age read).
       if _resolve_issue_implementation_pr "${issue_num}"; then
         local _reissue_hold_reason=""
-        _reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+        _reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${stall_minutes}")"
         if [ -n "${_reissue_hold_reason}" ]; then
           echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
           STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
@@ -24053,7 +24395,22 @@ REISSUE_EOF
       new_num="$(basename "${new_url_clean%%[?#]*}")"
       if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
         surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
-        close_linked_pr "${issue_num}" "${_stall_reissue_close_msg}"
+        close_linked_pr "${issue_num}" "${_stall_reissue_close_msg}" "${stall_minutes}"
+        if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+          # A hold (e.g. ai:merge-lease-wait) appeared after the pre-create
+          # re-check (issue #9892): roll the re-issue back rather than close
+          # the source next to an open, held PR. The replacement is closed as
+          # not planned, the source issue and the held PR stay open, and no
+          # attempt is counted.
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+          echo "::warning::close_and_reissue for #${issue_num}: close_linked_pr left held PR(s) ${CLOSE_LINKED_PR_HELD_PRS} open (detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}); closing replacement #${new_num} and keeping #${issue_num} open."
+          gh_retry gh issue close "${new_num}" --repo "${GITHUB_REPOSITORY}" --reason "not planned" \
+            -c "Closed by orchestrator stall recovery: the implementation PR of #${issue_num} became held (${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}) while this replacement was being created, so #${issue_num} stays open." 2>/dev/null \
+            || echo "::warning::Could not close replacement #${new_num}; it duplicates #${issue_num}, which stays open."
+          STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
         ensure_label_exists "ai:closed"
         gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
           --remove-label 'ai:done' --remove-label 'ai:implementing' \
@@ -24101,7 +24458,7 @@ REISSUE_EOF
           # fetched (0 extra API calls): recover_stalled_issue's hold guard
           # fails open when the linked-PR caches lack draft/title.
           local _skip_hold_reason=""
-          _skip_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+          _skip_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${stall_minutes}")"
           if [ -n "${_skip_hold_reason}" ]; then
             echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_skip_pr_num} detail=${_skip_hold_reason} phase=${phase} action=none requested_action=skip"
             STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_ai_hold"
@@ -24194,7 +24551,7 @@ The issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge
 
       echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
       close_linked_pr "${issue_num}" \
-        "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap."
+        "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap." "${stall_minutes}"
       if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
         # close_linked_pr left an owner-held PR open: leave the issue open too.
         echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=skip source=close_linked_pr"
@@ -24246,9 +24603,10 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       pr_json="$(_fetch_pr_json "${target_pr}")"
       # Owner hold (draft / `[skip ai]` title, PR #9750): the stall judge can
       # route a held PR here; no branch update, no dispatch, no attempt
-      # counted. Reads the payload fetched above (0 extra API calls).
+      # counted. Reads the payload fetched above (0 extra API calls, apart
+      # from the per-process cached label-age read for a lease-waiting PR).
       local _rmc_ai_hold_reason=""
-      _rmc_ai_hold_reason="$(_stall_pr_ai_hold_reason "${pr_json}")"
+      _rmc_ai_hold_reason="$(_stall_pr_ai_hold_reason "${pr_json}" "${stall_minutes}")"
       if [ -n "${_rmc_ai_hold_reason}" ]; then
         echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${target_pr} detail=${_rmc_ai_hold_reason} phase=${phase} action=none"
         STALL_RECOVERY_EFFECTIVE_ACTION="resolve_merge_conflict_skipped_pr_ai_hold"
@@ -24315,7 +24673,7 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       # Owner hold (#9733) on the payload resolved above (0 extra calls):
       # also covers the stall judge's dispatch_rb_judge fallback.
       local _rbj_hold_reason=""
-      _rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      _rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${stall_minutes}")"
       if [ -n "${_rbj_hold_reason}" ]; then
         echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${rb_pr_num} detail=${_rbj_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
         STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_pr_ai_hold"
@@ -25578,14 +25936,36 @@ invoke_stall_judge() {
     ] | (if length > 8 then .[-8:] else . end)
   ' 2>/dev/null || echo '[]')"
 
+  # Issue #9892: describe the issue's own implementation PR (the one
+  # close_linked_pr would act on) instead of the LAST PR that cross-references
+  # the issue; _stall_judge_pick_linked_pr falls back to that last cross-ref
+  # only when no open implementation PR exists.
   local linked_pr
+  _stall_judge_pick_linked_pr "${issue_num}"
+  linked_pr="${STALL_JUDGE_PICKED_PR:-}"
+  local linked_pr_source="${STALL_JUDGE_PICKED_SOURCE:-none}"
+  local linked_pr_candidates="${STALL_JUDGE_PICKED_CANDIDATES:-[]}"
+  printf '%s' "${linked_pr_candidates}" | jq -e 'type == "array"' >/dev/null 2>&1 || linked_pr_candidates='[]'
   # Issue #9986: resolved in the main shell so the fetched PR JSON is reused
   # below; STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED=false keeps the
   # last-cross-reference lookup.
+  # Merge resolution (#9892 + #9986): an open implementation PR picked above
+  # is what close_linked_pr acts on, so it is kept as is. Only when the pick
+  # fell back (cross_ref_last / none) does the #9986 resolver replace that
+  # fallback, so a later docs/plans-only PR no longer wins over the issue's
+  # merged implementation PR. The source stays non-`implementation` in that
+  # case, so the hold check below is unaffected.
   STALL_JUDGE_LINKED_PR_JSON=''
   STALL_JUDGE_LINKED_PR_NUM=''
-  _stall_judge_resolve_linked_pr "${issue_num}" || true
-  linked_pr="${STALL_JUDGE_LINKED_PR_NUM:-}"
+  if [ "${linked_pr_source}" != "implementation" ]; then
+    _stall_judge_resolve_linked_pr "${issue_num}" || true
+    linked_pr="${STALL_JUDGE_LINKED_PR_NUM:-}"
+    if [ "${linked_pr}" != "${STALL_JUDGE_PICKED_PR:-}" ]; then
+      # The picked payload describes a different PR; never reuse it.
+      STALL_JUDGE_PICKED_PR_JSON=''
+    fi
+    [[ "${linked_pr}" =~ ^[0-9]+$ ]] || linked_pr_source="none"
+  fi
 
   local linked_pr_json='{}'
   local target_pr=""
@@ -25599,6 +25979,8 @@ invoke_stall_judge() {
     target_pr="${linked_pr}"
     if [ -n "${STALL_JUDGE_LINKED_PR_JSON:-}" ]; then
       linked_pr_json="${STALL_JUDGE_LINKED_PR_JSON}"
+    elif [ -n "${STALL_JUDGE_PICKED_PR_JSON:-}" ]; then
+      linked_pr_json="${STALL_JUDGE_PICKED_PR_JSON}"
     else
       linked_pr_json="$(_fetch_pr_json "${linked_pr}")"
     fi
@@ -25607,6 +25989,24 @@ invoke_stall_judge() {
     head_ref="$(_jq_field "${linked_pr_json}" '.head.ref')"
     base_ref="$(_jq_field "${linked_pr_json}" '.base.ref')"
     head_sha="$(_jq_field "${linked_pr_json}" '.head.sha')"
+  fi
+
+  # Owner hold or merge-lease wait on the picked PR (issue #9892): the
+  # earlier hold checks read the batched GraphQL linked_pr, which for #9398
+  # was the closed #9685, so the held #9402 reached the judge. No judge, no
+  # dispatch, no attempt counted. Only the issue's own implementation PR can
+  # hold the issue: a cross_ref_last fallback is an unrelated PR that merely
+  # cites the issue (`Refs #N`), and a draft or `[skip ai]` title on it must
+  # not park the issue on every tick without an attempt being counted.
+  local _sjp_hold_reason=""
+  if [ "${linked_pr_source}" = "implementation" ]; then
+    _sjp_hold_reason="$(_stall_pr_ai_hold_reason "${linked_pr_json}" "${stall_minutes}")"
+  fi
+  if [ -n "${_sjp_hold_reason}" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${target_pr} detail=${_sjp_hold_reason} phase=${phase} action=none source=judge_pick"
+    STALL_RECOVERY_SHOULD_INCREMENT="false"
+    STALL_RECOVERY_EFFECTIVE_ACTION="run_stall_judge_skipped_pr_ai_hold"
+    return 1
   fi
 
   local workflows_json
@@ -25638,6 +26038,80 @@ invoke_stall_judge() {
     | reverse
     | .[:3]
   ' 2>/dev/null || echo '[]')"
+
+  # Issue #10149 (re-implementation of #9546): the cached runs blob lists
+  # only status=in_progress runs, so a review run of the PR's current head
+  # still waiting for a runner was invisible here and the judge escalated a
+  # PR whose review had simply not started yet. With
+  # STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED (default true) and an open linked
+  # PR, list the PR branch's runs once and merge the review-family ones.
+  # GitHub API audit (CLAUDE.md §14): _load_actions_runs_cached only holds
+  # in_progress runs (no queued or completed ones), and
+  # _direct_inflight_review_run_on_branch returns a single run id, drops
+  # completed runs and runs on another code path, so neither covers this.
+  # One `gh run list` per judge invocation; fails open to the cached outcomes.
+  # --limit 100 (one API page) is applied before the review-name filter, so
+  # newer CI runs on a busy branch cannot push a queued review out of view.
+  local _sj_review_waiting_for_runner="false" _sj_review_waiting_run="" _sj_live_outcome="disabled" _sj_live_runs_total=0
+  local _sj_live_enabled="${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED:-true}"
+  _sj_live_enabled="$(printf '%s' "${_sj_live_enabled}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "${_sj_live_enabled}" in
+    false|0|no|off) _sj_live_enabled="false" ;;
+    *) _sj_live_enabled="true" ;;
+  esac
+  if [ "${_sj_live_enabled}" = "true" ]; then
+    if [ "${pr_state}" != "open" ] || [ -z "${head_ref}" ]; then
+      _sj_live_outcome="no_open_pr"
+    else
+      local _sj_live_runs_json="" _sj_live_rc=0
+      _sj_live_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+        --branch "${head_ref}" \
+        --limit 100 \
+        --json databaseId,status,conclusion,name,workflowName,headSha,headBranch,createdAt,startedAt \
+        2>/dev/null)" || _sj_live_rc=$?
+      if [ "${_sj_live_rc}" -ne 0 ] || [ -z "${_sj_live_runs_json}" ] \
+        || ! printf '%s' "${_sj_live_runs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+        _sj_live_outcome="listing_unavailable"
+      else
+        local _sj_zq_cutoff _sj_zq_def _sj_live_review_runs _sj_merged_outcomes
+        _sj_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+        [[ "${_sj_zq_cutoff}" =~ ^[0-9]+$ ]] || _sj_zq_cutoff=0
+        _sj_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+        _sj_live_review_runs="$(printf '%s' "${_sj_live_runs_json}" | jq -c '
+          [.[]?
+            | select(((.name // "") as $n | ["AI Review", "Internal Review", "Review Autofix", "Internal: AI Review & Autofix", "Codex PR Self-Healing Semantic Agent"] | index($n) != null)
+                     or ((.workflowName // "") as $w | ["AI Review", "Internal Review", "Review Autofix", "Internal: AI Review & Autofix", "Codex PR Self-Healing Semantic Agent"] | index($w) != null))
+          ]' 2>/dev/null || echo '[]')"
+        _sj_live_runs_total="$(printf '%s' "${_sj_live_review_runs}" | jq -r 'length' 2>/dev/null || echo 0)"
+        [[ "${_sj_live_runs_total}" =~ ^[0-9]+$ ]] || _sj_live_runs_total=0
+        _sj_review_waiting_run="$(printf '%s' "${_sj_live_review_runs}" | jq -r \
+          --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" \
+          --argjson zq_cutoff "${_sj_zq_cutoff}" "${_sj_zq_def}"'
+          [.[]?
+            | select(($head_sha != "" and (.headSha // "") == $head_sha) or ($head_sha == "" and (.headBranch // "") == $head_ref))
+            | select((.status // "") as $s | ["queued", "waiting", "pending", "requested"] | index($s) != null)
+            | select((. + {status: "queued"}) | is_wedged_queued($zq_cutoff) | not)
+          ] | (.[0].databaseId // empty) | tostring' 2>/dev/null || echo "")"
+        if [[ "${_sj_review_waiting_run}" =~ ^[0-9]+$ ]]; then
+          _sj_review_waiting_for_runner="true"
+        else
+          _sj_review_waiting_run=""
+        fi
+        _sj_merged_outcomes="$(jq -cn --argjson cached "${workflow_outcomes}" --argjson live "${_sj_live_review_runs}" '
+          ([$live[]? | {id: .databaseId, workflow: (if (.name // "") != "" then .name else (.workflowName // "") end), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.headBranch // ""), head_sha: (.headSha // ""), created_at: (.createdAt // "")}]
+           + [$cached[]? | . + {head_sha: (.head_sha // "")}])
+          | unique_by(.id)
+          | sort_by(.created_at)
+          | reverse
+          | .[:5]' 2>/dev/null || echo "")"
+        if [ -n "${_sj_merged_outcomes}" ] && printf '%s' "${_sj_merged_outcomes}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+          workflow_outcomes="${_sj_merged_outcomes}"
+        fi
+        _sj_live_outcome="ok"
+      fi
+    fi
+  fi
+  echo "STALL_JUDGE_LIVE_REVIEW_RUNS issue=${issue_num} pr=${target_pr:-none} outcome=${_sj_live_outcome} runs=${_sj_live_runs_total} waiting=${_sj_review_waiting_for_runner}"
 
   # Attempt journal (issue #8428, P1). Only with PERSIST_JOURNAL_ENABLED=true
   # (default false): render the item's journal from comments this tick
@@ -25716,6 +26190,8 @@ invoke_stall_judge() {
     --argjson workflow_outcomes "${workflow_outcomes}" \
     --argjson current_wave "${CURRENT_WAVE:-1}" \
     --argjson prior_actions "${prior_actions}" \
+    --arg linked_pr_source "${linked_pr_source}" \
+    --argjson linked_pr_candidates "${linked_pr_candidates}" \
     '{
       issue_number: ($issue_number | tonumber),
       local_id: (if $local_id == "" then null else $local_id end),
@@ -25732,7 +26208,9 @@ invoke_stall_judge() {
       },
       recent_review_workflow_outcomes: $workflow_outcomes,
       current_wave: $current_wave,
-      prior_recovery_actions: $prior_actions
+      prior_recovery_actions: $prior_actions,
+      linked_pr_source: $linked_pr_source,
+      linked_pr_candidates: $linked_pr_candidates
     }' 2>/dev/null || echo '')"
 
   # Defensive guard: if the diagnostics builder above silently failed
@@ -25753,6 +26231,8 @@ invoke_stall_judge() {
       --arg pr_mergeable "${pr_mergeable}" \
       --arg head_ref "${head_ref}" \
       --arg base_ref "${base_ref}" \
+      --arg linked_pr_source "${linked_pr_source}" \
+      --argjson linked_pr_candidates "${linked_pr_candidates}" \
       '{
         issue_number: ($issue_number | tonumber? // null),
         local_id: (if $local_id == "" then null else $local_id end),
@@ -25766,8 +26246,20 @@ invoke_stall_judge() {
           head_ref: (if $head_ref == "" then null else $head_ref end),
           base_ref: (if $base_ref == "" then null else $base_ref end)
         },
+        linked_pr_source: $linked_pr_source,
+        linked_pr_candidates: $linked_pr_candidates,
         diagnostics_build_failed: true
       }' 2>/dev/null || echo '{"diagnostics_build_failed":true}')"
+  fi
+  # Issue #10149: with STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED on, both the full
+  # diagnostics and the minimal fallback carry review_waiting_for_runner
+  # (switch off: unchanged).
+  if [ "${_sj_live_enabled}" = "true" ]; then
+    local _sj_waiting_diag
+    if _sj_waiting_diag="$(printf '%s' "${diagnostics}" | jq -c --argjson w "${_sj_review_waiting_for_runner}" \
+      '. + {review_waiting_for_runner: $w}' 2>/dev/null)" && [ -n "${_sj_waiting_diag}" ]; then
+      diagnostics="${_sj_waiting_diag}"
+    fi
   fi
   if [ -n "${_persist_journal_file}" ]; then
     # attempt_journal (at most 4 KiB, via --rawfile: no MAX_ARG_STRLEN risk).
@@ -25884,8 +26376,21 @@ invoke_stall_judge() {
 
   rm -f "${stall_judge_semble_query_file}"
 
+  # Issue #10149: the review-runner hold also covers the fallback ladder action
+  # (escalate_human with ENABLE_STALL_HUMAN_TERMINALIZATION=true), so a failed
+  # or unparseable judge cannot escalate or close a PR whose review is queued.
+  local _sj_fallback_held="false"
+  if [ "${_sj_review_waiting_for_runner}" = "true" ]; then
+    case "${fallback_action}" in escalate_human|close_and_reissue) _sj_fallback_held="true" ;; esac
+  fi
+
   if [ "${judge_success}" != "true" ]; then
     echo "::warning::Stall judge failed for issue #${issue_num}; falling back to ${fallback_action}."
+    if [ "${_sj_fallback_held}" = "true" ]; then
+      echo "STALL_RECOVERY issue=${issue_num} reason=review_waiting_for_runner held=${fallback_action} pr=${target_pr:-none} run=${_sj_review_waiting_run:-none} phase=${phase}"
+      STALL_RECOVERY_EFFECTIVE_ACTION="${fallback_action}_held_review_waiting_for_runner"
+      return 1
+    fi
     execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
     return $?
   fi
@@ -25894,6 +26399,11 @@ invoke_stall_judge() {
   judge_json="$(_robust_parse_json_file "${stall_judge_output_file}")"
   if [ -z "${judge_json}" ]; then
     echo "::warning::Could not parse stall judge output for #${issue_num}; falling back to ${fallback_action}."
+    if [ "${_sj_fallback_held}" = "true" ]; then
+      echo "STALL_RECOVERY issue=${issue_num} reason=review_waiting_for_runner held=${fallback_action} pr=${target_pr:-none} run=${_sj_review_waiting_run:-none} phase=${phase}"
+      STALL_RECOVERY_EFFECTIVE_ACTION="${fallback_action}_held_review_waiting_for_runner"
+      return 1
+    fi
     execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
     return $?
   fi
@@ -25928,7 +26438,11 @@ invoke_stall_judge() {
   # Threshold reuses MAX_JUDGE_REPLAY for parity with the input-hash cap.
   local _judge_escalate_streak=0
   if [ "${_judge_state_file_ready}" = "true" ]; then
-    if [ "${judge_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+    if [ "${judge_action}" = "escalate_human" ] \
+      && { [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ] || [ "${_sj_review_waiting_for_runner}" = "true" ]; }; then
+      # Issue #10149: a tick on which a review of the linked PR's head waits
+      # for a runner is treated the same way (computed, not stored), so held
+      # ticks do not push the streak toward MAX_JUDGE_REPLAY.
       # Active set unverifiable this tick: compute the streak this verdict
       # would reach so the MAX_JUDGE_REPLAY backstop still yields
       # effective_action=escalate_human (then held by
@@ -25995,6 +26509,25 @@ invoke_stall_judge() {
     effective_action="escalate_human"
     echo "STALL_RECOVERY issue=${issue_num} reason=judge_escalate_kept linked_pr=${_STALL_KEEP_ESCALATION_REASON} pr=${target_pr:-none} base=$(_close_sweep_log_ref "${_STALL_KEEP_ESCALATION_BASE}" "unknown") phase=${phase}"
   fi
+  # Issue #10149: a review run of the PR's current head is waiting for a
+  # runner, so escalating or closing the PR now would act on a review that
+  # simply has not started. Hold both (D1): the judge comment still posts,
+  # nothing is dispatched and no attempt is counted, as for the owner hold
+  # below; the next tick re-checks. Never mapped to `skip`, which can close
+  # the linked PR. The wedged-queued cutoff (#9473, ZOMBIE_RUN_MAX_QUEUED_HOURS)
+  # bounds the hold: the waiting-run selection applies it to queued, waiting,
+  # pending and requested runs alike, so no unstarted run holds forever.
+  # The judge's own escalate_human is held too: with the default
+  # ENABLE_STALL_HUMAN_TERMINALIZATION=false it is normalized to the ladder
+  # action above (e.g. retrigger_implement), which would otherwise dispatch
+  # while the review is still waiting for a runner.
+  local _sj_review_runner_hold="false"
+  if [ "${_sj_review_waiting_for_runner}" = "true" ]; then
+    case "${effective_action}" in
+      escalate_human|close_and_reissue) _sj_review_runner_hold="true" ;;
+    esac
+    [ "${judge_action}" = "escalate_human" ] && _sj_review_runner_hold="true"
+  fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then
     STALL_JUDGE_TARGET_PR="${target_pr}"
@@ -26021,6 +26554,14 @@ invoke_stall_judge() {
   if [ "${effective_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
     _judge_effective_label="${effective_action} (held: active_set_unverifiable)"
   fi
+  if [ "${_sj_review_runner_hold}" = "true" ]; then
+    if [ "${_judge_effective_label}" != "${effective_action}" ]; then
+      # Both holds apply: name both reasons.
+      _judge_effective_label="${_judge_effective_label%)}, review_waiting_for_runner)"
+    else
+      _judge_effective_label="${effective_action} (held: review_waiting_for_runner)"
+    fi
+  fi
 
   local judge_comment
   judge_comment="## 🧑‍⚖️ Stall Judge — Issue #${issue_num} attempt $((recovery_count + 1))
@@ -26044,6 +26585,20 @@ ${diagnostics}
 
   if [ "${effective_action}" != "${judge_action}" ]; then
     echo "::notice::Stall judge action '${judge_action}' normalized to '${effective_action}' for issue #${issue_num}."
+  fi
+
+  if [ "${_sj_review_runner_hold}" = "true" ]; then
+    echo "STALL_RECOVERY issue=${issue_num} reason=review_waiting_for_runner held=${effective_action} pr=${target_pr:-none} run=${_sj_review_waiting_run:-none} phase=${phase}"
+    STALL_RECOVERY_EFFECTIVE_ACTION="${effective_action}_held_review_waiting_for_runner"
+    # A held cache replay dispatched nothing: restore the replay_count it
+    # bumped, so held ticks cannot reach MAX_JUDGE_REPLAY and force
+    # escalate_human the tick the review starts (the cache key ignores status).
+    if [ "${_judge_from_cache}" = "true" ] && [ "${_judge_force_escalate}" != "true" ] && [ -n "${_judge_cache_key}" ]; then
+      jq --arg k "${_judge_cache_key}" --argjson n "${_judge_cache_replay_count}" \
+        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k].replay_count = $n)' \
+        "${_judge_state_file}" > "${_judge_state_file}.tmp" 2>/dev/null && mv "${_judge_state_file}.tmp" "${_judge_state_file}" || rm -f "${_judge_state_file}.tmp" 2>/dev/null || true
+    fi
+    return 1
   fi
 
   case "${effective_action}" in
@@ -26639,6 +27194,64 @@ _linked_pr_is_capacity_waiting()
   ' >/dev/null 2>&1
 }
 
+# _stall_merge_lease_label_age_minutes <pr_num> <label> — whole minutes since
+# the label's most recent `labeled` event on the PR (issue #9892 bounded
+# merge-lease wait). The REST pulls/<n> payload and the batched GraphQL
+# linked_pr shape carry no label timestamps, so this makes one GraphQL read
+# (pullRequest.timelineItems, LABELED_EVENT, last 50). It runs only from
+# _stall_pr_ai_hold_reason, only when a stall-recovery caller sees the lease
+# label on an open PR. The labeled-at epoch (or `none` when no matching
+# event is found) is cached per PR and label in the per-process file
+# _STALL_MERGE_LEASE_AGE_CACHE_FILE (created with mktemp below, because the
+# hold check runs in $(...) subshells), so the same PR is read at most once
+# per poller process however many hold checks see it; read errors are not
+# cached. The age is recomputed from the cached epoch on every call.
+# Prints the age. Prints nothing and returns 2 on a transient read error
+# (GraphQL/jq failure, empty or malformed response, no clock; not cached, so
+# the next call reads again), or 1 when no age can ever be read: no matching
+# event in the last 50 (cached `none`), or no PR number / repository. The
+# caller keeps the hold on 2 and applies its stall-clock backstop only on 1.
+_stall_merge_lease_label_age_minutes()
+{
+  local _smla_pr="$1" _smla_label="$2"
+  [[ "${_smla_pr}" =~ ^[0-9]+$ ]] && [ -n "${_smla_label}" ] || return 1
+  [[ "${GITHUB_REPOSITORY:-}" == */* ]] || return 1
+  local _smla_cache="${_STALL_MERGE_LEASE_AGE_CACHE_FILE:-}" _smla_epoch=""
+  if [ -n "${_smla_cache}" ] && [ -f "${_smla_cache}" ]; then
+    _smla_epoch="$(awk -F'\t' -v pr="${_smla_pr}" -v l="${_smla_label}" '$1 == pr && $3 == l { v = $2 } END { if (v != "") print v }' "${_smla_cache}" 2>/dev/null || true)"
+  fi
+  if [ -z "${_smla_epoch}" ]; then
+    local _smla_owner="${GITHUB_REPOSITORY%%/*}" _smla_name="${GITHUB_REPOSITORY##*/}"
+    local _smla_resp=""
+    # shellcheck disable=SC2016
+    _smla_resp="$(gh_retry gh api graphql \
+      -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){timelineItems(itemTypes:[LABELED_EVENT],last:50){nodes{... on LabeledEvent{createdAt label{name}}}}}}}' \
+      -f owner="${_smla_owner}" -f name="${_smla_name}" -F number="${_smla_pr}" 2>/dev/null)" || return 2
+    [ -n "${_smla_resp}" ] || return 2
+    _smla_epoch="$(printf '%s' "${_smla_resp}" | jq -r --arg l "${_smla_label}" '
+      if (.data.repository.pullRequest.timelineItems.nodes | type) != "array" then error("shape")
+      else
+        [.data.repository.pullRequest.timelineItems.nodes[]
+          | select(type == "object" and ((.label.name // "") == $l))
+          | (.createdAt // "") | select(type == "string" and . != "")
+          | fromdateiso8601]
+        | if length == 0 then "none" else (max | floor | tostring) end
+      end
+    ' 2>/dev/null)" || return 2
+    [[ "${_smla_epoch}" =~ ^([0-9]+|none)$ ]] || return 2
+    if [ -n "${_smla_cache}" ]; then
+      printf '%s\t%s\t%s\n' "${_smla_pr}" "${_smla_epoch}" "${_smla_label}" >> "${_smla_cache}" 2>/dev/null || true
+    fi
+  fi
+  [[ "${_smla_epoch}" =~ ^[0-9]+$ ]] || return 1
+  local _smla_now="" _smla_age=0
+  _smla_now="$(date -u +%s 2>/dev/null || echo "")"
+  [[ "${_smla_now}" =~ ^[0-9]+$ ]] || return 2
+  _smla_age=$(( (10#${_smla_now} - 10#${_smla_epoch}) / 60 ))
+  [ "${_smla_age}" -ge 0 ] || _smla_age=0
+  printf '%s\n' "${_smla_age}"
+}
+
 # _stall_pr_ai_hold_reason <pr_json> — owner hold on a PR (PR #9750).
 # Prints `draft` when the PR is a draft, `skip_ai_title` when its title holds
 # the `[skip ai]` marker (the same substring match as the review gate in
@@ -26652,31 +27265,138 @@ _linked_pr_is_capacity_waiting()
 # Stall recovery never dispatches a review, pushes an empty commit or calls
 # the stall judge for a held PR; a manual workflow_dispatch of
 # internal-review.yml still overrides the hold in the review gate.
-# Makes no API calls.
+# Makes no API calls, except the lease-label age read described below
+# (cached per PR per poller process).
+#
+# Optional second argument [stall_minutes] (issue #9892): only stall-recovery
+# callers and the close_and_reissue guard pass it (the stall clock, or `0`
+# from the review-blocked judge arm); any non-empty value enables the lease
+# hold. With it, a PR that carries
+# ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} (set by scripts/pr_checks_lib.sh
+# while a green PR waits for refs/merge-lease/<base>) also prints
+# `merge_lease_wait`, after `draft` and `skip_ai_title`, which keep priority.
+# Labels are read in the REST ([{name}]), batched GraphQL ([string]) and raw
+# GraphQL (.labels.nodes[].name) shapes. The hold lapses (prints nothing, so
+# the caller falls through to today's path) once the label's age, measured
+# from its last `labeled` event on the PR (_stall_merge_lease_label_age_minutes,
+# one GraphQL read made only when the label is present), exceeds
+# STALL_MERGE_LEASE_WAIT_MAX_MINUTES (default 1440; `0` turns the hold off).
+# The lapse logs one
+# `STALL_MERGE_LEASE_HOLD_LAPSED pr=<n> label_age_minutes=<a> max_minutes=<x>`
+# line on stderr per PR per poller process (callers run this in $(...), so
+# the dedupe lives in the per-process marker file
+# _STALL_MERGE_LEASE_LAPSE_LOG_FILE, created with mktemp below; without it
+# the line is logged on every lapse; a payload without a PR number is never
+# deduped, so it cannot hide another PR's line). When the label age cannot
+# be read, the hold is kept: a wrong lapse would let recovery push to or
+# close a green PR waiting for the lease. A transient read error (return 2)
+# keeps the hold; it is not cached, so the next check reads again.
+# Backstop, when no age can ever be read (return 1: the event is outside
+# the last 50 labeled events, or no PR number / repository): once the
+# caller's stall clock exceeds twice the maximum the hold lapses anyway
+# (logged with label_age_minutes=unknown), so such a PR cannot park an
+# issue forever. A read error (return 2, e.g. a permission error gh_retry
+# treats as permanent) is never bounded by the issue's stall clock, which
+# says nothing about the label: the hold lapses (logged with
+# label_age_minutes=read_error) only when the payload's own updated_at /
+# updatedAt is more than the maximum ago. Adding a label updates the PR, so
+# that is a lower bound on the label's age; a payload without it keeps the
+# hold. A failed read therefore never ends a young hold, and the close
+# guard refuses (check_unavailable) whenever the label-age read fails. The
+# review-blocked arm passes `0`, so neither backstop fires there. Without the second argument (the conflict sweep) output is exactly
+# as before.
 _stall_pr_ai_hold_reason()
 {
   local _spahr_json="$1"
+  local _spahr_stall_minutes="${2:-}"
   [ -n "${_spahr_json}" ] && [ "${_spahr_json}" != "null" ] && [ "${_spahr_json}" != "{}" ] || return 0
   local _spahr_fields
-  _spahr_fields="$(printf '%s' "${_spahr_json}" | jq -r '
+  _spahr_fields="$(printf '%s' "${_spahr_json}" | jq -r --arg lease_label "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" '
     select(type == "object")
     | select(((.state // "open") | tostring | ascii_downcase) == "open")
     | select((.merged // false) != true)
     | [ (if ((.draft // .isDraft // false) == true) then "draft" else "" end),
-        (if (.title | type) == "string" then (.title | gsub("[\r\n]"; " ")) else "" end) ]
+        (if (.title | type) == "string" then (.title | gsub("[\r\n]"; " ")) else "" end),
+        (if ([(.labels // [])
+              | (if type == "object" then (.nodes // []) elif type == "array" then . else [] end)
+              | .[]?
+              | if type == "string" then .
+                elif type == "object" then (.name // empty)
+                else empty
+                end] | index($lease_label)) != null then "lease" else "" end),
+        ((.number // "") | tostring | gsub("[^0-9]"; "")),
+        ((.updated_at // .updatedAt // "")
+          | if type == "string" and . != "" then (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor | tostring) catch "") else "" end) ]
     | join("\n")
   ' 2>/dev/null)" || return 0
   [ -n "${_spahr_fields}" ] || return 0
-  local _spahr_draft _spahr_title
+  local _spahr_draft _spahr_title _spahr_lease _spahr_number _spahr_updated
   _spahr_draft="$(printf '%s\n' "${_spahr_fields}" | sed -n '1p')"
   _spahr_title="$(printf '%s\n' "${_spahr_fields}" | sed -n '2p')"
+  _spahr_lease="$(printf '%s\n' "${_spahr_fields}" | sed -n '3p')"
+  _spahr_number="$(printf '%s\n' "${_spahr_fields}" | sed -n '4p')"
+  _spahr_updated="$(printf '%s\n' "${_spahr_fields}" | sed -n '5p')"
   if [ "${_spahr_draft}" = "draft" ]; then
     printf 'draft\n'
   elif [[ "${_spahr_title}" == *"[skip ai]"* ]]; then
     printf 'skip_ai_title\n'
+  elif [ -n "${_spahr_stall_minutes}" ] && [ "${_spahr_lease}" = "lease" ]; then
+    local _spahr_max="${STALL_MERGE_LEASE_WAIT_MAX_MINUTES:-1440}"
+    if ! [[ "${_spahr_max}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::STALL_MERGE_LEASE_WAIT_MAX_MINUTES is not a non-negative integer; using 1440." >&2
+      _spahr_max=1440
+    fi
+    [ "${_spahr_max}" -gt 0 ] || return 0
+    local _spahr_label_age="" _spahr_age_rc=1
+    if type _stall_merge_lease_label_age_minutes >/dev/null 2>&1; then
+      _spahr_age_rc=0
+      _spahr_label_age="$(_stall_merge_lease_label_age_minutes "${_spahr_number}" "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" 2>/dev/null)" || _spahr_age_rc=$?
+    fi
+    # Backstop for "no age can ever be read" (rc 1) past 2x the maximum. A
+    # read error (rc 2) lapses only when the PR itself has not been updated
+    # for more than the maximum (a lower bound on the label's age; never the
+    # issue's stall clock), so a young hold survives any failed read.
+    if ! [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [[ "${_spahr_stall_minutes}" =~ ^[0-9]+$ ]]; then
+      if [ "${_spahr_age_rc}" -ne 2 ] && [ "$((10#${_spahr_stall_minutes}))" -gt "$((10#${_spahr_max} * 2))" ]; then
+        _spahr_label_age="unknown"
+      elif [ "${_spahr_age_rc}" -eq 2 ] && [ "$((10#${_spahr_stall_minutes}))" -gt 0 ] && [[ "${_spahr_updated}" =~ ^[0-9]+$ ]]; then
+        local _spahr_now=""
+        _spahr_now="$(date -u +%s 2>/dev/null || echo "")"
+        if [[ "${_spahr_now}" =~ ^[0-9]+$ ]] && [ "$(( (10#${_spahr_now} - 10#${_spahr_updated}) / 60 ))" -gt "${_spahr_max}" ]; then
+          _spahr_label_age="read_error"
+        fi
+      fi
+    fi
+    if [ "${_spahr_label_age}" = "unknown" ] || [ "${_spahr_label_age}" = "read_error" ] || { [[ "${_spahr_label_age}" =~ ^[0-9]+$ ]] && [ "${_spahr_label_age}" -gt "${_spahr_max}" ]; }; then
+      local _spahr_lapse_file="${_STALL_MERGE_LEASE_LAPSE_LOG_FILE:-}"
+      local _spahr_lapse_key="${_spahr_number:-}"
+      # No PR number: skip the dedupe rather than share one `unknown` key.
+      [ -n "${_spahr_lapse_key}" ] || _spahr_lapse_file=""
+      if [ -z "${_spahr_lapse_file}" ] || ! grep -qxF "${_spahr_lapse_key}" "${_spahr_lapse_file}" 2>/dev/null; then
+        [ -z "${_spahr_lapse_file}" ] || printf '%s\n' "${_spahr_lapse_key}" >> "${_spahr_lapse_file}" 2>/dev/null || true
+        echo "STALL_MERGE_LEASE_HOLD_LAPSED pr=${_spahr_number:-unknown} label_age_minutes=${_spahr_label_age} max_minutes=${_spahr_max}" >&2
+      fi
+      return 0
+    fi
+    printf 'merge_lease_wait\n'
   fi
   return 0
 }
+
+# Per-process dedupe marker for STALL_MERGE_LEASE_HOLD_LAPSED (issue #9892).
+# Created once here with mktemp (unpredictable name) because the hold check
+# runs in $(...) subshells; tests may preset the path. Empty on failure, in
+# which case the lapse line is logged on every lapse. No API call.
+if [ -z "${_STALL_MERGE_LEASE_LAPSE_LOG_FILE:-}" ]; then
+  _STALL_MERGE_LEASE_LAPSE_LOG_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/stall_merge_lease_lapse.XXXXXX" 2>/dev/null || true)"
+fi
+# Per-process cache of lease-label labeled-at epochs for
+# _stall_merge_lease_label_age_minutes (issue #9892, §14: at most one
+# GraphQL read per held PR per poller process). Same mktemp pattern; empty on
+# failure, in which case every hold check reads the label age again.
+if [ -z "${_STALL_MERGE_LEASE_AGE_CACHE_FILE:-}" ]; then
+  _STALL_MERGE_LEASE_AGE_CACHE_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/stall_merge_lease_age.XXXXXX" 2>/dev/null || true)"
+fi
 
 # _pr_json_closes_issue — conservative closing-keyword check used only
 # after the authoritative GraphQL linked-PR lookups missed.  Return
@@ -30667,8 +31387,9 @@ PY
     # the retrigger_review arms re-check the implementation PR payload.
     # Every phase and every action, `skip` included (issue #9733: the
     # exhausted close-out closed a held PR in ai:awaiting-approval).
+    # The stall clock enables the bounded merge-lease hold (issue #9892).
     local _std_ai_hold_reason=""
-    _std_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_std_linked_json}")"
+    _std_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_std_linked_json}" "${elapsed_minutes}")"
     if [ -n "${_std_ai_hold_reason}" ]; then
       echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"' 2>/dev/null || echo unknown) detail=${_std_ai_hold_reason} phase=${phase} action=none requested_action=${action}"
       if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
@@ -30959,7 +31680,7 @@ PY
       # calls), mirroring the managed dispatch_rb_judge arm: the generic
       # guard above fails open when the batched linked_pr lacks draft/title.
       local _std_rb_hold_reason=""
-      [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] && _std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] && _std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${elapsed_minutes}")"
       if [ -n "${_std_rb_hold_reason}" ]; then
         echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_std_rb_pre_pr_num} detail=${_std_rb_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
         STALL_RECOVERY_SHOULD_INCREMENT="false"
@@ -31000,6 +31721,17 @@ PY
     took_action="false"
     STALL_RECOVERY_SHOULD_INCREMENT="false"
     STALL_RECOVERY_EFFECTIVE_ACTION="${action}"
+
+    # Last line of defence (issue #9892): a held or green implementation PR
+    # is never closed by the ladder's close_and_reissue. A refusal takes no
+    # action (took_action stays false), writes no state and counts no
+    # attempt; the next tick re-evaluates.
+    if [ "${action}" = "close_and_reissue" ] && ! _stall_reissue_green_pr_guard "${issue_num}" "${elapsed_minutes}"; then
+      STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_refused"
+      echo "  [standalone-stall-recovery] Refusing close_and_reissue for #${issue_num}: PR #${STALL_REISSUE_REFUSED_PR:-unknown} reason=${STALL_REISSUE_REFUSED_REASON:-check_unavailable}. Issue and PR left untouched."
+      tg_notify "Stall recovery (standalone): refused close_and_reissue for issue #${issue_num} (PR #${STALL_REISSUE_REFUSED_PR:-unknown}, reason=${STALL_REISSUE_REFUSED_REASON:-check_unavailable})."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+      continue
+    fi
 
     case "${action}" in
       run_stall_judge)
@@ -31270,10 +32002,11 @@ STALL_EOF
           fi
           # Owner hold (draft / `[skip ai]` title) on the resolved PR: no
           # review dispatch, no empty-commit fallback, no attempt counted.
-          # Reads the payload already in pr_json (0 extra API calls).
+          # Reads the payload already in pr_json (0 extra API calls, apart
+          # from the per-process cached label-age read for a lease-waiting PR).
           if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
             local _std_rtr_ai_hold_reason=""
-            _std_rtr_ai_hold_reason="$(_stall_pr_ai_hold_reason "${pr_json}")"
+            _std_rtr_ai_hold_reason="$(_stall_pr_ai_hold_reason "${pr_json}" "${elapsed_minutes}")"
             if [ -n "${_std_rtr_ai_hold_reason}" ]; then
               echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${pr_num} detail=${_std_rtr_ai_hold_reason} phase=${phase} action=none"
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_pr_ai_hold"
@@ -31603,7 +32336,7 @@ STALL_EOF
         if [ "${standalone_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES:-2}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" != "${issue_num}" ]; then
           echo "  [standalone-stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closing without re-issue — judge will verify."
           ensure_label_exists "ai:closed"
-          close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})."
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})." "${elapsed_minutes}"
           if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
             # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
             echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
@@ -31673,9 +32406,10 @@ REISSUE_EOF
         # Owner hold re-check before the replacement exists (issue #9733);
         # same REST lookup and fail-open rule as the managed close_and_reissue
         # arm in execute_stall_recovery_action. Counts nothing, keeps the clock.
+        # The stall clock also enables the merge-lease hold (issue #9892).
         if _resolve_issue_implementation_pr "${issue_num}"; then
           local _std_reissue_hold_reason=""
-          _std_reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+          _std_reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${elapsed_minutes}")"
           if [ -n "${_std_reissue_hold_reason}" ]; then
             echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_std_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
             STALL_RECOVERY_SHOULD_INCREMENT="false"
@@ -31711,7 +32445,23 @@ REISSUE_EOF
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
           surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${elapsed_minutes}" "${recovery_count}" "standalone"
-          close_linked_pr "${issue_num}" "${_std_reissue_close_msg}"
+          close_linked_pr "${issue_num}" "${_std_reissue_close_msg}" "${elapsed_minutes}"
+          if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+            # A hold appeared after the pre-create re-check (issue #9892):
+            # roll the re-issue back, as in the managed arm. The replacement
+            # is closed as not planned; the source issue and the held PR stay
+            # open; no attempt is counted.
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+            echo "::warning::close_and_reissue for #${issue_num}: close_linked_pr left held PR(s) ${CLOSE_LINKED_PR_HELD_PRS} open (detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}); closing replacement #${new_num} and keeping #${issue_num} open."
+            gh_retry gh issue close "${new_num}" --repo "${GITHUB_REPOSITORY}" --reason "not planned" \
+              -c "Closed by standalone stall recovery: the implementation PR of #${issue_num} became held (${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}) while this replacement was being created, so #${issue_num} stays open." 2>/dev/null \
+              || echo "::warning::Could not close replacement #${new_num}; it duplicates #${issue_num}, which stays open."
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+          fi
           ensure_label_exists "ai:closed"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
@@ -31804,7 +32554,7 @@ This issue and its linked PR stay open with \`ai:needs-human\`; the unblock judg
           fi
           STALL_RECOVERY_SHOULD_INCREMENT="false"
         else
-          close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})." "${elapsed_minutes}"
           if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
             # close_linked_pr left an owner-held PR open (the batched linked_pr
             # lacked draft/title, so the hold guard above failed open): leave
@@ -32279,13 +33029,15 @@ recover_stalled_issue() {
   # payload fails open; execute_stall_recovery_action retrigger_review /
   # resolve_merge_conflict / skip and close_linked_pr re-check the REST
   # payload they already fetch. No attempt is counted and the stall clock
-  # is not reset.
+  # is not reset. Passing the stall clock enables the bounded merge-lease
+  # hold (issue #9892; one per-process cached label-age read, only for a
+  # lease-waiting PR).
   local _recover_hold_pr_json="${_fresh_lpr_entry:-}"
   local _recover_hold_reason=""
-  _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
+  _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}" "${stall_minutes}")"
   if [ -z "${_recover_hold_reason}" ]; then
     _recover_hold_pr_json="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // empty' 2>/dev/null || true)"
-    _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
+    _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}" "${stall_minutes}")"
   fi
   if [ -n "${_recover_hold_reason}" ]; then
     local _recover_hold_pr_num=""
@@ -32421,7 +33173,7 @@ recover_stalled_issue() {
         # Owner hold re-check (issue #9733) on this payload (0 extra calls):
         # the guard above fails open when the cached payloads lack draft/title.
         local _opr_hold_reason=""
-        _opr_hold_reason="$(_stall_pr_ai_hold_reason "${_opr_json}")"
+        _opr_hold_reason="$(_stall_pr_ai_hold_reason "${_opr_json}" "${stall_minutes}")"
         if [ -n "${_opr_hold_reason}" ]; then
           echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_lpr_num} detail=${_opr_hold_reason} phase=${phase} action=none requested_action=${action}"
           STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
@@ -38378,6 +39130,18 @@ ${RB_FIX_DESC}
           # Discard any accidental file modifications from the combined
           # judge call; close_and_reissue operates via GitHub API only.
           rb_cleanup_combined_workspace
+          # Last line of defence (issue #9892): a draft, a [skip ai] title, a
+          # merge-lease wait or a green head refuses. There is no stall clock
+          # here; `0` only enables the lease hold, whose lapse is measured on
+          # the label's own age. On refusal nothing is closed, labelled or
+          # re-issued and the issue stays in ai:review-blocked, as in the
+          # MERGE_CONFIRMED=false branch above.
+          if ! _stall_reissue_green_pr_guard "${rb_issue}" "0"; then
+            echo "  Refusing close_and_reissue for issue #${rb_issue}: PR #${STALL_REISSUE_REFUSED_PR:-unknown} reason=${STALL_REISSUE_REFUSED_REASON:-check_unavailable}. Leaving it in ai:review-blocked."
+            tg_notify "Orchestrator judge close_and_reissue refused for issue #${rb_issue} (PR #${STALL_REISSUE_REFUSED_PR:-unknown}, reason=${STALL_REISSUE_REFUSED_REASON:-check_unavailable})."$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
+            REVIEW_BLOCKED_STATE_CHANGED=true
+            continue
+          fi
           # Close the PR
           gh_retry gh pr close "${RB_PR}" --repo "${GITHUB_REPOSITORY}" \
             --comment "Closed by orchestrator judge — the approach needs rework. A new issue will be created with refined guidance." \

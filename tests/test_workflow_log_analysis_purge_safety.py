@@ -157,11 +157,27 @@ def test_purge_guard_order_and_identifiers_static() -> None:
 	assert "REPORT_RETENTION_DAYS: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS || '30' }}" in CASES._workflow_text()
 
 
+def test_report_purge_glob_never_reaches_audit_docs_or_state_static() -> None:
+	# #10153 D1: the workflow-log-analysis purge keeps its own glob; audit
+	# reports are purged by the audit's deliver step, and the audit cursor
+	# file matches neither purge.
+	step = CASES._step_text()
+	assert "for old_report in analysis/workflow-optimization-*.md; do" in step
+	assert "issue-pr-audit" not in step and "issue_pr_audit_state" not in step
+	audit = (TESTS_DIR.parent / "scripts" / "issue_pr_audit.py").read_text(encoding="utf-8")
+	assert 'REPORT_GLOB = "issue-pr-audit-*.md"' in audit
+	assert not Path("issue_pr_audit_state.json").match("issue-pr-audit-*.md")
+	run = (TESTS_DIR.parent / "scripts" / "issue_pr_audit_run.sh").read_text(encoding="utf-8")
+	assert "APPLY_ANALYSIS_IN_FLIGHT_DOCS=true bash" in run
+	assert '^analysis/issue-pr-audit-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\\.md$' in run
+
+
 def main() -> int:
 	test_purge_removes_only_processed_docs_past_the_window()
 	test_purge_keeps_everything_when_the_processing_report_is_missing()
 	test_purge_reads_the_processing_report_from_apply_analysis_report_path()
 	test_purge_guard_order_and_identifiers_static()
+	test_report_purge_glob_never_reaches_audit_docs_or_state_static()
 	return 0
 
 
