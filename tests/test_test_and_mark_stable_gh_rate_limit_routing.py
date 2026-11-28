@@ -135,13 +135,13 @@ ALLOWLIST: tuple[tuple[str, str, str], ...] = (
 # "::warning::gh api failed" or "(gh api returned empty)" is prose, and
 # `gh_retry gh api ...` already goes through a helper.
 _GH_CALL = re.compile(
-	r"(?:^|\$\(|\(\s|[;|&!{`]|\b(?:then|do|if|while|else)\b|\btimeout\s+\d+|\bcommand|\benv"
+	r"(?:^|^\(|<\(|\$\(|\(\s|[;|&!{}`)]|\b(?:then|do|if|elif|while|until|else)\b|\btimeout\s+\d+|\bcommand|\benv"
 	r"|\b[A-Za-z_][A-Za-z0-9_]*=[^\s()]*\s|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\s)\s*gh\s+(api|run|pr|issue)\b(.*)"
 )
 # `_safe_gh_jq` (scripts/gh_helpers.sh) makes one plain `gh api` attempt and
 # never waits for a rate-limit reset, so a call to it counts as a raw read;
 # `gh_retry _safe_gh_jq ...` goes through a helper and is not matched.
-_SAFE_GH_JQ_CALL = re.compile(r"(?:^|\$\(|\(\s|[;|&!{`]|\b(?:then|do|if|while|else)\b)\s*_safe_gh_jq\s")
+_SAFE_GH_JQ_CALL = re.compile(r"(?:^|^\(|<\(|\$\(|\(\s|[;|&!{}`)]|\b(?:then|do|if|elif|while|until|else)\b)\s*_safe_gh_jq\s")
 _READ_SUBCOMMANDS = {
 	"run": {"view", "list", "watch"},
 	"pr": {"view", "list", "checks", "diff"},
@@ -149,6 +149,10 @@ _READ_SUBCOMMANDS = {
 }
 _WRITE_FLAG = re.compile(r"(?:^|\s)(?:-f|-F|--field|--raw-field|--input)(?:\s|=|$)")
 _METHOD = re.compile(r"(?:^|\s)(?:-X|--method)(?:\s+|=)[\"']?([A-Za-z]+)")
+# Quoted spans (e.g. a `--jq` filter) other than a bare word such as "POST":
+# a ` -f ` or ` -X POST` inside them is not a flag (review of #10225).
+_QUOTED_SPAN = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+_QUOTED_WORD = re.compile(r"['\"][A-Za-z]+['\"]")
 
 
 def _logical_lines(text: str) -> list[str]:
@@ -173,6 +177,7 @@ def _logical_lines(text: str) -> list[str]:
 
 def _is_raw_read(sub: str, rest: str) -> bool:
 	if sub == "api":
+		rest = _QUOTED_SPAN.sub(lambda m: m.group(0) if _QUOTED_WORD.fullmatch(m.group(0)) else "''", rest)
 		method = _METHOD.search(rest)
 		if method and method.group(1).upper() != "GET":
 			return False
@@ -461,6 +466,35 @@ def test_scanner_splits_calls_chained_inside_a_quoted_substitution() -> None:
 		'X="$(gh api repos/o/r/issues; gh api repos/o/r/labels -f name=x)"',
 		'Y="`gh api repos/o/r/issues; gh api repos/o/r/labels -f name=x`"',
 		'Z="$(gh api repos/o/r/labels -f name=x; gh api repos/o/r/issues)"',
+	], got
+
+
+def test_scanner_ignores_flags_inside_quotes_and_knows_more_command_starts() -> None:
+	# Review of #10225: a ` -f ` or ` -X POST` inside a quoted filter is not a
+	# flag, a quoted bare method still is, and `elif`, a case-pattern `)`,
+	# `<(` and a line-start `(` start a command.
+	text = "\n".join(
+		[
+			"Q=$(gh api repos/o/r/q --jq 'select(.body | contains(\" -f \"))')",
+			'P=$(gh api repos/o/r/p --jq ". | contains(\\" -X POST\\")")',
+			'gh api repos/o/r/labels -X "POST" -f name=x',
+			"elif gh api repos/o/r/e; then",
+			"*) gh run list --repo o/r ;;",
+			"while read -r n; do :; done < <(gh api repos/o/r/w)",
+			"(gh api repos/o/r/s)",
+			"} && _safe_gh_jq repos/o/r/t",
+			'echo "x (gh api returned empty)"',
+		]
+	)
+	got = raw_reads(text)
+	assert got == [
+		"Q=$(gh api repos/o/r/q --jq 'select(.body | contains(\" -f \"))')",
+		'P=$(gh api repos/o/r/p --jq ". | contains(\\" -X POST\\")")',
+		"elif gh api repos/o/r/e; then",
+		"*) gh run list --repo o/r ;;",
+		"while read -r n; do :; done < <(gh api repos/o/r/w)",
+		"(gh api repos/o/r/s)",
+		"} && _safe_gh_jq repos/o/r/t",
 	], got
 
 
