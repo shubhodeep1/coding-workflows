@@ -334,3 +334,8 @@ def test_support_checkout_job_wrapper_sources_only_the_verified_checkout(step_na
 	result = _run_step(run, tmp_path, workspace, {"WORKFLOW_SUPPORT_REF": head})
 	assert result.returncode == 0, (step_name, result.stdout, result.stderr)
 	assert marker.read_text() == "sourced", f"{step_name}: verified support checkout script must be sourced"
+
+
+def test_support_checkout_wrapper_steps_nonempty() -> None:
+	# Not parametrized: runs even when an empty registry generates no cases above.
+	assert SUPPORT_CHECKOUT_WRAPPER_STEPS, "support-checkout step registry must not be empty"

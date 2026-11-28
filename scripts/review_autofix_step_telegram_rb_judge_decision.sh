@@ -39,6 +39,12 @@ if [ "${JUDGE_HANDLED}" = "true" ] && [ "${JUDGE_ACTION}" = "skip" ] && [ "${JUD
   echo "Review-blocked judge skipped draft PR #${PR_NUMBER}; it runs once the PR is ready for review. Suppressing alert."
   exit 0
 fi
+# #10063: the final-CI hand-over for this head was already posted and
+# alerted; a repeat judge run on the same head stays silent.
+if [ "${JUDGE_HANDLED}" = "true" ] && [ "${JUDGE_ACTION}" = "skip" ] && [ "${JUDGE_SKIP_REASON}" = "final_ci_handover_posted" ]; then
+  echo "Review-blocked judge skipped PR #${PR_NUMBER}: the final-CI hand-over for this head was already posted. Suppressing alert."
+  exit 0
+fi
 if [ "${JUDGE_HANDLED}" = "true" ]; then
   case "${JUDGE_ACTION}" in
     approval_pending)
@@ -131,6 +137,17 @@ if [ "${JUDGE_HANDLED}" = "true" ]; then
         JUDGE_ALERT_LEVEL="DEBUG"
       elif [ "${JUDGE_MERGE_STATUS}" = "checks_failed" ]; then
         MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed\nNeeds a CI fix before the merge')"
+      elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_repair_requested" ]; then
+        # #10063: the red head goes to the final-CI repair run.
+        MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed\nThe final-CI repair was requested automatically')"
+        JUDGE_ALERT_LEVEL="DEBUG"
+      elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_handover_posted" ]; then
+        MSG="Review-blocked judge: the final-CI hand-over for this head was already posted"
+        JUDGE_ALERT_LEVEL="DEBUG"
+      elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_handover" ]; then
+        # #10063: the repair is used up; one hand-over per head.
+        MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed and the final-CI repair is used up\nFailing: %s\nHanded to a person (ai:needs-human)' "${JUDGE_CI_FAILURE_SUMMARY:-see the PR checks}")"
+        JUDGE_ALERT_LEVEL="ERROR"
       elif [ "${JUDGE_MERGE_STATUS}" = "manual_merge_required" ]; then
         MSG="$(printf 'Review-blocked judge approved PR as-is; ENABLE_AUTO_MERGE=false\nManual merge required')"
       fi ;;
@@ -175,6 +192,17 @@ else
     blocking_check_runs)
       MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')"
       JUDGE_ALERT_LEVEL="DEBUG" ;;
+    final_ci_repair_requested)
+      # #10063: merge_with_followup on a red head goes to the final-CI repair.
+      MSG="$(printf 'PR review blocked — merge_with_followup approved but required check-runs failed\nThe final-CI repair was requested automatically')"
+      JUDGE_ALERT_LEVEL="DEBUG" ;;
+    final_ci_handover_posted)
+      MSG="PR review blocked — the final-CI hand-over for this head was already posted"
+      JUDGE_ALERT_LEVEL="DEBUG" ;;
+    final_ci_handover)
+      # #10063: the repair is used up; one hand-over per head.
+      MSG="$(printf 'PR review blocked — merge_with_followup approved but required check-runs failed and the final-CI repair is used up\nFailing: %s\nHanded to a person (ai:needs-human)' "${JUDGE_CI_FAILURE_SUMMARY:-see the PR checks}")"
+      JUDGE_ALERT_LEVEL="ERROR" ;;
     base_moved_overlap)
       # review_rb_judge.sh requested a branch update; its
       # synchronize run re-validates the PR without a person.
