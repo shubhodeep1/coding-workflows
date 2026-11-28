@@ -53,6 +53,46 @@
 #           be dispatched, so at most one call per such head per tick.
 #   Fail-open: `read_failed` never suppresses a dispatch.
 #
+# Verdict-wait fields (issue #9991): the same query (same number of calls)
+#   also reads the PR's mergeable state and autoMergeRequest, the head-gate
+#   status's createdAt and two more contexts on the same head status:
+#   ai-review/judge-merge-pending (the review-blocked judge's head-bound
+#   deferral, #9987) and ai-review/verdict-wait-alert (the once-per-head alert
+#   marker below). An annotated row gains `head_gate_created_at`,
+#   `judge_merge_pending_state`, `judge_merge_pending_created_at`,
+#   `auto_merge_enabled_at`, `mergeable` (MERGEABLE, CONFLICTING, UNKNOWN or
+#   null) and `verdict_wait_alerted` (bool). `mergeable`, not
+#   mergeStateStatus: GitHub reports mergeStateStatus BLOCKED for every PR in
+#   a query that asks for three or more, and computing it slows a 100-PR page.
+#
+# review_sweep_verdict_wait_reason <row json>
+#   stdout: `final_ci_merge_pending` or `auto_merge_waiting` when the row's
+#           head already has a verdict (head_gate_state success) and only waits
+#           to merge, else nothing. Only a head GitHub reports `MERGEABLE`
+#           qualifies: a conflicted head (or one not computed yet) prints
+#           nothing, because a review run is what resolves conflicts.
+#   API:    none (pure jq over the annotated row).
+#
+# review_sweep_verdict_wait_alert <owner/repo> <row json> <dry_run>
+#   One alert per head that has had a verdict for VERDICT_WAIT_ALERT_HOURS
+#   (default 6; 0 off) without merging. Waiting since: the earlier of
+#   head_gate_created_at and auto_merge_enabled_at for a head-gate success,
+#   else judge_merge_pending_created_at. The blocker is the merge lease holder
+#   (label MERGE_LEASE_WAIT_LABEL; one _merge_lease_read per base per tick),
+#   `final CI queued or running` (FINAL_CI_MERGE_PENDING_LABEL), or
+#   _pr_ruleset_required_check_blockers' summary (e.g. `ci/final (missing)`).
+#   Sent with tg_send_msg (WARNING; delivered when it returns a message id,
+#   telegram_unconfigured when tg_alert_configured WARNING fails); only after
+#   a delivered send is the
+#   head-bound ai-review/verdict-wait-alert status posted, which the next
+#   tick's query reads back, so the alert is raised once per head.
+#   API: none until the threshold; then at most one blocker read set, one
+#   Telegram send and one status POST per head, once.
+#   Log: `VERDICT_WAIT_ALERT pr=<n> head=<sha> waited_hours=<h>
+#        threshold_hours=<t> blocker=<text>
+#        outcome=sent|not_delivered|telegram_unconfigured|marker_failed|dry_run`.
+#   Fail-open: returns 0 always; a missing field sends nothing.
+#
 # Logs: `REVIEW_SWEEP_HEAD_GATE outcome=<annotated|read_failed> prs=<n>
 #       annotated=<n> success=<n> priority=<n>` on stderr (the step prints it).
 #
@@ -98,6 +138,31 @@ fi
 # label_helpers.sh is sourced only in the subshell that creates the label.
 REVIEW_SWEEP_HEAD_GATE_SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 
+# Verdict-wait switches (issue #9991) live in scripts/pr_checks_lib.sh; the
+# same rules here when that library is not beside this file.
+if ! declare -F _pr_verdict_wait_enabled >/dev/null 2>&1; then
+	_pr_verdict_wait_enabled()
+	{
+		case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+			true|1|yes|on) return 0 ;;
+		esac
+		return 1
+	}
+fi
+if ! declare -F _pr_verdict_wait_alert_hours >/dev/null 2>&1; then
+	_pr_verdict_wait_alert_hours()
+	{
+		local vwa_hours="${VERDICT_WAIT_ALERT_HOURS:-6}"
+		if ! [[ "${vwa_hours}" =~ ^[0-9]{1,5}$ ]]; then
+			echo "::warning::VERDICT_WAIT_ALERT_HOURS is not a non-negative integer; using 6." >&2
+			vwa_hours=6
+		fi
+		echo "$((10#${vwa_hours}))"
+	}
+fi
+# Lease holder per base, read once per tick (review_sweep_verdict_wait_alert).
+declare -gA REVIEW_SWEEP_VERDICT_WAIT_LEASE_HOLDER=()
+
 REVIEW_SWEEP_HEAD_GATE_QUERY='query($owner: String!, $name: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 100, after: $endCursor) {
@@ -105,7 +170,13 @@ REVIEW_SWEEP_HEAD_GATE_QUERY='query($owner: String!, $name: String!, $endCursor:
       nodes {
         number
         headRefOid
-        commits(last: 1) { nodes { commit { oid committedDate status { context(name: "ai-review/head-gate") { state } } } } }
+        mergeable
+        autoMergeRequest { enabledAt }
+        commits(last: 1) { nodes { commit { oid committedDate status {
+          context(name: "ai-review/head-gate") { state createdAt }
+          judgeMergePending: context(name: "ai-review/judge-merge-pending") { state createdAt }
+          verdictWaitAlert: context(name: "ai-review/verdict-wait-alert") { state }
+        } } } }
       }
     }
   }
@@ -123,7 +194,13 @@ REVIEW_SWEEP_HEAD_GATE_PRIORITY_QUERY='query($owner: String!, $name: String!, $e
         headRefName
         isCrossRepository
         closingIssuesReferences(first: 10) { nodes { number labels(first: 50) { nodes { name } } } }
-        commits(last: 1) { nodes { commit { oid committedDate status { context(name: "ai-review/head-gate") { state } } } } }
+        mergeable
+        autoMergeRequest { enabledAt }
+        commits(last: 1) { nodes { commit { oid committedDate status {
+          context(name: "ai-review/head-gate") { state createdAt }
+          judgeMergePending: context(name: "ai-review/judge-merge-pending") { state createdAt }
+          verdictWaitAlert: context(name: "ai-review/verdict-wait-alert") { state }
+        } } } }
       }
     }
   }
@@ -189,6 +266,12 @@ review_sweep_annotate_head_gate()
 			| select(($c.oid // "") == (.headRefOid // "") and ($c.oid // "") != "")
 			| {key: (.number | tostring),
 				value: {sha: $c.oid, state: (($c.status.context.state // "absent") | ascii_downcase), committed_at: ($c.committedDate | gate_utc_ts),
+					vw: {head_gate_created_at: ($c.status.context.createdAt | gate_utc_ts),
+						judge_merge_pending_state: (if ($c.status.judgeMergePending.state | type) == "string" then ($c.status.judgeMergePending.state | ascii_downcase) else null end),
+						judge_merge_pending_created_at: ($c.status.judgeMergePending.createdAt | gate_utc_ts),
+						auto_merge_enabled_at: (.autoMergeRequest.enabledAt? | gate_utc_ts),
+						mergeable: (if (.mergeable | type) == "string" then (.mergeable | ascii_upcase) else null end),
+						verdict_wait_alerted: ((($c.status.verdictWaitAlert.state // "") | ascii_downcase) == "success")},
 					pl: {gh_head_ref: (.headRefName // null), cross_repo: (if (.isCrossRepository | type) == "boolean" then .isCrossRepository else null end),
 						closing: (if (.closingIssuesReferences.nodes | type) == "array"
 							then [.closingIssuesReferences.nodes[] | select(type == "object") | {number: .number, labels: [(.labels.nodes // [])[] | .name? // empty]}]
@@ -199,6 +282,8 @@ review_sweep_annotate_head_gate()
 			then . + {head_gate_state: $gate[(.number | tostring)].state}
 				+ (if ($gate[(.number | tostring)].committed_at | type) == "string"
 					then {head_committed_at: $gate[(.number | tostring)].committed_at} else {} end)
+				# Verdict-wait fields (issue #9991): same query, no extra call.
+				+ ($gate[(.number | tostring)].vw // {})
 				+ (if $prio_on then
 					{priority_lane: ((($gate[(.number | tostring)].pl + {head_ref: (.head_ref // "")})
 						| pr_priority_lane_verified($prefix; $wanted)) == true)}
@@ -324,4 +409,107 @@ review_sweep_priority_lane_hold_out()
 		printf 'hold=%s\npriority=%s\nsince=%s\n' "${plo_hold}" "${plo_csv}" "${plo_since}" > "$3" 2>/dev/null || true
 	fi
 	echo "${plo_hold} ${plo_csv} ${plo_since}"
+}
+
+review_sweep_verdict_wait_reason()
+{
+	local vwr_row="${1:-}"
+	printf '%s' "${vwr_row}" | jq -r --arg fcl "${FINAL_CI_MERGE_PENDING_LABEL:-ai:final-ci-merge-pending}" '
+		select(type == "object" and .head_gate_state == "success" and .mergeable == "MERGEABLE")
+		| if ((.labels // []) | index($fcl)) != null then "final_ci_merge_pending"
+			elif (.auto_merge_enabled_at | type) == "string" then "auto_merge_waiting"
+			else empty end' 2>/dev/null || true
+	return 0
+}
+
+review_sweep_verdict_wait_alert()
+{
+	local vwa_repo="${1:-}" vwa_row="${2:-}" vwa_dry="${3:-false}"
+	local vwa_threshold vwa_fields vwa_pr vwa_sha vwa_base vwa_since vwa_alerted vwa_label vwa_now vwa_waited
+	local vwa_blocker vwa_rc vwa_msg vwa_msg_id vwa_outcome
+	vwa_threshold="$(_pr_verdict_wait_alert_hours)"
+	[ "${vwa_threshold}" -gt 0 ] 2>/dev/null || return 0
+	[[ "${vwa_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] && [[ "${vwa_repo}" != *..* ]] || return 0
+	vwa_fields="$(printf '%s' "${vwa_row}" | jq -r --arg lw "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" \
+		--arg fcl "${FINAL_CI_MERGE_PENDING_LABEL:-ai:final-ci-merge-pending}" '
+		def ep: if type == "string" then (try fromdateiso8601 catch null) else null end;
+		select(type == "object")
+		| (if .head_gate_state == "success" then
+				([(.head_gate_created_at | ep), (.auto_merge_enabled_at | ep)] | map(select(. != null)) | min)
+			elif .judge_merge_pending_state == "success" then (.judge_merge_pending_created_at | ep)
+			else null end) as $since
+		| ((.labels // []) | if index($lw) != null then "lease" elif index($fcl) != null then "final_ci" else "checks" end) as $kind
+		| [(.number | tostring), (.head_sha // ""), (.base_ref // ""), (if $since == null then "" else ($since | floor | tostring) end),
+			(if .verdict_wait_alerted == true then "true" else "false" end), $kind]
+		# Empty fields become "-": read would merge adjacent tabs.
+		| map(if . == "" then "-" else . end) | @tsv' 2>/dev/null || true)"
+	[ -n "${vwa_fields}" ] || return 0
+	IFS=$'\t' read -r vwa_pr vwa_sha vwa_base vwa_since vwa_alerted vwa_label <<< "${vwa_fields}"
+	[[ "${vwa_pr}" =~ ^[1-9][0-9]*$ ]] && [[ "${vwa_sha}" =~ ^[0-9a-f]{40}$ ]] || return 0
+	[[ "${vwa_since}" =~ ^[0-9]+$ ]] || return 0
+	[ "${vwa_base}" != "-" ] || vwa_base=""
+	[ "${vwa_alerted}" = "true" ] && return 0
+	vwa_now="$(date -u +%s 2>/dev/null || echo 0)"
+	[[ "${vwa_now}" =~ ^[0-9]+$ ]] && [ "${vwa_now}" -gt 0 ] || return 0
+	vwa_waited=$(( (vwa_now - vwa_since) / 3600 ))
+	[ $(( vwa_now - vwa_since )) -ge $(( vwa_threshold * 3600 )) ] || return 0
+	# No sender: no blocker reads either, so an unconfigured repo pays nothing
+	# per tick (the marker is never posted, so this path repeats each tick).
+	if [ "${vwa_dry}" != "true" ] && { ! declare -F tg_send_msg >/dev/null 2>&1 \
+		|| ! declare -F tg_alert_configured >/dev/null 2>&1 || ! tg_alert_configured WARNING; }; then
+		echo "VERDICT_WAIT_ALERT pr=${vwa_pr} head=${vwa_sha} waited_hours=${vwa_waited} threshold_hours=${vwa_threshold} blocker=not_read outcome=telegram_unconfigured"
+		return 0
+	fi
+	case "${vwa_label}" in
+		lease)
+			vwa_blocker="merge lease (holder unknown)"
+			if [ -n "${vwa_base}" ] && [ -n "${REVIEW_SWEEP_VERDICT_WAIT_LEASE_HOLDER[${vwa_base}]+set}" ]; then
+				vwa_blocker="${REVIEW_SWEEP_VERDICT_WAIT_LEASE_HOLDER[${vwa_base}]}"
+			elif [ -n "${vwa_base}" ] && declare -F _merge_lease_read >/dev/null 2>&1; then
+				vwa_rc=0
+				PR_CHECKS_REPOSITORY="${vwa_repo}" _merge_lease_read "${vwa_base}" >/dev/null 2>&1 || vwa_rc=$?
+				if [ "${vwa_rc}" -eq 0 ] && [[ "${MERGE_LEASE_PR:-}" =~ ^[1-9][0-9]*$ ]]; then
+					vwa_blocker="merge lease held by PR #${MERGE_LEASE_PR}"
+				elif [ "${vwa_rc}" -eq 2 ]; then
+					vwa_blocker="merge lease (no lease record)"
+				fi
+				REVIEW_SWEEP_VERDICT_WAIT_LEASE_HOLDER["${vwa_base}"]="${vwa_blocker}"
+			fi
+			;;
+		final_ci) vwa_blocker="final CI queued or running" ;;
+		*)
+			vwa_blocker="unknown"
+			if [ -n "${vwa_base}" ] && declare -F _pr_ruleset_required_check_blockers >/dev/null 2>&1; then
+				vwa_rc=0
+				PR_CHECKS_REPOSITORY="${vwa_repo}" _pr_ruleset_required_check_blockers "${vwa_sha}" "${vwa_base}" >/dev/null 2>&1 || vwa_rc=$?
+				case "${vwa_rc}" in
+					0) vwa_blocker="no ruleset blocker found" ;;
+					1) vwa_blocker="${PR_RULESET_BLOCKERS_SUMMARY:-unknown}" ;;
+				esac
+			fi
+			;;
+	esac
+	vwa_blocker="$(printf '%s' "${vwa_blocker}" | tr -d '\r\n' | cut -c1-200)"
+	vwa_outcome=""
+	if [ "${vwa_dry}" = "true" ]; then
+		vwa_outcome=dry_run
+	else
+		vwa_msg="Verdict-wait: PR #${vwa_pr} (head ${vwa_sha:0:8}) has had a verdict for ${vwa_waited}h (threshold ${vwa_threshold}h) without merging. Blocker: ${vwa_blocker}."$'\n'"PR: https://github.com/${vwa_repo}/pull/${vwa_pr}"
+		# tg_send_msg always returns 0; a message id is the delivery proof.
+		vwa_msg_id="$(tg_send_msg "${vwa_msg}" "WARNING" 2>/dev/null || true)"
+		if [ -n "${vwa_msg_id}" ]; then
+			# The once-per-head marker, read back by the next tick's query.
+			if gh api -X POST "repos/${vwa_repo}/statuses/${vwa_sha}" -f state=success \
+				-f "context=ai-review/verdict-wait-alert" \
+				-f "description=Verdict-wait alert sent (waited ${vwa_waited}h)" >/dev/null 2>&1; then
+				vwa_outcome=sent
+			else
+				vwa_outcome=marker_failed
+			fi
+		else
+			vwa_outcome=not_delivered
+		fi
+	fi
+	echo "VERDICT_WAIT_ALERT pr=${vwa_pr} head=${vwa_sha} waited_hours=${vwa_waited} threshold_hours=${vwa_threshold} blocker=${vwa_blocker} outcome=${vwa_outcome}"
+	return 0
 }

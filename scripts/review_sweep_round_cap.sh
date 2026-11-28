@@ -134,6 +134,17 @@
 #   Symlinked or unreadable files count as absent. A round that landed real
 #   editor output keeps counting. No API call.
 
+# review_sweep_round_cap_applies <row json> (issue #9991)
+#   Returns 0 when the sweep may cap the row's PR: its head_gate_state is
+#   present and not `success` (the rule the sweep applied inline before) and
+#   its head carries no review-blocked judge verdict
+#   (judge_merge_pending_state != success, scripts/review_sweep_head_gate.sh).
+#   A judge-decided head waiting for the merge lease is not capped, so the
+#   wait cannot label it ai:needs-human (#9515, #9839). With
+#   VERDICT_WAIT_DISPATCH_SKIP_ENABLED=false only the old rule applies.
+#   Dispatches the sweep skips for a verdict-wait reason create no run, so
+#   they never count as rounds. No API call.
+
 REVIEW_SWEEP_ROUND_CAP_LABEL="ai:needs-human"
 REVIEW_SWEEP_ROUND_CAP_MARKER="<!-- ai:review-round-cap:v1 -->"
 REVIEW_ROUND_INFRA_ARTIFACT_NAME="review-round-infra-failed"
@@ -360,4 +371,16 @@ ${cap_head_marker}${REVIEW_SWEEP_ROUND_CAP_MARKER}"
 	fi
 	echo "REVIEW_SWEEP_ROUND_CAP outcome=escalated ${cap_fields}"
 	return 0
+}
+
+review_sweep_round_cap_applies()
+{
+	local rca_row="${1:-}" rca_verdict_on=false
+	case "$(printf '%s' "${VERDICT_WAIT_DISPATCH_SKIP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) rca_verdict_on=true ;;
+	esac
+	printf '%s' "${rca_row}" | jq -e --argjson vw "${rca_verdict_on}" '
+		type == "object"
+		and ((.head_gate_state // "") as $s | $s != "" and $s != "success")
+		and (($vw | not) or (.judge_merge_pending_state != "success"))' >/dev/null 2>&1
 }

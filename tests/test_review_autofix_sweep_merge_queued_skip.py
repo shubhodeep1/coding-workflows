@@ -329,13 +329,26 @@ class SweepApprovedHeadFinalCiFailedSkipTest(unittest.TestCase):
 		final_ci = {f"{1:040x}": "failure", f"{2:040x}": "success", f"{3:040x}": "in_progress", f"{4:040x}": "failure"}
 		result = self.run_sweep(prs, gate, final_ci)
 		self.assertEqual(result.returncode, 0, result.stderr)
-		self.assertEqual(self.dispatched(), ["2", "3", "4", "5"])
+		# Issue #9991: #3's final CI is running, so its verdict only waits to
+		# merge and the sweep does not re-review it.
+		self.assertEqual(self.dispatched(), ["2", "4", "5"])
 		self.assertIn(f"AUTOFIX_SWEEP_SKIP pr=#1 reason=approved_head_final_ci_failed head_ref=ai/issue-1 head_sha={1:040x}", result.stdout)
 		self.assertIn("skipped_approved_final_ci_failed=1", result.stdout)
+		self.assertIn(f"VERDICT_WAIT_SKIP source=sweep pr=3 head={3:040x} reason=final_ci_in_flight", result.stdout)
+		self.assertIn("skipped_verdict_wait=1", result.stdout)
 		# One runs read per approved head, none for the others.
 		self.assertEqual(len(self.runs_reads()), 3)
 		snapshot = json.loads((self.tmp / "ci-cancelled-pr-snapshot.json").read_text())
 		self.assertEqual([row.get("head_gate_state") for row in snapshot], ["success", "success", "success", "pending", "absent"])
+
+	def test_verdict_wait_switch_off_dispatches_the_running_final_ci_head(self) -> None:
+		prs = [gate_pr(n) for n in (1, 2, 3, 4, 5)]
+		gate = {1: "SUCCESS", 2: "SUCCESS", 3: "SUCCESS", 4: "PENDING"}
+		final_ci = {f"{1:040x}": "failure", f"{2:040x}": "success", f"{3:040x}": "in_progress", f"{4:040x}": "failure"}
+		result = self.run_sweep(prs, gate, final_ci, VERDICT_WAIT_DISPATCH_SKIP_ENABLED="false")
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertEqual(self.dispatched(), ["2", "3", "4", "5"])
+		self.assertNotIn("VERDICT_WAIT_SKIP", result.stdout)
 
 	def test_graphql_failure_dispatches_as_before(self) -> None:
 		result = self.run_sweep([gate_pr(1)], {1: "SUCCESS"}, {f"{1:040x}": "failure"}, graphql_rc=1)
