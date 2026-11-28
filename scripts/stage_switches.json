@@ -146,6 +146,11 @@
 			"on_values": ["1", "yes", "on"]
 		},
 		{
+			"name": "CI_FINAL_STATUS_RUN_CANCELLED_SKIP_ENABLED",
+			"default": "true",
+			"stage": "scripts/ci_final_status.sh posts no ci/final=failure for a final CI run cancelled as a whole (a cancelled needed job never started, or only shutdown/cancel annotations); a job timeout still posts failure (#10131)."
+		},
+		{
 			"name": "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED",
 			"default": "true",
 			"stage": "Turns on ci triage pr branch routing (clarify.yml, implement.yml, orchestrate_clarify_respond.yml, plan.yml, validate.yml); false turns that stage off."
@@ -719,6 +724,11 @@
 			"stage": "Turns on security pass base sync carry (review_autofix.yml); false turns that stage off."
 		},
 		{
+			"name": "SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Issue #10176. The single-issue security pass numbers a new pending or failed marker above every trusted cycle already on the PR (log outcome=cycle_renumbered), so a run does not reuse a cycle number it can see (review_autofix.yml); false keeps the old numbering."
+		},
+		{
 			"name": "SECURITY_PASS_DELTA_AUDIT_ENABLED",
 			"default": "true",
 			"stage": "Delta audits for the single-issue security pass."
@@ -727,6 +737,11 @@
 			"name": "SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED",
 			"default": "true",
 			"stage": "When MAX_SECURITY_PASS_CYCLES is spent with findings still open, consult the security-pass exhaustion judge (prompts/mode-judge-security-pass-exhaustion.txt) instead of terminalizing."
+		},
+		{
+			"name": "SECURITY_PASS_MARKER_REREAD_ENABLED",
+			"default": "true",
+			"stage": "Issue #10176. Before the single-issue security pass dispatches an audit, and when its comments snapshot is unusable, it reads the PR comments once more, fresh: other markers re-enter the gate on that view, and a failed or empty read holds with markers_unverifiable (detail=fresh_read_failed|fresh_read_empty) without dispatching or posting a marker (review_autofix.yml); false keeps the job-start snapshot only."
 		},
 		{
 			"name": "SECURITY_PASS_REBIND_ENABLED",
@@ -986,7 +1001,8 @@
 		{
 			"name": "HEAL_ALERT_TRIAGE_KIND_ENABLED",
 			"default": "true",
-			"stage": "Turns on heal alert triage kind (added by open pull request #9396; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on heal alert triage kind (added by open pull request #9396; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED",
@@ -996,7 +1012,8 @@
 		{
 			"name": "PERSIST_QUEUE_PAUSE_ENABLED",
 			"default": "true",
-			"stage": "Turns on persist queue pause (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on persist queue pause (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "PLAN_SCOPE_BLOCK_ROUTING_ENABLED",
@@ -1006,22 +1023,26 @@
 		{
 			"name": "PRIORITY_LANE_ENABLED",
 			"default": "true",
-			"stage": "Turns on priority lane (added by open pull request #10061; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on priority lane (added by open pull request #10061; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "RB_JUDGE_RED_CHECK_REPAIR_ENABLED",
 			"default": "true",
-			"stage": "Turns on rb judge red check repair (added by open pull request #10067; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on rb judge red check repair (added by open pull request #10067; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "RED_BASE_APPROVAL_HOLD_ENABLED",
 			"default": "true",
-			"stage": "Turns on red base approval hold (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on red base approval hold (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "REVIEW_CONVERGENCE_ENABLED",
 			"default": "true",
-			"stage": "Turns on review convergence (added by open pull request #10066; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on review convergence (added by open pull request #10066; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED",
@@ -1031,37 +1052,44 @@
 		{
 			"name": "REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED",
 			"default": "true",
-			"stage": "Turns on review infra failure excluded (added by open pull request #10007; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on review infra failure excluded (added by open pull request #10007; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "REVIEW_UNREACHABLE_FOLLOWUP_ENABLED",
 			"default": "true",
-			"stage": "Turns on review unreachable followup (added by open pull request #10070; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on review unreachable followup (added by open pull request #10070; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "RUNNER_IMAGE_CANARY_ENABLED",
 			"default": "true",
-			"stage": "Turns on runner image canary (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on runner image canary (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED",
 			"default": "true",
-			"stage": "Turns on stall judge live review runs (added by open pull request #9573; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on stall judge live review runs (added by open pull request #9573; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "STALL_REISSUE_GREEN_PR_GUARD_ENABLED",
 			"default": "true",
-			"stage": "Turns on stall reissue green pr guard (added by open pull request #9902; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on stall reissue green pr guard (added by open pull request #9902; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "UNBLOCK_JUDGE_LINKED_PR_ENABLED",
 			"default": "true",
-			"stage": "Turns on unblock judge linked pr (added by open pull request #9573; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on unblock judge linked pr (added by open pull request #9573; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		},
 		{
 			"name": "VERDICT_WAIT_DISPATCH_SKIP_ENABLED",
 			"default": "true",
-			"stage": "Turns on verdict wait dispatch skip (added by open pull request #10000; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+			"stage": "Turns on verdict wait dispatch skip (added by open pull request #10000; listed before the merge so the registry tests pass on the merged tree); false turns that stage off.",
+			"pending": true
 		}
 	],
 	"off_on_purpose": []
