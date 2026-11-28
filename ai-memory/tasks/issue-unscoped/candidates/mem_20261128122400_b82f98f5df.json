@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (all 5 entries report the item as present, not missing; SEVERITY: NIT, ISSUE_CONFIDENCE: 5 each) (5 related items)\n  Requirement: Issue goal #1 \u2014 shipped default of MERGE_LEASE_MAX_HOLDERS is 2 (script default, non-integer fallback, every workflow env line).\n  Expected change site: scripts/pr_checks_lib.sh (script default + fallback) plus the 9+ workflow env lines.\n  Evidence of absence: All present. scripts/pr_checks_lib.sh:3451 reads `${MERGE_LEASE_MAX_HOLDERS:-2}`, line 3457 ends \"using 2\"; 12 workflow `vars.MERGE_LEASE_MAX_HOLDERS || '2'` lines exist across review_autofix.yml (5), orchestrate_poll.yml (4), review_autofix_sweep.yml (2 \u2014 the final-CI sweep step added by #10078 included via last-run diff at line 1038), and cancel_on_pr_close.yml (1).\n  Requirement: Issue goal #2 \u2014 README row says default 2, keeps 1-5 range, says 1 restores single-holder lease.\n  Expected change site: README.md around line 172.\n  Evidence of absence: Present. README.md:177 reads `| 2 | ... Set 1 to restore the single-holder lease exactly ... |`.\n  Requirement: Issue Tests clause \u2014 every workflow default equals the script default and the non-integer fallback; updated tests must still trigger violations when they drift.\n  Expected change site: tests/test_merge_lease.py MultiHolderWiring and tests/test_merge_lease_env_contract.py negative fixtures.\n  Evidence of absence: Present. Fixtures updated (last-run diff at lines 345-349 and 491-496) to use `'3'`; comment at lines 238-239 corrected to \"of 2\".\n  Requirement: Issue Constraints \u2014 one changelog.d fragment (`changed`) and one agents.d fragment.\n  Expected change site: changelog.d/10124-*.md, agents.d/merge-lease-parallel-p5-multi-holder.md.\n  Evidence of absence: Present. changelog.d/10124-merge-lease-two-holders-default.md (new, type `changed`) and the updated agents.d fragment.\n  Requirement: Issue Constraints \u2014 tests that pin the default `1` are updated in the same PR; tests that set the variable explicitly are not changed.\n  Expected change site: tests/test_merge_lease.py and tests/test_single_issue_security_pass.py.\n  Evidence of absence: Present. _Harness pins MERGE_LEASE_MAX_HOLDERS=1; test_single_issue_security_pass.py:1050 updated to `|| '2'`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b3b3343ceeea4eede21db3b7f288688ee0f803bdad4cda784c0bd1373bae25c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10126,
+    "run_id": "46141773894",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46141773894",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128122400_b82f98f5df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10126,
+    "run_id": "46141773894"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T12:24:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
