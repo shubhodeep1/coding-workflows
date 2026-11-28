@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for issue #10232\n\nPlanning ref: `main` @ `fea3a6deb9cdde5da7969f38931d960bbd66400c`. The integration branch mismatch line reads `unknown`, not `true`, so there is nothing to block on.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check lint\nACCEPTANCE: post-merge none: the change is a smoke canary data file that no post-merge workflow depends on\n\n## Functions or modules to implement\n- None. The change replaces the content of one data file. Its current content is two lines: `status: ok` and `decompose-run: 41445772297`.\n\n## Data structures affected\n- `tests/e2e_smoke_canary.txt` must end up as exactly these three lines, with a trailing newline after the last one:\n  `status: ok`\n  `run_id: 46087439251`\n  `updated-by: ai-pipeline`\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: write the three lines exactly, using the equivalent of the `printf` command in the issue.\n- Alternatives considered: editing only the second line and adding a third line.\n- Why: the issue asks for the content to be replaced completely, and a full overwrite cannot leave old bytes behind.\n\n## Security considerations\n- No trust boundary, endpoint, secret or money state is involved. The file contains only a status word, a public run ID and a fixed label.\n\n## Potential risks or edge cases\n- Several tests mention the file by name, for example `tests/test_review_merge_train.py` and `tests/test_promote_main_cycle.py`. They appear to use it as a fixture path for smoke runs, not to check what it contains, so changing the content should not break them. This was not confirmed for every test.\n- The file must not be left without its final newline, and no extra blank line should be added after it.\n\n## Testing considerations\n- Check the result with `printf 'status: ok\\nrun_id: 46087439251\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt`.\n- Run `git diff --stat` and confirm that only this one file changed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies one existing file and its exact final content, and it forbids touching any other file, so the scope is held to exactly that change.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[{\"name\":\"lint\"}],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"the change is a smoke canary data file that no post-merge workflow depends on\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "87087477ca2f3cef1f6798bf8d302daf0ecb098752709f49ee78713c1c3f4076",
+  "lineage": {
+    "issue_number": 10232,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46090865281",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46090865281",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10232"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261128010816_895d6245bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10232,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46090865281"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10232",
+  "timestamps": {
+    "created_at": "2026-11-28T01:08:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
