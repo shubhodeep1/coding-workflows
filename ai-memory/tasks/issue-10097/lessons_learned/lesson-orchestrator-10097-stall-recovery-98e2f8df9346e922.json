@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-28T05:29:30Z",
+  "issue_number": 10097,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Merge lease as a short critical section: ready-first grant, delta CI after update, resolution-only review, one job per hold\" (#10097): issues stalled and needed automated recovery (1 time(s)). Causes: stuck in ai:done for 132m; recovery: retrigger_review (#10198). Similar work may need smaller, more explicit issues for these phases.",
+  "phase": "orchestrator_completion",
+  "pr_number": 10100,
+  "record_id": "lesson-orchestrator-10097-stall-recovery-98e2f8df9346e922",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:stall_recovery",
+    "project:10097",
+    "file:scripts/pr_checks_lib.sh",
+    "file:scripts/review_head_gate.sh",
+    "file:scripts/review_autofix_step_evaluate_gate.sh",
+    "file:scripts/review_enable_auto_merge.sh",
+    "file:scripts/review_rb_judge.sh",
+    "file:.github/workflows/review_autofix.yml",
+    "file:.github/workflows/ci.yml",
+    "file:README.md",
+    "file:tests/test_merge_lease_inline_sync.py",
+    "file:agents.md"
+  ]
+}

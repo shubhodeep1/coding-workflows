@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-28T05:29:30Z",
+  "issue_number": 10097,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Merge lease as a short critical section: ready-first grant, delta CI after update, resolution-only review, one job per hold\" (#10097) completed only after 1 judge stall cycle(s). Similar projects may need smaller waves or more explicit issue specs.",
+  "phase": "orchestrator_completion",
+  "pr_number": 10100,
+  "record_id": "lesson-orchestrator-10097-summary-a44ca7006bab9591",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:summary",
+    "project:10097"
+  ]
+}
