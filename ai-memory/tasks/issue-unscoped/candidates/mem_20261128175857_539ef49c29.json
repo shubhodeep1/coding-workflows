@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:Every job in GATED_JOBS (`tests-hooks-and-orchestrator`, `tests-heal-plan-and-validation`, `tests-promote-stall-and-review`, `tests-release-and-log-analysis`, `orchestrate-poll`, `tests-system-python`, `tests-sandbox-python`) | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The gated jobs declare `needs: tests-main-delta` and use `!cancelled()` in `if:`. The reviewer says this does not override GitHub's rule that a job is skipped when a job it needs is skipped, so the gated jobs are skipped whenever `tests-main-delta` is skipped (stable branch pushes, or `MAIN_PUSH_DELTA_CI_ENABLED=false`).\n  WHY: These seven test jobs would be skipped on any push branch other than `main` and whenever `MAIN_PUSH_DELTA_CI_ENABLED` is `false`, which turns off most of the CI suite in those cases. The source severity was BLOCKER, mapped here to critical. The other four reviewers checked the same `needs:`/`if:` wiring and reported no issue.\n- scripts/ci_main_delta.sh:Around line 160 (runs read loop) | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If the script is cancelled or fails during the `gh api` runs read, the temporary error log file (`read_err_file`) is not removed.\n  WHY: It leaves an unneeded temp file in the runner's short-lived workspace. This is minor hygiene, not a production correctness bug (source severity NIT).\n- scripts/ci_main_delta.sh:tests-main-delta job steps | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `tests-main-delta` job installs only the Python CI dependencies and leaves out the Node.js/wrangler environment that some gated test jobs need.\n  WHY: A selected test that needs Node/wrangler fails loudly inside the delta job. That is not a silent pass, but it may delay detection of failures in those tests (source severity NIT).\n- .github/workflows/ci.yml:Job comment on tests-main-delta (approx. line 5127) | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The job comment still says the base is the \"newest successful\" run, which contradicts the updated red-wins rule (a red base stays red until a green run that started after it has finished).\n  WHY: The comment no longer matches the code, but this does not affect how the job runs (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A switch restores today's behaviour.\" (Goal 7)\n  expected_change_site: .github/workflows/ci.yml and lint aggregate logic\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Setting `MAIN_PUSH_DELTA_CI_ENABLED=false` skips the `tests-main-delta` job. The gated test jobs `need` `tests-main-delta` and have no logic for its skipped state, so they are skipped too. The reviewer says this loses the whole CI test suite on `main` instead of falling back to the full suite as intended (source severity BLOCKER).\n- requirement: \"Nothing in code enforces 'no promotion without a full run from the same day'.\" (Rollout watch requirement)\n  expected_change_site: Not required for runtime correctness as the 22:30 UTC scheduled full run mitigates the risk, but the issue listed this as a rollout watch item.\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No code guard or alert enforces that a nightly promotion has a full suite run before it on the same day (source severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:Every job in GATED_JOBS (`tests-hooks-and-orchestrator`, `tests-heal-plan-and-validation`, `tests-promote-stall-and-review`, `tests-release-and-log-analysis`, `orchestrate-poll`, `tests-system-python`, `tests-sandbox-python`) | severity=BLOCKER | confidence=5\n  PROBLEM: The gated jobs declare `needs: tests-main-delta`. When `tests-main-delta` is skipped, the gated jobs are skipped too, and `!cancelled()` in their `if:` does not override that.\n  WHY: The seven test jobs are skipped on any push branch other than `main` and when `MAIN_PUSH_DELTA_CI_ENABLED` is `false`, which turns off most of the CI suite.\n- scripts/ci_main_delta.sh:Around line 160 (runs read loop) | severity=NIT | confidence=4\n  PROBLEM: If the script is cancelled or fails during the `gh api` runs read, the temporary error log file (`read_err_file`) is not removed.\n  WHY: It leaves an unneeded temp file in the runner workspace. This is minor hygiene, not a correctness bug.\n- scripts/ci_main_delta.sh:tests-main-delta job steps | severity=NIT | confidence=3\n  PROBLEM: The `tests-main-delta` job installs only the Python CI dependencies and leaves out the Node.js/wrangler environment that some gated jobs need.\n  WHY: A selected test that needs Node/wrangler fails loudly in the delta job, which may delay detection of failures in those tests.\n- .github/workflows/ci.yml:Job comment on tests-main-delta (approx. line 5127) | severity=NIT | confidence=5\n  PROBLEM: The comment still says the base is the \"newest successful\" run, which contradicts the red-wins rule.\n  WHY: The comment no longer matches the code, but runtime is not affected.\n- TASK_GAP\n  Requirement: \"A switch restores today's behaviour.\" (Goal 7)\n  Expected change site: .github/workflows/ci.yml and lint aggregate logic\n  Evidence of absence: With `MAIN_PUSH_DELTA_CI_ENABLED=false`, `tests-main-delta` is skipped, and the gated jobs that need it are skipped too. This loses the whole CI test suite on `main` instead of falling back to the full suite.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Nothing in code enforces 'no promotion without a full run from the same day'.\" (Rollout watch requirement)\n  Expected change site: Not required for runtime correctness as the 22:30 UTC scheduled full run mitigates the risk, but the issue listed this as a rollout watch item.\n  Evidence of absence: No code guard or alert enforces that a nightly promotion has a full suite run before it on the same day.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c4f7fad317fa9152619eb5330dbb5a559f523151e039a0adcd13027868a9d97e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10163,
+    "run_id": "46170934504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46170934504",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128175857_539ef49c29",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10163,
+    "run_id": "46170934504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T17:58:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
