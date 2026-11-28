@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Body of the review_autofix.yml "Mark linked issues review-blocked (autofix exhaustion)" step (sourced by
-# the step; moved out to keep the workflow under the review_autofix.yml size guard).
+# Body of the "Mark linked issues review-blocked (autofix exhaustion)" step in
+# .github/workflows/review_autofix.yml, moved out of the workflow to keep it
+# well under the 430,000-byte contract-test ceiling and GitHub's 512,000-byte
+# workflow file limit (#10166). The step sources this file in its own shell,
+# so the step's if:, env: and continue-on-error: stay in the workflow; edit
+# those there.
 set -euo pipefail
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then

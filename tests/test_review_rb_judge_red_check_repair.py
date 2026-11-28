@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,6 +30,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+# The "Telegram review-blocked judge decision" step body lives in this step
+# script (moved out of the workflow for the size guard); the alert branches
+# are checked there as well as in the workflow.
+ALERT_STEP = REPO_ROOT / "scripts" / "review_autofix_step_telegram_rb_judge_decision.sh"
 PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
 README = REPO_ROOT / "README.md"
 BEGIN = "# BEGIN rb-judge red-check repair (#10063)"
@@ -387,6 +392,11 @@ def test_both_checks_failed_sites_route_before_any_merge() -> None:
 		assert route < after.index("review_head_gate_post_status")
 
 
+def _alert_text(raw: str) -> str:
+	"""The judge-decision alert body: inline in the workflow or in its step script."""
+	return raw + "\n" + (ALERT_STEP.read_text(encoding="utf-8") if ALERT_STEP.exists() else "")
+
+
 def test_workflow_wires_the_switch_and_the_alert() -> None:
 	raw = WORKFLOW.read_text(encoding="utf-8")
 	judge = raw[raw.index("      - name: Review-blocked judge decision\n"):]
@@ -394,10 +404,11 @@ def test_workflow_wires_the_switch_and_the_alert() -> None:
 	assert "RB_JUDGE_RED_CHECK_REPAIR_ENABLED: ${{ vars.RB_JUDGE_RED_CHECK_REPAIR_ENABLED || 'true' }}" in judge
 	assert "FINAL_CI_REPAIR_ENABLED: ${{ vars.FINAL_CI_REPAIR_ENABLED || 'true' }}" in judge
 	assert "JUDGE_CI_FAILURE_SUMMARY: ${{ steps.rb_judge.outputs.judge_ci_failure_summary }}" in raw
-	assert '"${JUDGE_SKIP_REASON}" = "final_ci_handover_posted" ]; then' in raw
-	handover = raw[raw.index('elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_handover" ]; then'):]
+	alert = _alert_text(raw)
+	assert '"${JUDGE_SKIP_REASON}" = "final_ci_handover_posted" ]; then' in alert
+	handover = alert[alert.index('elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_handover" ]; then'):]
 	assert 'JUDGE_ALERT_LEVEL="ERROR"' in handover[:600] and "JUDGE_CI_FAILURE_SUMMARY" in handover[:600]
-	requested = raw[raw.index('elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_repair_requested" ]; then'):]
+	requested = alert[alert.index('elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_repair_requested" ]; then'):]
 	assert 'JUDGE_ALERT_LEVEL="DEBUG"' in requested[:400]
 	assert len(WORKFLOW.read_bytes()) < 480_000
 
@@ -474,8 +485,8 @@ def test_merge_with_followup_routes_a_red_head() -> None:
 	# the head (missing, disabled sentinel, another head): no names-file gate.
 	assert '[ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] && [ "$(rb_judge_red_check_switch 2>/dev/null)" = "true" ]' in block
 	assert 'RB_JUDGE_CI_FAILURE_NAMES_FILE' not in block
-	raw = WORKFLOW.read_text(encoding="utf-8")
-	assert "              final_ci_handover)\n" in raw and "              final_ci_repair_requested)\n" in raw
+	alert = _alert_text(WORKFLOW.read_text(encoding="utf-8"))
+	assert re.search(r"^\s+final_ci_handover\)$", alert, re.M) and re.search(r"^\s+final_ci_repair_requested\)$", alert, re.M)
 
 
 # ---------------------------------------------------------------------------

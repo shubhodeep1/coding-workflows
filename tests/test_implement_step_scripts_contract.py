@@ -34,7 +34,11 @@ from review_autofix_step_scripts import (  # noqa: E402
 
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 STAGE_HELPER = SCRIPTS_DIR / "stage_support_for_phase.sh"
-MAX_WORKFLOW_BYTES = 430_000
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from ci_budget_watch import WORKFLOW_TEST_CEILING_BYTES  # noqa: E402
+
+# One shared ceiling with the size watcher, so the two cannot drift (#10166).
+MAX_WORKFLOW_BYTES = WORKFLOW_TEST_CEILING_BYTES
 EDITOR_STEP = "Run Codex implementation"
 
 STEP_METADATA: dict[str, dict] = {

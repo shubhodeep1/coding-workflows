@@ -45,7 +45,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"

@@ -6,11 +6,17 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import yaml
 
+
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
@@ -27,7 +33,9 @@ UNTRUSTED_EXPRESSION = re.compile(r"\$\{\{\s*(?:inputs|github\.event\.inputs)\."
 
 
 def _workflow(name: str) -> dict[str, object]:
-	document = yaml.safe_load((WORKFLOW_DIR / name).read_text(encoding="utf-8"))
+	# review_autofix.yml step bodies moved to scripts/ are inlined again (#10166).
+	text = expanded_review_autofix_text() if name == "review_autofix.yml" else (WORKFLOW_DIR / name).read_text(encoding="utf-8")
+	document = yaml.safe_load(text)
 	assert isinstance(document, dict)
 	return document
 

@@ -25,6 +25,7 @@ from review_autofix_step_scripts import (  # noqa: E402
 	REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_STEP_SCRIPTS,
+	REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_WORKFLOW_PATH,
 	expanded_review_autofix_text,
 	review_autofix_step_script_body,
@@ -32,6 +33,22 @@ from review_autofix_step_scripts import (  # noqa: E402
 
 
 STAGE_SUPPORT_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
+
+# #10208: the .codex-workflow-src fallback is sourced only when the trusted
+# "Ensure workflow support source checkout" step verified that checkout at
+# SCRIPT_REF. An early failure (before support staging) otherwise leaves a
+# PR-committed .codex-workflow-src/scripts/<script> for always() steps to source.
+# The rev-parse clears GIT_DIR/GIT_WORK_TREE: "Activate workspace shell
+# context" exports them for the split PR workspace, and they would otherwise
+# make git read the PR checkout's HEAD instead of .codex-workflow-src's.
+SUPPORT_SOURCE_FALLBACK_VERIFY_LINE = (
+	'case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) '
+	'[[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && '
+	'[ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && '
+	'[ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || '
+	'{ echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; '
+	'REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac'
+)
 
 
 def _steps_by_name(workflow_text: str) -> dict[str, dict]:
@@ -83,22 +100,56 @@ def test_moved_steps_run_only_the_resolving_wrapper() -> None:
 			assert "SUPPORT_SCRIPTS_DIR" not in run and ".codex-workflow-src" not in run, step_name
 			assert "${{" not in run, f"{step_name}: wrapper must not carry GitHub expressions"
 			continue
+		if script_name in REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS:
+			# #10166: jobs without the support bundle that verify their own
+			# .codex-workflow-src checkout; no other resolution path.
+			own_run_lines = run.rstrip("\n").split("\n")
+			assert own_run_lines[0] == f'REVIEW_AUTOFIX_STEP_SCRIPT="${{GITHUB_WORKSPACE}}/.codex-workflow-src/scripts/{script_name}"', step_name
+			for check in (
+				'! [[ "${WORKFLOW_SUPPORT_REF:-}" =~ ^[0-9a-f]{40}$ ]]',
+				'[ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SUPPORT_REF}" ]',
+				'[ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]',
+			):
+				assert check in own_run_lines[1], f"{step_name}: wrapper must verify {check}"
+			assert own_run_lines[2].startswith("  echo \"::error::") and own_run_lines[3] == "  exit 1", step_name
+			assert own_run_lines[-2:] == ["fi", 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'], step_name
+			assert len(own_run_lines) == 6, f"{step_name}: wrapper must have no other resolution path"
+			assert "SUPPORT_SCRIPTS_DIR" not in run, step_name
+			assert "${{" not in run, f"{step_name}: wrapper must not carry GitHub expressions"
+			continue
 		expected_lines = [
 			f'REVIEW_AUTOFIX_STEP_SCRIPT="${{SUPPORT_SCRIPTS_DIR:-}}/{script_name}"',
 			f'[ -f "${{REVIEW_AUTOFIX_STEP_SCRIPT}}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${{GITHUB_WORKSPACE}}/.codex-workflow-src/scripts/{script_name}"',
+			SUPPORT_SOURCE_FALLBACK_VERIFY_LINE,
 			'if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then',
 		]
 		run_lines = run.rstrip("\n").split("\n")
-		assert run_lines[:3] == expected_lines, f"{step_name}: unexpected resolution order:\n{run}"
+		assert run_lines[:4] == expected_lines, f"{step_name}: unexpected resolution order:\n{run}"
 		assert run_lines[-2:] == ["fi", 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'], (
 			f"{step_name}: the script must be sourced in the step shell (not run in a child bash) "
 			"so BASH_ENV state, set -e and exit codes behave as they did inline"
 		)
 		if severity == "error":
-			assert run_lines[3].startswith("  echo \"::error::") and run_lines[4] == "  exit 1", step_name
+			assert run_lines[4].startswith("  echo \"::error::") and run_lines[5] == "  exit 1", step_name
 		else:
-			assert run_lines[3].startswith("  echo \"::warning::") and run_lines[4] == "  exit 0", step_name
+			assert run_lines[4].startswith("  echo \"::warning::") and run_lines[5] == "  exit 0", step_name
 		assert "${{" not in run, f"{step_name}: wrapper must not carry GitHub expressions"
+
+
+def test_support_source_verify_step_writes_fallback_sentinel() -> None:
+	# Only the trusted verify step may mark .codex-workflow-src as verified,
+	# and only after its rev-parse HEAD == SCRIPT_REF check (#10208).
+	workflow = yaml.safe_load(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	names = [step.get("name") for step in steps]
+	ensure = steps[names.index("Ensure workflow support source checkout")]["run"]
+	sentinel = 'echo "REVIEW_SUPPORT_SOURCE_VERIFIED_SHA=${SCRIPT_REF}" >> "$GITHUB_ENV"'
+	check = 'if [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF}" ]; then'
+	assert check in ensure and sentinel in ensure
+	assert ensure.index(check) < ensure.index("exit 1") < ensure.index(sentinel)
+	writers = [step.get("name") for step in steps if "REVIEW_SUPPORT_SOURCE_VERIFIED_SHA=" in str(step.get("run", ""))]
+	assert writers == ["Ensure workflow support source checkout"], writers
+	assert names.index("Checkout workflow support source") < names.index("Ensure workflow support source checkout")
 
 
 def test_fail_open_only_for_steps_that_run_after_staging_failures() -> None:
@@ -140,7 +191,7 @@ def test_every_wrapper_is_registered_and_expands() -> None:
 	raw = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
 	wrapped = set(
 		re.findall(
-			r'REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-freshness-src/scripts)/([a-z0-9_]+\.sh)"',
+			r'REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-freshness-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-workflow-src/scripts)/([a-z0-9_]+\.sh)"',
 			raw,
 		)
 	)
@@ -151,6 +202,17 @@ def test_every_wrapper_is_registered_and_expands() -> None:
 	expanded_steps = _steps_by_name(expanded)
 	for step_name, (script_name, _severity) in REVIEW_AUTOFIX_STEP_SCRIPTS.items():
 		assert expanded_steps[step_name]["run"].rstrip("\n") == review_autofix_step_script_body(script_name).rstrip("\n")
+
+
+def test_step_script_registry_has_no_duplicate_step_names() -> None:
+	# A dict literal silently keeps the last of two equal keys (#10166: one
+	# step registered twice, one script orphaned). Scripts may repeat.
+	import ast
+
+	tree = ast.parse((REPO_ROOT / "tests" / "review_autofix_step_scripts.py").read_text(encoding="utf-8"))
+	node = next(n for n in ast.walk(tree) if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", "") == "REVIEW_AUTOFIX_STEP_SCRIPTS")
+	keys = [ast.literal_eval(k) for k in node.value.keys]
+	assert len(keys) == len(set(keys)), sorted(k for k in keys if keys.count(k) > 1)
 
 
 def test_step_script_registries_have_no_duplicate_keys_and_no_orphan_scripts() -> None:
@@ -227,6 +289,44 @@ def test_skip_merge_job_step_scripts_come_only_from_verified_freshness_checkout(
 		assert by_name[step_name]["env"]["FRESHNESS_HELPER_CHECKOUT_OUTCOME"] == "${{ steps.checkout_freshness_helper.outcome }}"
 		assert by_name[step_name]["env"]["REVIEW_SUPPORT_SHA"] == "${{ needs.gate.outputs.review_support_sha }}"
 		assert names.index("Checkout merge-base freshness helper") < names.index(step_name)
+
+
+def test_support_checkout_job_step_scripts_come_only_from_their_verified_checkout() -> None:
+	# #10166: these jobs have no staged support bundle. Each checks out
+	# .codex-workflow-src at review_support_sha and verifies it (exit 1 on
+	# mismatch, exporting WORKFLOW_SUPPORT_REF) before the moved step runs.
+	assert REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS, "support-checkout step registry must not be empty"
+	workflow = yaml.safe_load(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
+	for step_name, (script_name, severity) in REVIEW_AUTOFIX_STEP_SCRIPTS.items():
+		if script_name not in REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS:
+			continue
+		assert severity == "error", step_name
+		steps = workflow["jobs"][REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS[script_name]]["steps"]
+		names = [step.get("name") for step in steps]
+		by_name = {step.get("name"): step for step in steps}
+		checkout = by_name["Checkout workflow support source"]
+		assert checkout["with"]["ref"] == "${{ needs.gate.outputs.review_support_sha }}"
+		assert checkout["with"]["path"] == ".codex-workflow-src"
+		sparse = checkout["with"].get("sparse-checkout")
+		if sparse is not None:
+			assert f"scripts/{script_name}" in sparse.split(), f"{script_name} must be in the sparse checkout"
+		verify = by_name["Verify workflow support source"]
+		assert "continue-on-error" not in verify and "if" not in verify
+		assert 'echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"' in verify["run"]
+		assert "if" not in by_name[step_name], f"{step_name}: must run only after the verify step succeeded"
+		assert names.index("Checkout workflow support source") < names.index("Verify workflow support source") < names.index(step_name)
+
+
+def test_capture_runtime_context_stays_inline() -> None:
+	# #10166 security pass: this always() step can run before the trusted
+	# support checkout, when the wrapper's .codex-workflow-src fallback would
+	# source a PR-committed script. Its body stays inline, sourcing nothing.
+	steps = _steps_by_name(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
+	step = steps["Capture runtime context"]
+	assert str(step.get("if", "")) == "always()", step.get("if")
+	assert "REVIEW_AUTOFIX_STEP_SCRIPT" not in step["run"] and "source " not in step["run"], step["run"]
+	assert 'mkdir -p "${RUNTIME_CONTEXT_DIR}"' in step["run"]
+	assert "Capture runtime context" not in REVIEW_AUTOFIX_STEP_SCRIPTS
 
 
 def main() -> int:

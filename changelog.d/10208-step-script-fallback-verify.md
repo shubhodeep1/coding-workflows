@@ -1,0 +1,7 @@
+<!-- changelog: fixed -->
+- **The review workflow no longer runs step scripts that a pull request commits under `.codex-workflow-src/` when the job fails early.** Refs #3576 (security finding `capture-runtime-context-sources-pr-tree-script-on-early-failure`; issue #10208).
+
+  - The `codex-agent` step wrappers in `review_autofix.yml` fall back to `.codex-workflow-src/scripts/` when the staged support bundle is missing. That fallback is now used only when "Ensure workflow support source checkout" has verified the checkout (it writes `REVIEW_SUPPORT_SOURCE_VERIFIED_SHA`) and `git rev-parse HEAD` there still equals `SCRIPT_REF` (read with the job's `GIT_DIR`/`GIT_WORK_TREE` cleared, so it is the support checkout's HEAD and not the pull request's). Otherwise the step logs `Refusing unverified .codex-workflow-src fallback` and acts as if the script were missing: `always()` steps skip with a warning, the rest fail. "Classify infra-failed review round" and "Write review findings record" use the same check.
+  - The PR-head "Checkout repo" step now sets `persist-credentials: false`, so `GH_PAT` is no longer left in `.git/config` before "Configure git auth for memory helper clones" runs.
+
+What this means for consumer repos: nothing to change. After the next `@stable` sync, a review run that fails before its support checkout no longer runs files from the pull request's `.codex-workflow-src/` directory.

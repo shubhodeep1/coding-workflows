@@ -29,6 +29,13 @@ staging. Their scripts are listed in
 the ``.codex-freshness-src`` sparse checkout and requires its HEAD to equal
 ``REVIEW_SUPPORT_SHA`` (#8333).
 
+Steps in the ``post-merge-validate-dispatch`` and ``fingerprint-cap-block``
+jobs have no support bundle either, but those jobs check out and verify their
+own ``.codex-workflow-src``. Their scripts are listed in
+:data:`REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS`; their wrapper
+resolves only that checkout and requires its HEAD to equal
+``WORKFLOW_SUPPORT_REF`` (#10166).
+
 ``.github/workflows/test-and-mark-stable.yml`` uses the same approach for its
 largest ``e2e-smoke-test`` step bodies (#7991): ``scripts/stable_e2e_step_*.sh``
 are read from a ``github.sha``-pinned sparse checkout, copied to
@@ -96,7 +103,12 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Integration post-sync test repair": ("review_autofix_step_prepush_test_gate.sh", "error"),
 	"Single-issue security pass (deterministic skip)": ("review_autofix_step_deterministic_skip_security_pass.sh", "error"),
 	"Checkout PR head branch": ("review_autofix_step_checkout_pr_head_branch.sh", "error"),
+	"Telegram review-blocked judge decision": ("review_autofix_step_telegram_rb_judge_decision.sh", "error"),
 	"Push all pending commits": ("review_autofix_step_push_pending_commits.sh", "error"),
+	"Pre-assemble static context (cacheable across runs)": ("review_autofix_step_static_context.sh", "error"),
+	"Resolve AI engine": ("review_autofix_step_resolve_ai_engine.sh", "error"),
+	"Dispatch standalone validate for orchestrator short-circuit issues": ("review_autofix_step_post_merge_validate_dispatch.sh", "error"),
+	"Apply identical-failure cap outcome": ("review_autofix_step_fingerprint_cap_block.sh", "error"),
 }
 
 # Gate-job step scripts -> the verified checkout directory their wrapper reads.
@@ -113,6 +125,16 @@ REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS: dict[str, str] = {
 # from SUPPORT_SCRIPTS_DIR or the PR-head checkout.
 REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS: dict[str, str] = {
 	"review_autofix_step_deterministic_skip_security_pass.sh": ".codex-freshness-src",
+}
+
+# Step scripts of jobs that run without the staged support bundle but check
+# out and verify their own .codex-workflow-src at review_support_sha
+# ("Verify workflow support source" exports WORKFLOW_SUPPORT_REF) -> job id
+# (#10166). The wrapper reads only that checkout, re-checks its HEAD against
+# WORKFLOW_SUPPORT_REF and fails closed; it has no SUPPORT_SCRIPTS_DIR path.
+REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS: dict[str, str] = {
+	"review_autofix_step_post_merge_validate_dispatch.sh": "post-merge-validate-dispatch",
+	"review_autofix_step_fingerprint_cap_block.sh": "fingerprint-cap-block",
 }
 
 # test-and-mark-stable.yml step name -> script under scripts/. A missing or
@@ -134,7 +156,7 @@ IMPLEMENT_STEP_SCRIPTS: dict[str, str] = {
 }
 
 _WRAPPER_START_RE = re.compile(
-	r'^(?P<indent> *)REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-freshness-src/scripts)/(?P<script>review_autofix_step_[a-z0-9_]+\.sh)"$'
+	r'^(?P<indent> *)REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-freshness-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-workflow-src/scripts)/(?P<script>review_autofix_step_[a-z0-9_]+\.sh)"$'
 )
 _WRAPPER_END = 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'
 _STABLE_E2E_WRAPPER_START_RE = re.compile(

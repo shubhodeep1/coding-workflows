@@ -17,8 +17,14 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
+
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
@@ -368,10 +374,7 @@ def test_workflow_wires_cache_env_eviction_and_summary(tmp_path: Path) -> None:
 	assert "      GH_PR_READ_CACHE_JOB: codex-agent\n" in text
 	check_step = text.split("- name: Check PR state (defense-in-depth)", 1)[1].split("- name:", 1)[0]
 	assert 'pr_meta="$(gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" || echo \'null\')"' in check_step
-	push_step = text.split("- name: Push all pending commits", 1)[1].split("\n      - name:", 1)[0]
-	# The step body lives in its step script (moved for the workflow size guard).
-	assert "review_autofix_step_push_pending_commits.sh" in push_step
-	push_step = (REPO_ROOT / "scripts" / "review_autofix_step_push_pending_commits.sh").read_text()
+	push_step = expanded_review_autofix_text().split("- name: Push all pending commits", 1)[1].split("\n      - name:", 1)[0]
 	assert 'gh_pr_cache_evict "${GITHUB_REPOSITORY}" "${PR_NUMBER:-}"' in push_step
 	end_step = text.split("- name: Record GH_PAT budget at codex-agent end", 1)[1].split("\n      - name:", 1)[0]
 	summary = next(line.strip() for line in end_step.splitlines() if "GH_PR_READ_CACHE hits=" in line)

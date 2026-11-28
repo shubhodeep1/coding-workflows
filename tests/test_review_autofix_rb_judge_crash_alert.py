@@ -26,7 +26,13 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import sys
 from pathlib import Path
+
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
@@ -46,7 +52,7 @@ def _require_jq() -> None:
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	return expanded_review_autofix_text()
 
 
 def _step(workflow: str, name: str) -> str:
@@ -65,7 +71,8 @@ def _marker(head: str, reason: str) -> str:
 
 
 def test_comment_step_has_id_and_crash_inputs():
-	step = _step(_workflow_text(), COMMENT_STEP_NAME)
+	# Raw text: this checks the step's wrapper, which the expanded text replaces.
+	step = _step(WORKFLOW.read_text(encoding="utf-8"), COMMENT_STEP_NAME)
 	assert "        id: rb_blocked_comment\n" in step
 	assert "RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}" in step
 	assert "RB_JUDGE_PROVIDER_UNAVAILABLE: ${{ steps.rb_judge.outputs.rb_judge_provider_unavailable }}" in step

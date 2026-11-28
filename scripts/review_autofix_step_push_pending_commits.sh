@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# shellcheck shell=bash
 # Body of the "Push all pending commits" step in
 # .github/workflows/review_autofix.yml, moved out of the workflow to keep it
-# under the 430,000-byte contract guard and the 480,000-byte workflow size
-# guard (GitHub never starts runs for a workflow file over 512,000 bytes).
-# The step sources this file in its own shell, so the step's name:, if: and
-# env: stay in the workflow; edit those there. The body has no workflow
-# expressions: every value comes in through the step's env:.
+# well under the 430,000-byte contract-test ceiling and GitHub's 512,000-byte
+# workflow file limit (#10166). The step sources this file in its own shell,
+# so the step's if:, env: and continue-on-error: stay in the workflow; edit
+# those there.
 set -euo pipefail
 export LANG=C
 

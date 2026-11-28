@@ -11106,7 +11106,12 @@ def test_post_sync_test_repair_input_is_declared_on_both_triggers_and_the_templa
 
 
 def test_post_sync_test_repair_keeps_review_autofix_well_under_the_size_guard() -> None:
-	assert WORKFLOW.stat().st_size < 430_000, WORKFLOW.stat().st_size
+	# One shared ceiling with scripts/ci_budget_watch.py, so the watcher warns
+	# before this test fails (#10166).
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	from ci_budget_watch import WORKFLOW_TEST_CEILING_BYTES
+
+	assert WORKFLOW.stat().st_size < WORKFLOW_TEST_CEILING_BYTES, WORKFLOW.stat().st_size
 
 
 def test_post_sync_test_repair_step_script_mode_and_resolver_hand_off() -> None:
