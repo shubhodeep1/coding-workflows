@@ -4406,8 +4406,9 @@ jobs:
       # measurement: together these three steps run about 207 tests and about
       # 173 subprocess or bash call sites. Group 3 was the target because this
       # job has the only 30-minute budget (budget-watch warns at 22m30s) and
-      # group 3 pinned only "Orchestrate poll single-file module tests"; group
-      # 1 already took #9966's two steps. The modules need no checkout history
+      # group 3 pinned only "Orchestrate poll single-file module tests" and
+      # #10182's "Orchestrate lib unit tests" (its headroom is unmeasured);
+      # group 1 already took #9966's two steps. The modules need no checkout history
       # (both jobs check out at depth 1), Node or job-level env; the shared pip
       # install provides pytest and PyYAML. Names and bodies unchanged; each
       # step runs once per CI run.
