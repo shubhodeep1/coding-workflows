@@ -2,7 +2,10 @@
 FROM node:22.16.0-bookworm-slim
 ARG OPENCODE_VERSION=1.18.23
 # jq: the review-side pre-push gate runs shell-script tests that call jq.
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv git ca-certificates gawk shellcheck jq \
+# python3-yaml, python3-jsonschema: the gate's contract tests import them at
+# module level and CI installs both; without them those files failed to
+# collect on both trees and were reported as inherited (issue #10249).
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv python3-yaml python3-jsonschema git ca-certificates gawk shellcheck jq \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" --no-audit --no-fund
 # Pre-push affected-test gate lint (plan P4). Non-fatal: a failed install must

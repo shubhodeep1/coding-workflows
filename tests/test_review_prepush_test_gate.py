@@ -1588,3 +1588,25 @@ def test_review_commit_journal_reads_the_newest_gate_run(tmp_path, runs, expecte
 	assert "DONE" in proc.stdout, proc.stderr
 	argv = argv_log.read_text(encoding="utf-8").splitlines()
 	assert argv[argv.index("--gate-result") + 1] == str(runtime / "prepush_gate" / expected / "result.json")
+
+
+def test_summary_subcommand_shows_baseline_first_failure(tmp_path):
+	# Issue #10249: inherited and names-unreadable entries carry the merge-base's
+	# first failure line; only a string is passed through.
+	result = tmp_path / "result.json"
+	result.write_text(json.dumps(_result("unverified", inherited=[
+		{"test": "tests/test_a.py", "names": ["test_x"], "first_failure": "ModuleNotFoundError: No module named 'yaml'"},
+		{"test": "tests/test_b.py", "names": ["test_y"], "first_failure": 42},
+	], unverified=[
+		{"item": "tests/test_c.py", "reason": "baseline_names_unreadable", "names": [], "first_failure": "boom"},
+	])), encoding="utf-8")
+	out = tmp_path / "summary.md"
+	env = {k: v for k, v in os.environ.items() if k not in ("RUNTIME_DIR", "SUPPORT_SCRIPTS_DIR", "SUPPORT_PROMPTS_DIR")}
+	env["RUNNER_TEMP"] = str(tmp_path)
+	proc = subprocess.run(["bash", str(STEP_SCRIPT), "summary", str(result), str(out)], cwd=tmp_path, env=env,
+		capture_output=True, text=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	text = out.read_text(encoding="utf-8")
+	assert "- `tests/test_a.py`: `test_x` (merge-base: `ModuleNotFoundError: No module named 'yaml'`)" in text
+	assert "- `tests/test_b.py`: `test_y`\n" in text
+	assert "- `tests/test_c.py`: baseline_names_unreadable (merge-base: `boom`)" in text
