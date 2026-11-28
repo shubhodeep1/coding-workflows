@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue improve?\nChoices:\nA) The pipeline workflows: clarify, plan, implement, or review/autofix (`.github/workflows/*.yml` and their `scripts/`)\nB) The orchestrator poller and stall recovery (`orchestrate_poll.yml`, `scripts/orchestrate_*`)\nC) The AI memory subsystem (`scripts/ai_memory.py`, `scripts/memory_helpers.sh`)\nD) The documentation only (`README.md`, `docs/`, `agents.d/` fragments)\nE) Something else. Name the file, workflow or feature in the `/answer` (RECOMMENDED)\nQ2: What concrete problem or symptom should be fixed?\nChoices:\nA) A specific failure or bug. Paste the run URL, PR/issue number, or log line in the `/answer` (RECOMMENDED)\nB) Speed or cost: fewer runner jobs, fewer GitHub API calls, or fewer model tokens\nC) Reliability: fewer stalls, retries or manual interventions\nD) Readability or maintainability, with no behaviour change\nQ3: How should we judge that the change worked?\nChoices:\nA) A named check passes, or a named failure stops happening. Describe it in the `/answer` (RECOMMENDED)\nB) A metric you measure improves, such as run count, duration or cost, by a stated amount\nC) Docs or code are reviewed as clearer, with no change in behaviour",
+  "fingerprint": "733f0d0492f460ff2d4c429ca995dcf67d0cc77913e298fc2f09b792d6d09b6d",
+  "lineage": {
+    "issue_number": 10275,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46174174656",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46174174656",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261128181943_8f7b950bbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10275,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46174174656"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #10275 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-28T18:19:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
