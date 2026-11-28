@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_alert_inbox_store.py:5-9 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The module docstring still opens with \"one retry on HTTP 409\" and then corrects itself with \"The 409 retry repeats up to three times with jittered backoff\"; the previous autofix rewrite is not on disk at the PR head.\n  WHY: This is documentation only with no runtime failure, but the stale \"one retry\" phrase contradicts the next sentence and the actual behavior in scripts/alert_inbox_store.sh (409 retried up to 3 times with jittered backoff). The source severity was NIT; low is the closest allowed value. anthropic_claude-sonnet-5_5 deliberately did not report this as a finding because it is a wording-only nit outside the PR change set.\n- docs/INVENTORY.md:126 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The parenthetical \"(409 retry, branch bootstrap)\" implies a single retry, while the same line says \"A 409 is retried up to 3 times with jittered backoff\"; the previous autofix rewrite is not on disk.\n  WHY: This is documentation only with no runtime failure, and the \"up to 3\" claim is accurate. The source severity was NIT; low is the closest allowed value. anthropic_claude-sonnet-5_5 deliberately did not report this as a finding because it is a wording-only nit outside the PR change set.\n- tests/test_tg_helpers_alert_inbox.py:487 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The last_run_diff hunk that adds \"--max-time\", \"30\" to the expected Telegram argv is stale-base noise: the working tree already contains it and it matches scripts/tg_helpers.sh line 228 (curl -s --max-time 30).\n  WHY: There is no runtime failure because the test and script already agree; it is flagged so the editor does not re-apply the hunk and add the flag twice. The source severity was NIT; low is the closest allowed value.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_alert_inbox_store.py:lines 5-9 (module docstring) | severity=NIT | confidence=4\n  PROBLEM: The docstring still opens with \"one retry on HTTP 409\" and then corrects itself. The previous autofix rewrite (\"up to three jittered retries on HTTP 409, ...\") is not on disk, and the file is not among the PR's changed files.\n  WHY: Documentation only, no runtime failure; the stale phrase contradicts the next sentence and the behavior in scripts/alert_inbox_store.sh (409 retried up to 3 times with jittered backoff).\n- docs/INVENTORY.md:line 126 (scripts/alert_inbox_store.sh entry) | severity=NIT | confidence=4\n  PROBLEM: \"(409 retry, branch bootstrap)\" implies a single retry, while the same line says \"A 409 is retried up to 3 times with jittered backoff\". The previous autofix rewrite is not on disk, and the file is not among the PR's changed files.\n  WHY: Documentation only, no runtime failure; the \"up to 3\" claim itself is accurate.\n- tests/test_tg_helpers_alert_inbox.py:line 487 (_expected_telegram_argv, \"--max-time\", \"30\") | severity=NIT | confidence=3\n  PROBLEM: The last_run_diff shows \"--max-time\", \"30\" as an edit from the previous run, but the working tree already contains it and the file is not in the PR's changed-files list. The expectation matches scripts/tg_helpers.sh line 228 (curl -s --max-time 30), so the hunk is stale-base noise.\n  WHY: None at runtime because the test and script already agree; flagged so the editor does not re-apply the hunk and add the flag twice.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "276c5c4fb123b3901bed7e26c3038f6a50f68edad755eb1507cadc587e956e58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10271,
+    "run_id": "46160841722",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46160841722",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128155656_28947ff009",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10271,
+    "run_id": "46160841722"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T15:56:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
