@@ -5,13 +5,33 @@
   "entry_id": "processed_command_10266_7240094266_approved",
   "issue_number": 10266,
   "metadata": {
+    "branch": "ai/issue-10266",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/promote-main-to-stable.yml",
+      "README.md",
+      "agents.d/10266-gate-cancel-retry-final-ci-hold.md",
+      "changelog.d/10266-gate-cancel-retry-final-ci-hold.md",
+      "scripts/pr_checks_lib.sh",
+      "scripts/promote_main_cycle.sh",
+      "scripts/review_merge_train.sh",
+      "tests/test_merge_lease_ready_grant.py",
+      "tests/test_orchestrate_poll_workflow_contract.py",
+      "tests/test_promote_main_cycle.py",
+      "tests/test_review_final_ci.py"
+    ],
+    "issue_number": 10266,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10266",
+    "pr_number": 10272,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10272",
+    "run_attempt": "1",
+    "run_id": "46150716059",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/46150716059"
   },
   "run_attempt": 1,
   "run_id": "46150716059",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-28T13:41:58Z",
+  "status": "completed",
+  "timestamp": "2026-11-28T16:09:54Z",
   "workflow": "implement"
 }
