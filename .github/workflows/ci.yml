@@ -3166,7 +3166,8 @@ jobs:
       #
       # Moved again from tests-hooks-and-orchestrator to this job in budget-watch
       # issue #9078, with "Implement post-Codex recovery unit tests"; see its
-      # comment (that step runs in orchestrate-poll group 0 since #10182).
+      # comment (that step ran in orchestrate-poll group 0 from #10182 and runs
+      # in group 2 since #10261).
       # Names and bodies unchanged.
       - name: Merge-base freshness gate (pr_checks_lib) tests
         run: |
@@ -4381,9 +4382,9 @@ jobs:
       # throwaway `git init` repositories and need no checkout history (this
       # job checks out at depth 1), Node or prepared .claude/ live copies; the
       # shared pip install provides PyYAML. Since #10182 the two #8771 steps
-      # share this job again, in different groups (this step in group 0,
-      # "Orchestrate lib unit tests" in group 3). Name and body unchanged;
-      # the step runs once per CI run.
+      # share this job again, in different groups (this step in group 0, group
+      # 2 since #10261, "Orchestrate lib unit tests" in group 3). Name and
+      # body unchanged; the step runs once per CI run.
       #
       # Moved again from tests-promote-stall-and-review, which took 16m02s of
       # its 20 minutes on main (run 41704793081, budget-watch issue #8771). It
@@ -4566,11 +4567,11 @@ jobs:
       # its 20 minutes on main (run 45766722607, budget-watch issue #10182,
       # re-issued from #10162). Same estimate basis as "Orchestrate lib unit
       # tests" (one module, about 162 test functions and 38 subprocess call
-      # sites), not a measurement. It goes to group 0, so the two #10182
-      # steps land in different groups. The "two steps below" in the #9078
-      # paragraph are "Merge-base freshness gate (pr_checks_lib) tests" and
-      # "Conflict-dispatch active-run visibility contract tests", which stay
-      # in tests-release-and-log-analysis. It needs no git history, Node or
+      # sites), not a measurement. It went to group 0 (group 2 since #10261),
+      # so the two #10182 steps land in different groups. The "two steps
+      # below" in the #9078 paragraph are "Merge-base freshness gate
+      # (pr_checks_lib) tests" and "Conflict-dispatch active-run visibility
+      # contract tests", which stay in tests-release-and-log-analysis. It needs no git history, Node or
       # prepared .claude/ live copies. Name and body unchanged; the group
       # guard keeps it to one run per CI run.
       #

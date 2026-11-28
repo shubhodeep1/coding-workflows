@@ -4461,7 +4461,8 @@ class MovedHooks9391StepsContractTest(unittest.TestCase):
 # check-failure triage step after #9214 and since #9639 the pre-push
 # affected-test gate step (its headroom is unmeasured); the
 # Semble and pre-seed steps run in group 1, which pinned only the
-# review-pipeline plumbing step.
+# review-pipeline plumbing step. #10261 moved the merge-train step on to
+# group 2.
 HOOKS_9496_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
 HOOKS_9496_TARGET_JOB_ID = POLL_JOB_ID
 HOOKS_9496_SETUP_STEP = "Install Python CI dependencies"
@@ -4494,7 +4495,7 @@ POLL_GROUP_ZERO_9496_PINNED_STEPS = ()
 
 
 class MovedHooks9496StepsContractTest(unittest.TestCase):
-	"""The steps moved out of tests-hooks-and-orchestrator run once, in orchestrate-poll groups 0 and 1 (#9496)."""
+	"""The steps moved out of tests-hooks-and-orchestrator run once, in orchestrate-poll groups 1 and 2 (#9496, #10261)."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -5167,8 +5168,6 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 		# poll matrix back to tests-hooks-and-orchestrator. Since #9496 group 0
 		# also runs the merge-train step, before the triage step. Since #10182
 		# group 0 also runs the post-Codex recovery step, after the triage step.
-		# Any further group-0 step must update POLL_GROUP_ZERO_9496_PINNED_STEPS
-		# or RELEASE_10182_GROUP_ZERO_STEPS on purpose.
 		# Since #10261 group 0 pins no step besides the fast-fail subset; any
 		# new group-0 step must update this test on purpose.
 		self.assertEqual(group_zero_guarded, [POLL_GROUP_ZERO_9214_FAST_FAIL_STEP])
