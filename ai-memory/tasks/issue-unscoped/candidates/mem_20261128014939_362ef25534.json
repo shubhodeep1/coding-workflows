@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Many merged workflow changes add a matching file under `agents.d/` and a fragment under `changelog.d/`; README updates are also common when behavior or usage changes. Check the surrounding files and repository conventions when planning a change, while keeping documentation proportional to its user-facing impact.",
+  "fingerprint": "371ff6a1846751e6d30007c0e4f4a2ac1b06cfaba60c11d99ac856c4b65c3bba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46092673742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46092673742",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10063",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10078",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10172",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10198",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10205",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10067",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10081",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10174",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10203",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10207"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261128014939_362ef25534",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Repository changes commonly include agent notes and changelog fragments.",
+  "timestamps": {
+    "created_at": "2026-11-28T01:49:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
