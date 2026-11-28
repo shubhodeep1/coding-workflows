@@ -37,6 +37,9 @@ STUB_FUNCTIONS = """gh() {
 	n=$(wc -l < "${STUB_GH_LOG}" | tr -d ' ')
 	sed -n "${n}p" "${STUB_GH_PAYLOADS}"
 }
+gh_api_retry() {
+	gh api "$@"
+}
 sleep() {
 	echo "sleep $*" >> "${STUB_SLEEP_LOG}"
 }
@@ -92,7 +95,8 @@ class ChildCountStaticTests(unittest.TestCase):
 		self.assertIn('[ "${CHILD_COUNT}" -ge 2 ] && break', block)
 		self.assertIn('sort | unique | join(",")', block)
 		self.assertIn(BLOCK_END, block)
-		self.assertEqual(block.count("gh api"), 1)
+		self.assertEqual(block.count("gh_api_retry"), 1)
+		self.assertEqual(block.count("gh api"), 0)
 		self.assertIn("last gh api stderr during child-issue polling", run)
 		self.assertIn("expected >= 2", run)
 

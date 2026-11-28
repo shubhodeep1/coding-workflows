@@ -10,25 +10,68 @@
 set -euo pipefail
 BRANCH="ai/issue-${ISSUE_NUMBER}"
 
+# Issue #10225: every GitHub read in this step goes through gh_api_retry
+# (scripts/gh_helpers.sh), which waits for the limited bucket's reset on a
+# rate-limit answer instead of failing. The workspace copy is sourced the
+# way stable_e2e_step_verify_bait_removed.sh does; a missing helper fails
+# the step (fail closed).
+if ! declare -F gh_api_retry >/dev/null 2>&1; then
+  source scripts/gh_helpers.sh
+fi
+
+# phase7_rate_limit_max_wait: the longest single rate-limit wait a Phase 7
+# read may take. The smaller of 600 s (the helper's default) and half the
+# time left before the finalization reserve (E2E_JOB_STARTED_EPOCH +
+# (E2E_JOB_TIMEOUT_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60, the
+# same cap phase7_wait_deadline uses), floored at 0. With 3 attempts a read
+# waits at most twice, so it never runs past that cap; a reset further away
+# makes gh_api_retry give up at once (rc 75). Without a recorded job start
+# the cap is 600.
+phase7_rate_limit_max_wait() {
+  local now job_cap left
+  if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]]; then
+    now=$(date +%s)
+    job_cap=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - ${E2E_FINALIZATION_RESERVE_MINUTES:-20}) * 60 ))
+    left=$(( (job_cap - now) / 2 ))
+    if [ "${left}" -lt 0 ]; then
+      left=0
+    fi
+    if [ "${left}" -lt 600 ]; then
+      echo "${left}"
+      return 0
+    fi
+  fi
+  echo 600
+}
+
+# phase7_gh_api_read ARGS...: gh_api_retry with 3 attempts and the bounded
+# wait above. Reads only; the close PATCH and the unconflict writes keep
+# their single attempt.
+phase7_gh_api_read() {
+  local phase7_max_wait
+  phase7_max_wait=$(phase7_rate_limit_max_wait)
+  GH_RETRY_MAX_ATTEMPTS=3 GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS="${phase7_max_wait}" gh_api_retry "$@"
+}
+
 # List internal-cancel-on-pr-close runs into PHASE7_CANCEL_RUNS_JSON.
 # One transient GitHub error must not fail Phase 7: run 36389883126
 # got a single HTTP 502 while the cancel run it was polling was
-# already in progress, and the step exited lookup_failed. Retry up to
-# 3 times, 5 s apart; only 3 consecutive failures return 1, and the
-# caller then reports lookup_failed as before.
+# already in progress, and the step exited lookup_failed. Gate run
+# 46009933351 then failed here on "API rate limit exceeded" after three
+# attempts 5 s apart (17:22:59-17:23:09 UTC, issue #10225). The listing
+# now goes through phase7_gh_api_read: 3 attempts with backoff for a
+# transient error, and a wait for the reset on a rate limit. Only a
+# final failure returns 1, and the caller then reports lookup_failed as
+# before.
 phase7_list_cancel_runs() {
   local per_page="$1"
-  local _attempt
-  for _attempt in 1 2 3; do
-    if PHASE7_CANCEL_RUNS_JSON=$(gh api \
-      "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=${per_page}"); then
-      return 0
-    fi
-    if [ "${_attempt}" -lt 3 ]; then
-      echo "::warning::Listing internal-cancel-on-pr-close runs failed (attempt ${_attempt}/3); retrying in 5s."
-      sleep 5
-    fi
-  done
+  local phase7_list_rc=0
+  PHASE7_CANCEL_RUNS_JSON=$(phase7_gh_api_read \
+    "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml/runs?per_page=${per_page}") || phase7_list_rc=$?
+  if [ "${phase7_list_rc}" -eq 0 ]; then
+    return 0
+  fi
+  echo "::warning::Listing internal-cancel-on-pr-close runs failed (gh_api_retry rc=${phase7_list_rc})."
   return 1
 }
 
@@ -94,7 +137,7 @@ PHASE7_RUN_STARTED_AT=""
 # cancel_on_pr_close already ran successfully on the original
 # close. Detect that case and verify the cancel run that fired
 # for the prior close instead.
-PR_INFO=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+PR_INFO=$(phase7_gh_api_read "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
   --jq '{state, head_sha: .head.sha, closed_at, mergeable, mergeable_state}' 2>/dev/null) || PR_INFO="{}"
 PR_STATE=$(echo "${PR_INFO}" | jq -r '.state // ""')
 PR_HEAD_SHA=$(echo "${PR_INFO}" | jq -r '.head_sha // ""')
@@ -164,7 +207,7 @@ if [ "${PR_STATE}" = "closed" ]; then
     # Fetch once, then parse locally. A transient failure still
     # produces an empty string rather than malformed JSON for the
     # local jq parses below.
-    EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""
+    EXISTING_RUN_JSON=$(phase7_gh_api_read "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""
     EXISTING_STATUS=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")
     EXISTING_CONCLUSION=$(printf '%s' "${EXISTING_RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
     echo "  cancel-on-close run #${EXISTING_RUN_ID}: status=${EXISTING_STATUS:-?}, conclusion=${EXISTING_CONCLUSION:-?}"
@@ -244,7 +287,7 @@ _phase7_refresh_mergeability()
   local deadline info
   deadline=$(( $(date +%s) + 90 ))
   while :; do
-    info=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+    info=$(phase7_gh_api_read "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
       --jq '{mergeable, mergeable_state, base_ref: .base.ref}' 2>/dev/null) || info="{}"
     PHASE7_MERGEABLE=$(printf '%s' "${info}" | jq -r 'if .mergeable == null then "unknown" else (.mergeable | tostring) end')
     PHASE7_MERGEABLE_STATE=$(printf '%s' "${info}" | jq -r '.mergeable_state // "unknown"')
@@ -285,7 +328,7 @@ _phase7_take_base_version()
     echo "PHASE7_UNCONFLICT_FILE path=${path} outcome=skipped reason=base_content_unavailable"
     return 1
   fi
-  branch_sha=$(gh api "repos/${TEST_REPO}/contents/${path}?ref=${BRANCH}" --jq '.sha // empty' 2>/dev/null) || branch_sha=""
+  branch_sha=$(phase7_gh_api_read "repos/${TEST_REPO}/contents/${path}?ref=${BRANCH}" --jq '.sha // empty' 2>/dev/null) || branch_sha=""
   if [ -n "${branch_sha}" ]; then
     sha_args=(-f "sha=${branch_sha}")
   fi
@@ -308,17 +351,17 @@ if [ "${PHASE7_MERGEABLE}" = "false" ] && [ -n "${PHASE7_BASE_REF}" ]; then
   PHASE7_MERGE_RC=0
   _phase7_merge_base_into_branch || PHASE7_MERGE_RC=$?
   if [ "${PHASE7_MERGE_RC}" -eq 2 ]; then
-    PHASE7_MERGE_BASE_SHA=$(gh api "repos/${TEST_REPO}/compare/${PHASE7_BASE_REF}...${BRANCH}" \
+    PHASE7_MERGE_BASE_SHA=$(phase7_gh_api_read "repos/${TEST_REPO}/compare/${PHASE7_BASE_REF}...${BRANCH}" \
       --jq '.merge_base_commit.sha // ""' 2>/dev/null) || PHASE7_MERGE_BASE_SHA=""
-    PHASE7_PR_FILES=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
+    PHASE7_PR_FILES=$(phase7_gh_api_read "repos/${TEST_REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
       --jq '.[].filename' 2>/dev/null) || PHASE7_PR_FILES=""
     while IFS= read -r phase7_path; do
       [ -n "${phase7_path}" ] || continue
-      phase7_base_json=$(gh api "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_BASE_REF}" 2>/dev/null) || phase7_base_json=""
+      phase7_base_json=$(phase7_gh_api_read "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_BASE_REF}" 2>/dev/null) || phase7_base_json=""
       phase7_base_blob=$(printf '%s' "${phase7_base_json}" | jq -r '.sha // ""' 2>/dev/null || echo "")
       phase7_merge_base_blob=""
       if [ -n "${PHASE7_MERGE_BASE_SHA}" ]; then
-        phase7_merge_base_blob=$(gh api "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_MERGE_BASE_SHA}" \
+        phase7_merge_base_blob=$(phase7_gh_api_read "repos/${TEST_REPO}/contents/${phase7_path}?ref=${PHASE7_MERGE_BASE_SHA}" \
           --jq '.sha // ""' 2>/dev/null) || phase7_merge_base_blob=""
       fi
       if [ -z "${PHASE7_MERGE_BASE_SHA}" ]; then
@@ -486,7 +529,7 @@ if [ -z "${NEW_RUN_ID}" ]; then
   # this one read, made only on this failure path, is the only
   # extra call. A failed read prints workflow_state=unknown and
   # never changes the step's outcome.
-  PHASE7_CANCEL_WORKFLOW_STATE=$(gh api "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml" --jq '.state // ""' 2>/dev/null || true)
+  PHASE7_CANCEL_WORKFLOW_STATE=$(phase7_gh_api_read "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml" --jq '.state // ""' 2>/dev/null || true)
   if ! [[ "${PHASE7_CANCEL_WORKFLOW_STATE}" =~ ^[a-z_]+$ ]]; then
     PHASE7_CANCEL_WORKFLOW_STATE="unknown"
   fi

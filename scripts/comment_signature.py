@@ -125,6 +125,8 @@ _REFUSED_RE = re.compile(
 	re.IGNORECASE,
 )
 _RATE_LIMITED_RE = re.compile(r"rate limit", re.IGNORECASE)
+# Issue #10176: the HTTP status of a failed job-token post, for the log only.
+_HTTP_STATUS_RE = re.compile(r"HTTP ([0-9]{3})\b")
 
 # `gh api` flags that take a value (short and long forms).
 _API_VALUE_FLAGS = {
@@ -559,9 +561,19 @@ def post_signed(original: list[str], repo: str, issue: int, payload: dict, outpu
 		return plain()
 	current = os.environ.get("GITHUB_REPOSITORY", "")
 	job_token = os.environ.get(JOB_TOKEN_ENV, "")
+	# Issue #10176: every fallback to the caller's token is logged with its
+	# reason (never a token value).
 	if os.environ.get(POST_SWITCH_ENV, "true").strip().lower() == "false":
+		log("fallback", reason="post_switch_off", issue=issue)
 		return plain()
-	if not job_token or repo.lower() != current.lower() or os.path.exists(_refusal_flag()):
+	if not job_token:
+		log("fallback", reason="job_token_missing", issue=issue)
+		return plain()
+	if repo.lower() != current.lower():
+		log("fallback", reason="repo_mismatch", issue=issue)
+		return plain()
+	if os.path.exists(_refusal_flag()):
+		log("fallback", reason="job_token_refused_cached", issue=issue)
 		return plain()
 	identity = caller_identity()
 	if identity is None:
@@ -593,20 +605,22 @@ def post_signed(original: list[str], repo: str, issue: int, payload: dict, outpu
 			if parts is not None:
 				head, text = parts
 		return write_normalized(text, head, jq_filter, secret)
+	status_match = _HTTP_STATUS_RE.search(proc.stderr or "")
+	status_field = {"status": status_match.group(1)} if status_match else {}
 	if _REFUSED_RE.search(proc.stderr or ""):
 		if _RATE_LIMITED_RE.search(proc.stderr or ""):
 			# A rate-limit 403 created nothing and says nothing about the
 			# token's permissions: fall back for this comment only.
-			log("fallback", reason="job_token_rate_limited", issue=issue)
+			log("fallback", reason="job_token_rate_limited", issue=issue, **status_field)
 			return plain()
-		log("fallback", reason="job_token_refused", issue=issue)
+		log("fallback", reason="job_token_refused", issue=issue, **status_field)
 		try:
 			open(_refusal_flag(), "w").close()
 		except OSError:
 			pass
 		return plain()
 	# Ambiguous failure: the comment may exist already. Never resend.
-	log("failed", issue=issue, rc=proc.returncode)
+	log("failed", issue=issue, rc=proc.returncode, **status_field)
 	return emit(proc)
 
 

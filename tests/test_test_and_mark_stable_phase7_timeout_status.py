@@ -88,6 +88,8 @@ def _run_wait(runs: list) -> tuple[subprocess.CompletedProcess, str]:
 				'sleep() { echo $(( $(cat "$CLOCK") + $1 )) > "$CLOCK"; }',
 				'phase7_list_cancel_runs() { PHASE7_CANCEL_RUNS_JSON="$(cat "$RUNS_FILE")"; return 0; }',
 				"gh() { return 1; }",
+				# Issue #10225: Phase 7 reads go through phase7_gh_api_read.
+				'phase7_gh_api_read() { gh api "$@"; }',
 				"PR_NUMBER=42",
 				"PR_CLOSED_AT=2026-10-20T00:00:00Z",
 				"PRE_RUN_ID=100",

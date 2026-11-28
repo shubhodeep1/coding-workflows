@@ -11279,9 +11279,12 @@ def test_repeated_reviewer_failure_workflow_wiring() -> None:
 	):
 		assert line in post_summary, line
 	assert "REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}" in _step_block("Evaluate review gate")
-	# The base-sync carry kill switch reaches every security-pass step.
+	# The base-sync carry kill switch reaches every security-pass step. The
+	# fourth copy is the deterministic-skip-merge "Mark PR review-skipped ..."
+	# step, which runs the same pass inline after a merge-base update
+	# (merge-lease Phase 4, #10198, _pr_base_sync_inline_merge).
 	workflow_text = (_RRF_REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
-	assert workflow_text.count("SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}") == 3
+	assert workflow_text.count("SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}") == 4
 
 
 _RRF_MARK_BLOCKED = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_mark_review_blocked_workflow_failure.sh"
