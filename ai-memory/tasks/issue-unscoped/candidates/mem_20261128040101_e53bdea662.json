@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:2603-2615 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When the PR state is unreadable, the code sets `SYNC_MERGE_BLOCKED_GUARD_STATE=\"unreadable\"` and so overwrites any existing \"blocked\" state, which `rb_judge_deferred_merge_pending` relies on.\n  WHY: If a later non-transient `--auto` refusal occurs, `rb_judge_deferred_merge_pending` sees `unreadable` instead of `blocked`, so it can miss the `merge_failed` condition and leave the PR in a `mergeability_pending` loop instead of firing the \"Needs merge investigation\" alert (the source said SEVERITY: MAJOR, mapped here to high; no other reviewer flagged this).\n- scripts/review_merge_train.sh:2875-2876 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR state check runs after the freshness gate compare and the lease calls.\n  WHY: On the overlap path, a PR that closes within the tick can still take the lease or get a branch update, which causes needless lease operations and contention between the gate and the guard; the code and the agents fragment acknowledge this trade-off (the source said SEVERITY: NIT, mapped here to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:2603-2615 | severity=MAJOR | confidence=4\n  PROBLEM: When the PR state is unreadable, the code sets `SYNC_MERGE_BLOCKED_GUARD_STATE=\"unreadable\"` and so overwrites any existing \"blocked\" state, which `rb_judge_deferred_merge_pending` relies on.\n  WHY: If a later non-transient `--auto` refusal occurs, `rb_judge_deferred_merge_pending` sees `unreadable` instead of `blocked`, so it can miss the `merge_failed` condition and leave the PR in a `mergeability_pending` loop instead of firing the \"Needs merge investigation\" alert.\n- scripts/review_merge_train.sh:2875-2876 | severity=NIT | confidence=4\n  PROBLEM: The PR state check runs after the freshness gate compare and the lease calls.\n  WHY: On the overlap path, a PR that closes within the tick can still take the lease or get a branch update, which causes needless lease operations and contention between the gate and the guard; the code and the agents fragment acknowledge the trade-off, but the race remains.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cde529a6ce889ba946c97de1c28aa34f523700b5e2782b1b3efd8bde9a357f6a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10054,
+    "run_id": "46102475795",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46102475795",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128040101_e53bdea662",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10054,
+    "run_id": "46102475795"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T04:01:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
