@@ -747,7 +747,7 @@ def _child_env() -> dict[str, str]:
 def _run_one(argv: list[str], cwd: Path, deadline: float) -> dict:
 	remaining = deadline - time.monotonic()
 	if remaining <= 0:
-		return {"status": "timeout", "rc": None, "tail": ""}
+		return {"status": "timeout", "rc": None, "tail": "", "full_names": None, "full_unittest_names": None, "full_first_failure": None}
 	start = time.monotonic()
 	try:
 		proc = subprocess.Popen(
@@ -755,7 +755,8 @@ def _run_one(argv: list[str], cwd: Path, deadline: float) -> dict:
 			stdin=subprocess.DEVNULL, start_new_session=True,
 		)
 	except OSError:
-		return {"status": "error", "rc": None, "tail": "", "reason": "command_unavailable"}
+		return {"status": "error", "rc": None, "tail": "", "reason": "command_unavailable",
+			"full_names": None, "full_unittest_names": None, "full_first_failure": None}
 	try:
 		output, _ = proc.communicate(timeout=remaining)
 	except subprocess.TimeoutExpired:
@@ -765,7 +766,8 @@ def _run_one(argv: list[str], cwd: Path, deadline: float) -> dict:
 			pass
 		output, _ = proc.communicate()
 		return {"status": "timeout", "rc": None, "tail": output[-TAIL_BYTES:].decode("utf-8", "replace"),
-			"truncated": len(output) > TAIL_BYTES, "elapsed": round(time.monotonic() - start, 2)}
+			"truncated": len(output) > TAIL_BYTES, "elapsed": round(time.monotonic() - start, 2),
+			"full_names": None, "full_unittest_names": None, "full_first_failure": None}
 	tail = output[-TAIL_BYTES:].decode("utf-8", "replace")
 	# `truncated`: the output was longer than the kept tail (issue #10249).
 	# `full_names` / `full_unittest_names`: the failing names of the whole output
