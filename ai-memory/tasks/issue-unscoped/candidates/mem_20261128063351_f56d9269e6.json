@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:1075-1248 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Both security-pass callers (lines 1096 and 1248) rebuild the comments file with only {author_login, body}, which strips author_type. The new final-CI-failed trust check in scripts/review_head_gate.sh:296-299 needs author_type == \"Bot\", so bot-posted ai:final-ci-failed:v1 and ai:final-ci-repair-request:v1 markers never trigger outcome=review there.\n  WHY: The carry and inherited-clean paths can still inherit a clean audit for a head whose full CI is red. The reviewer rated this a NIT, because behavior there is unchanged and the carry path verifies by patch-id. The helper usage comment at scripts/review_head_gate.sh:231-232 is also stale.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_single_issue_security_pass.sh:1075-1248 | severity=low | confidence=4\n  PROBLEM: Both security-pass callers (lines 1096 and 1248) rebuild the comments file with only {author_login, body}, which strips author_type. The new final-CI-failed trust check in scripts/review_head_gate.sh:296-299 needs author_type == \"Bot\", so bot-posted ai:final-ci-failed:v1 and ai:final-ci-repair-request:v1 markers never trigger outcome=review there.\n  WHY: The carry and inherited-clean paths can still inherit a clean audit for a head whose full CI is red. The reviewer rated this a NIT, because behavior there is unchanged and the carry path verifies by patch-id. The helper usage comment at scripts/review_head_gate.sh:231-232 is also stale.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "782fbdf888719687612b5929ff02d75ff9e75d714bec4bebc4ed997a630aa34a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10251,
+    "run_id": "46114982407",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46114982407",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128063351_f56d9269e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10251,
+    "run_id": "46114982407"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T06:33:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
