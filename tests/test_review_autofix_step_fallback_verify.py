@@ -281,3 +281,56 @@ def test_pr_head_checkout_does_not_persist_credentials() -> None:
 	assert re.search(r"^          persist-credentials: false$", block, re.MULTILINE), (
 		"PR-head checkout must not leave GH_PAT in .git/config (#10208)"
 	)
+
+
+def _job_step_run(job_id: str, step_name: str) -> str:
+	job_text = re.split(r"\n  [a-z0-9_-]+:\n", _WORKFLOW_TEXT.split(f"\n  {job_id}:\n", 1)[1], maxsplit=1)[0]
+	match = re.search(
+		r"^      - name: [\"']?" + re.escape(step_name) + r"[\"']?\n(?P<body>(?:(?!      - ).*\n)*)",
+		job_text,
+		re.MULTILINE,
+	)
+	assert match, f"{job_id} step not found: {step_name}"
+	lines = match.group("body").split("\n")
+	start = lines.index("        run: |") + 1
+	body: list[str] = []
+	for line in lines[start:]:
+		if line and not line.startswith(" " * 10):
+			break
+		body.append(line[10:])
+	return "\n".join(body).rstrip("\n") + "\n"
+
+
+SUPPORT_CHECKOUT_WRAPPER_STEPS = sorted(
+	(step_name, script_name, REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS[script_name])
+	for step_name, (script_name, _severity) in REVIEW_AUTOFIX_STEP_SCRIPTS.items()
+	if script_name in REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS
+)
+
+
+@pytest.mark.parametrize(("step_name", "script_name", "job_id"), SUPPORT_CHECKOUT_WRAPPER_STEPS, ids=[s[0] for s in SUPPORT_CHECKOUT_WRAPPER_STEPS])
+def test_support_checkout_job_wrapper_sources_only_the_verified_checkout(step_name: str, script_name: str, job_id: str, tmp_path: Path) -> None:
+	# #10166: these jobs have no staged bundle; the wrapper must source the
+	# script only when .codex-workflow-src HEAD equals WORKFLOW_SUPPORT_REF.
+	assert SUPPORT_CHECKOUT_WRAPPER_STEPS, "support-checkout step registry must not be empty"
+	run = _job_step_run(job_id, step_name)
+	workspace = tmp_path / "ws"
+	workspace.mkdir()
+	marker = tmp_path / "marker"
+	_plant(workspace, script_name, marker)
+
+	# WORKFLOW_SUPPORT_REF empty (verify step never ran): fail closed.
+	result = _run_step(run, tmp_path, workspace, {"WORKFLOW_SUPPORT_REF": ""})
+	assert not marker.exists(), f"{step_name}: sourced a script with no verified support checkout"
+	assert result.returncode == 1, (step_name, result.stdout, result.stderr)
+
+	# Checkout present but HEAD differs from WORKFLOW_SUPPORT_REF: fail closed.
+	head = _commit_support_checkout(workspace)
+	result = _run_step(run, tmp_path, workspace, {"WORKFLOW_SUPPORT_REF": "e" * 40})
+	assert not marker.exists(), f"{step_name}: sourced a script whose checkout HEAD differs from WORKFLOW_SUPPORT_REF"
+	assert result.returncode == 1, (step_name, result.stdout, result.stderr)
+
+	# Verified checkout at WORKFLOW_SUPPORT_REF: the script is sourced.
+	result = _run_step(run, tmp_path, workspace, {"WORKFLOW_SUPPORT_REF": head})
+	assert result.returncode == 0, (step_name, result.stdout, result.stderr)
+	assert marker.read_text() == "sourced", f"{step_name}: verified support checkout script must be sourced"
