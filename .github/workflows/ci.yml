@@ -136,6 +136,8 @@ jobs:
     # It then took 14m21s of its 15 minutes on main (run 43139141266,
     # budget-watch issue #9362), so "Validation self-test unit tests" now runs
     # its module commands in four concurrent lanes in place (see that step).
+    # #10206 added "Prompt template parity (quick)" (tests/test_assemble_prompt.py,
+    # about 6 seconds), so prompt/template drift is red on CI quick.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Explicit since #9939: ci_pr_quick.yml grants `statuses: write` for
@@ -616,6 +618,17 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/prompt_size_budget.py
+
+      # #10206: PRs #10066 and #10067 edited prompts/mode-judge-review-blocked.txt
+      # without its prompts/_templates/ twin; CI quick passed and the drift was
+      # first reported by the final CI runs 45964653558 and 45974744375. Run the
+      # parity test here so CI quick is red while the review can still fix it.
+      # The full-CI copy in tests-release-and-log-analysis ("Review/judge/conflict
+      # strict-render contract test") is kept unchanged.
+      - name: Prompt template parity (quick)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
 
       - name: Prompt forbidden-token soft lint
         run: |
