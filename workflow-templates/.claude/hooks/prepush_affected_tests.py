@@ -157,6 +157,10 @@ _DEF_LINE_RE = re.compile(r"^[+-](?![+-])\s*(?:async\s+)?def\s+([A-Za-z_]\w*)|^[
 _FAILED_RE = re.compile(r"\bFAILED\s+(\S+::\S+)")
 _FAIL_RUNNER_RE = re.compile(r"^\s*FAIL\s{2,}([A-Za-z_]\w*)")
 _UNITTEST_RE = re.compile(r"^(?:FAIL|ERROR):\s+([A-Za-z_]\w*)\s+\(")
+# The same unittest header with its `(module.Class)` qualifier, used only by the
+# baseline name comparison (issue #10249): failing_names() keeps the method
+# alone, so two classes failing a method of the same name would compare equal.
+_UNITTEST_QUALIFIED_RE = re.compile(r"^(?:FAIL|ERROR):\s+([A-Za-z_]\w*)\s+\(([^()\s]+)\)")
 # pytest summary line for a setup/teardown error: `ERROR path::node - ...`.
 _ERROR_NODE_RE = re.compile(r"^ERROR\s+(\S+::\S+)")
 _EVENT_PREFIX = "TEST_CASE_EVENT:"
@@ -626,9 +630,18 @@ def _node_runner(repo: Path) -> str | None:
 
 
 def _is_indirect_entry(entry: dict) -> bool:
-	"""True when every reason is `helper:test_*` (a test file found through a test module it imports)."""
+	"""True when every reason is `helper:<test module>` (a test file found through a test module it imports).
+
+	The helper sits in the importer's directory (select_tests rule 3), so
+	is_test_file() on that path covers `test_*.py`, `*_test.py` and `__tests__/`.
+	"""
 	reasons = entry.get("reasons") or []
-	return bool(reasons) and all(isinstance(reason, str) and reason.startswith("helper:test_") for reason in reasons)
+	parent = PurePosixPath(str(entry.get("path") or "")).parent.as_posix()
+	return bool(reasons) and all(
+		isinstance(reason, str) and reason.startswith("helper:") and len(reason) > len("helper:")
+		and is_test_file(f"{parent}/{reason[len('helper:'):]}.py")
+		for reason in reasons
+	)
 
 
 def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
@@ -755,8 +768,15 @@ def _run_one(argv: list[str], cwd: Path, deadline: float) -> dict:
 			"truncated": len(output) > TAIL_BYTES, "elapsed": round(time.monotonic() - start, 2)}
 	tail = output[-TAIL_BYTES:].decode("utf-8", "replace")
 	# `truncated`: the output was longer than the kept tail (issue #10249).
+	# `full_names` / `full_unittest_names`: the failing names of the whole output
+	# when it was cut, so long tracebacks do not push earlier failure headers out
+	# of the tail. Always set (None when not cut): run_units merges a baseline
+	# result over the change's unit, which must not keep the change's lists.
+	full_text = output.decode("utf-8", "replace") if len(output) > TAIL_BYTES else None
 	return {"status": "pass" if proc.returncode == 0 else "fail", "rc": proc.returncode, "tail": tail,
-		"truncated": len(output) > TAIL_BYTES, "elapsed": round(time.monotonic() - start, 2)}
+		"truncated": len(output) > TAIL_BYTES, "elapsed": round(time.monotonic() - start, 2),
+		"full_names": _output_failing_set(full_text) if full_text is not None else None,
+		"full_unittest_names": _unittest_qualified_names(full_text) if full_text is not None else None}
 
 
 def run_units(units: list[dict], cwd: Path, deadline: float, shards: int) -> list[dict]:
@@ -824,14 +844,44 @@ def error_node_names(tail: str) -> list[str]:
 	return unique[:50]
 
 
-def _unit_failing_set(unit: dict) -> list[str]:
-	"""Failing and erroring test names of one unit result, in output order."""
-	tail = str(unit.get("tail") or "")
-	names = failing_names(tail)
-	for name in error_node_names(tail):
+def _output_failing_set(text: str) -> list[str]:
+	"""Failing and erroring test names of one run's output, in output order."""
+	names = failing_names(text)
+	for name in error_node_names(text):
 		if name not in names:
 			names.append(name)
 	return names
+
+
+def _unit_failing_set(unit: dict) -> list[str]:
+	"""Failing and erroring test names of one unit result, in output order.
+
+	Uses the names _run_one parsed from the whole output when the tail was cut.
+	"""
+	full = unit.get("full_names")
+	if isinstance(full, list):
+		return [name for name in full if isinstance(name, str)]
+	return _output_failing_set(str(unit.get("tail") or ""))
+
+
+def _unittest_qualified_names(text: str) -> list[str]:
+	"""`method (module.Class)` per unittest FAIL/ERROR header, for comparison only."""
+	unique: list[str] = []
+	for line in str(text or "").splitlines():
+		match = _UNITTEST_QUALIFIED_RE.match(_TIMESTAMP_PREFIX_RE.sub("", line))
+		if match:
+			name = _sanitize_name(f"{match.group(1)} ({match.group(2)})")
+			if name and name not in unique:
+				unique.append(name)
+	return unique[:MAX_PARSED_NAMES]
+
+
+def _unit_unittest_names(unit: dict) -> list[str]:
+	"""_unittest_qualified_names() of one unit result (whole output when the tail was cut)."""
+	full = unit.get("full_unittest_names")
+	if isinstance(full, list):
+		return [name for name in full if isinstance(name, str)]
+	return _unittest_qualified_names(str(unit.get("tail") or ""))
 
 
 def _failing_names_readable(unit: dict, names: list[str]) -> bool:
@@ -847,7 +897,8 @@ def _failing_names_readable(unit: dict, names: list[str]) -> bool:
 	is_pytest = any(isinstance(arg, str) and "pytest" in arg for arg in unit.get("argv") or [])
 	if is_pytest and (unit.get("rc") in PYTEST_INCOMPLETE_RCS or any(marker in tail for marker in _PYTEST_COLLECTION_ERROR_MARKERS)):
 		return False
-	if not unit.get("truncated"):
+	if not unit.get("truncated") or isinstance(unit.get("full_names"), list):
+		# Not cut, or the names came from the whole output (_run_one).
 		return True
 	lines = [_TIMESTAMP_PREFIX_RE.sub("", line).strip() for line in tail.splitlines()]
 	for line in reversed(lines):
@@ -1043,6 +1094,13 @@ def classify_baseline(
 				inherited_ids.discard(unit_id)
 				continue
 			new_names = [name for name in pr_names if name not in base_names]
+			# failing_names() keeps only the method of a unittest header, so a
+			# method failing in another class on the change's tree only would
+			# match the baseline's; compare `method (module.Class)` as well.
+			base_qualified = set(_unit_unittest_names(base_unit))
+			for qualified in _unit_unittest_names(unit):
+				if qualified not in base_qualified and qualified not in new_names and qualified.split(" ", 1)[0] not in new_names:
+					new_names.append(qualified)
 			if new_names:
 				unit["new_names"] = new_names
 				unit["baseline_names"] = base_names[:MAX_PARSED_NAMES]

@@ -1972,3 +1972,64 @@ def test_gate_images_install_python_test_deps(dockerfile_source, packages):
 	installs = [line for line in text.splitlines() if "apt-get install" in line]
 	for package in packages:
 		assert any(package in line.split() for line in installs), (dockerfile_source, package)
+
+
+def test_unittest_method_failing_in_another_class_is_caused_by_the_change(tmp_path):
+	# Review of #10249: failing_names() keeps the method only, so ClassB.test_same
+	# must not hide behind the merge-base's ClassA.test_same.
+	base = "import sys\nprint('FAIL: test_same (mod.ClassA)')\nsys.exit(1)\n"
+	head = "import sys\nprint('FAIL: test_same (mod.ClassA)')\nprint('FAIL: test_same (mod.ClassB)')\nsys.exit(1)\n"
+	root = _repo(tmp_path, {"tests/test_a.py": head})
+	baseline = _repo(tmp_path, {"tests/test_a.py": base}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail"
+	assert result["inherited"] == []
+	assert result["failures"][0]["names"] == ["test_same (mod.ClassB)"]
+
+
+def _script_failing_long(*names: str) -> str:
+	# Each failure prints a header and a traceback longer than TAIL_BYTES.
+	lines = "".join(f"print('FAIL: {name} (mod.Case)')\nprint('x' * 5000)\n" for name in names)
+	return "import sys\n" + lines + f"print('FAILED (failures={len(names)})')\nsys.exit(1)\n"
+
+
+def test_names_cut_from_the_tail_are_read_from_the_whole_output(tmp_path):
+	# Review of #10249: long unittest tracebacks pushed earlier headers out of
+	# the 4 KB tail and turned a caused failure into baseline_names_unreadable.
+	root = _repo(tmp_path, {"tests/test_a.py": _script_failing_long("test_old", "test_new")})
+	baseline = _repo(tmp_path, {"tests/test_a.py": _script_failing_long("test_old")}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail"
+	assert result["unverified"] == []
+	assert result["failures"][0]["names"] == ["test_new"]
+	assert result["failures"][0]["baseline_names"] == ["test_old"]
+
+
+def test_indirect_entries_cover_every_test_module_convention():
+	assert gate._is_indirect_entry({"path": "tests/test_stall.py", "reasons": ["helper:test_caps"]})
+	assert gate._is_indirect_entry({"path": "tests/stall_test.py", "reasons": ["helper:caps_test"]})
+	assert gate._is_indirect_entry({"path": "src/__tests__/stall.py", "reasons": ["helper:caps"]})
+	assert not gate._is_indirect_entry({"path": "tests/test_stall.py", "reasons": ["helper:_helpers"]})
+	assert not gate._is_indirect_entry({"path": "tests/stall_test.py", "reasons": ["helper:caps_test", "path_text"]})
+	assert not gate._is_indirect_entry({"path": "tests/test_stall.py", "reasons": []})
+
+
+def test_wrapper_reports_baseline_lines_past_the_cap(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, _log = _wrapper_env(tmp_path)
+	forged = tmp_path / "forged_result.json"
+	forged.write_text(json.dumps({
+		"schema": "prepush_test_gate.v1", "status": "pass", "ran": ["tests/test_a.py"], "failures": [],
+		"inherited": [{"test": f"tests/test_{n}.py", "first_failure": "boom"} for n in range(203)],
+		"unverified": [],
+	}), encoding="utf-8")
+	docker = tmp_path / "bin" / "docker"
+	text = docker.read_text(encoding="utf-8")
+	old = "printf '{\"schema\": \"prepush_test_gate.v1\", \"status\": \"pass\", \"ran\": [\"x\"]}\\n'"
+	assert old in text
+	docker.write_text(text.replace(old, f"cat '{forged}'"), encoding="utf-8")
+	proc, _out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	lines = proc.stderr.splitlines()
+	assert sum(1 for line in lines if line.startswith("PREPUSH_TEST_GATE phase=baseline outcome=inherited ")) == 200
+	assert "PREPUSH_TEST_GATE phase=baseline outcome=truncated omitted=3" in lines

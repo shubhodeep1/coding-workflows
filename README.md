@@ -5090,7 +5090,8 @@ that already had lint errors does not fail.
 
 A test file that fails on both trees is compared test by test (issue #10249):
 it is inherited only when every test that fails or errors on the change also
-fails on the merge-base. Tests that fail on the change only are reported as
+fails on the merge-base (a unittest test is compared with its class, and the
+names are read from the whole output, not only its last 4 KB). Tests that fail on the change only are reported as
 caused by the change, and only their names go to the repair turn. When the
 failing names cannot be read on either tree (no names in the output, 50 or
 more names, a pytest exit code 2 to 5 or a collection error, or output cut off
@@ -5101,7 +5102,8 @@ keep the whole-file comparison. Each inherited file carries the first failure
 line of its merge-base run: the summary shows it as `(merge-base: ...)` and
 `scripts/prepush_test_gate_run.sh` logs one
 `PREPUSH_TEST_GATE phase=baseline outcome=inherited|unreadable test= first_failure=`
-line per file (at most 50). The implement and review gate images install
+line per file (at most 200, then one `outcome=truncated omitted=N` line). The
+implement and review gate images install
 `python3-yaml` and `python3-jsonschema`, which CI installs too: without them
 the contract tests that import them failed to collect on both trees and were
 reported as inherited.

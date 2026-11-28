@@ -474,21 +474,24 @@ fi
 # names-unreadable) unit from the validated result. Every value is untrusted
 # test output: control characters are dropped, whitespace becomes `_`, values
 # are cut to 200 characters and every line starts with the prefix, so no line
-# can start with `::`. At most 50 lines; any error prints nothing (fail-open).
+# can start with `::`. At most 200 lines, then one `outcome=truncated omitted=N`
+# line for the rest; any error prints nothing (fail-open).
 python3 -I -c '
 import json, re, sys
 def clean(value):
-	text = re.sub(r"[\x00-\x1f\x7f]", "", str(value))
+	text = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", str(value))
 	return re.sub(r"\s+", "_", text.strip())[:200]
 try:
 	data = json.load(open(sys.argv[1], encoding="utf-8"))
 	rows = [("inherited", e) for e in (data.get("inherited") or []) if isinstance(e, dict)]
 	rows += [("unreadable", e) for e in (data.get("unverified") or []) if isinstance(e, dict) and e.get("reason") == "baseline_names_unreadable"]
 	lines = []
-	for outcome, entry in rows[:50]:
+	for outcome, entry in rows[:200]:
 		test = entry.get("test") if outcome == "inherited" else entry.get("item")
 		first = entry.get("first_failure")
 		lines.append("PREPUSH_TEST_GATE phase=baseline outcome=%s test=%s first_failure=%s" % (outcome, clean(test), clean(first if isinstance(first, str) else "")))
+	if len(rows) > 200:
+		lines.append("PREPUSH_TEST_GATE phase=baseline outcome=truncated omitted=%d" % (len(rows) - 200))
 	sys.stdout.write("".join(line + "\n" for line in lines))
 except Exception:
 	pass
