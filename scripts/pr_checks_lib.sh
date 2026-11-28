@@ -950,6 +950,169 @@ _pr_sync_merge_blocked_guard()
 }
 
 # ---------------------------------------------------------------------------
+# _pr_merge_open_guard <pr_number> <bound_head_sha> <phase> [<pr_json>]
+#
+# Issue #10260 (re-issued from #10049). A review run merged
+# tele-funtoken-msg-scoring PR #5800 22 minutes after a maintainer closed it
+# without merging: the gate passed while the PR was open, the merge job
+# started after the close, and GitHub accepts a merge of a closed, unmerged
+# PR whose branch still exists (`--match-head-commit` binds only the head).
+# Every review merge path calls this guard when it starts (before the merge
+# lease or a branch update) and once more right before the merge call.
+#
+# Input:  $1 PR number; $2 the head SHA the job is bound to (40-hex);
+#         $3 phase (start|pre_merge|lease; used only in warnings);
+#         $4 optional PR REST JSON (a value starting with `{`, used as it
+#         is, no call); otherwise 1 GET pulls/<n>.
+# Output: PR_MERGE_OPEN_GUARD_REASON (empty on proceed),
+#         PR_MERGE_OPEN_GUARD_CLOSED_AT (ISO-8601 or empty),
+#         PR_MERGE_OPEN_GUARD_BASE_REF (.base.ref or empty).
+# Return: 0 proceed, 1 refuse (merge nothing).
+# Decision, in order:
+#   invalid input / failed read / non-object JSON / state not open|closed
+#                            -> pr_state_unavailable (fails closed)
+#   closed and merged_at set -> pr_merged
+#   closed                   -> pr_closed
+#   draft                    -> pr_draft
+#   head.sha != bound        -> head_moved
+# Log (one stdout line per job on a refusal; PR_MERGE_OPEN_GUARD_LOGGED):
+#   AUTOFIX_MERGE_SKIPPED pr=<n> head_sha=<sha> reason=pr_closed closed_at=<iso>
+#   AUTOFIX_MERGE_SKIPPED pr=<n> head_sha=<sha> reason=<reason>
+# pr_state_unavailable also emits a ::warning:: naming the phase.
+# Switch: PR_MERGE_OPEN_GUARD_ENABLED (default true). Only false / 0 / no /
+# off (any case) disables it; then it returns 0 with no log and no call.
+# API calls (§14): 0 for JSON input, 1 GET otherwise. Never called inside a
+# wait loop.
+# ---------------------------------------------------------------------------
+_pr_merge_open_guard()
+{
+	local open_guard_pr="${1:-}" open_guard_bound="${2:-}" open_guard_phase="${3:-unknown}" open_guard_input="${4:-}"
+	local open_guard_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local open_guard_json="" open_guard_fields="" open_guard_state="" open_guard_draft="" open_guard_head=""
+	local open_guard_closed_at="" open_guard_merged_at="" open_guard_reason=""
+	PR_MERGE_OPEN_GUARD_REASON=""
+	PR_MERGE_OPEN_GUARD_CLOSED_AT=""
+	PR_MERGE_OPEN_GUARD_BASE_REF=""
+
+	case "$(printf '%s' "${PR_MERGE_OPEN_GUARD_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		false|0|no|off) return 0 ;;
+	esac
+
+	if ! [[ "${open_guard_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${open_guard_bound}" =~ ^[0-9a-f]{40}$ ]]; then
+		open_guard_reason="pr_state_unavailable"
+	elif [ "${open_guard_input:0:1}" = "{" ]; then
+		open_guard_json="${open_guard_input}"
+	elif [ -n "${open_guard_repo}" ]; then
+		open_guard_json="$(gh_retry _safe_gh_jq "repos/${open_guard_repo}/pulls/${open_guard_pr}" 2>/dev/null)" || open_guard_json=""
+	fi
+
+	if [ -z "${open_guard_reason}" ]; then
+		if [ -z "${open_guard_json}" ] || ! open_guard_fields="$(printf '%s' "${open_guard_json}" | jq -r '
+			if type != "object" then error("not an object") else . end
+			| [ (if (.state | type) == "string" then .state else "" end),
+				(if .draft == true then "true" else "false" end),
+				(if (.head | type) == "object" and (.head.sha | type) == "string" then .head.sha else "" end),
+				(if (.closed_at | type) == "string" then .closed_at else "" end),
+				(if (.merged_at | type) == "string" then .merged_at else "" end),
+				(if (.base | type) == "object" and (.base.ref | type) == "string" then .base.ref else "" end) ]
+			| map(gsub("[\u001f\n\r]"; "")) | join("\u001f")' 2>/dev/null)"; then
+			open_guard_reason="pr_state_unavailable"
+		else
+			# Unit separator (not whitespace), so empty fields keep their place.
+			IFS=$'\x1f' read -r open_guard_state open_guard_draft open_guard_head open_guard_closed_at open_guard_merged_at PR_MERGE_OPEN_GUARD_BASE_REF <<< "${open_guard_fields}"
+			[[ "${open_guard_closed_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || open_guard_closed_at=""
+			[[ "${PR_MERGE_OPEN_GUARD_BASE_REF}" =~ ^[A-Za-z0-9._/-]+$ ]] || PR_MERGE_OPEN_GUARD_BASE_REF=""
+			PR_MERGE_OPEN_GUARD_CLOSED_AT="${open_guard_closed_at}"
+			case "${open_guard_state}" in
+				closed)
+					if [ -n "${open_guard_merged_at}" ]; then
+						open_guard_reason="pr_merged"
+					else
+						open_guard_reason="pr_closed"
+					fi
+					;;
+				open)
+					if [ "${open_guard_draft}" = "true" ]; then
+						open_guard_reason="pr_draft"
+					elif [ "${open_guard_head}" != "${open_guard_bound}" ]; then
+						open_guard_reason="head_moved"
+					fi
+					;;
+				*)
+					open_guard_reason="pr_state_unavailable"
+					;;
+			esac
+		fi
+	fi
+
+	[ -n "${open_guard_reason}" ] || return 0
+	PR_MERGE_OPEN_GUARD_REASON="${open_guard_reason}"
+	if [ "${open_guard_reason}" = "pr_state_unavailable" ]; then
+		echo "::warning::Could not read the live state of PR #${open_guard_pr:-unknown} (phase ${open_guard_phase}); failing closed: nothing is merged. The next review run retries."
+	fi
+	if [ "${PR_MERGE_OPEN_GUARD_LOGGED:-}" != "true" ]; then
+		PR_MERGE_OPEN_GUARD_LOGGED="true"
+		if [ "${open_guard_reason}" = "pr_closed" ]; then
+			echo "AUTOFIX_MERGE_SKIPPED pr=${open_guard_pr:-unknown} head_sha=${open_guard_bound:-unknown} reason=pr_closed closed_at=${open_guard_closed_at:--}"
+		else
+			echo "AUTOFIX_MERGE_SKIPPED pr=${open_guard_pr:-unknown} head_sha=${open_guard_bound:-unknown} reason=${open_guard_reason}"
+		fi
+	fi
+	return 1
+}
+
+# _pr_merge_open_guard_release_lease <pr_number> <base_ref>
+#
+# Issue #10260: a review merge job that refused a closed PR
+# (_pr_merge_open_guard reason pr_closed) gives back the merge lease when
+# that PR holds it, so younger PRs are not kept waiting for the TTL. A single
+# holder gets a `released` record; with several holders only its row is
+# removed (`released` when none are left). A lost compare-and-swap (rc 3) is
+# re-read and retried once. Logs `MERGE_LEASE ... mode=release
+# outcome=released reason=pr_closed` only when it released something. Fails
+# open: a read or write failure only warns (the merge-train tick frees a
+# closed holder as `holder_closed`). API: 1-2 reads plus at most 2 writes.
+_pr_merge_open_guard_release_lease()
+{
+	local open_rel_pr="${1:-}" open_rel_base="${2:-}" open_rel_attempt open_rel_rc open_rel_rows
+	[[ "${open_rel_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
+	declare -F _merge_lease_enabled >/dev/null 2>&1 || return 0
+	_merge_lease_enabled || return 0
+	_merge_lease_valid_base "${open_rel_base}" || return 0
+	for open_rel_attempt in 1 2; do
+		open_rel_rc=0
+		_merge_lease_read "${open_rel_base}" || open_rel_rc=$?
+		if [ "${open_rel_rc}" -eq 2 ]; then
+			return 0
+		elif [ "${open_rel_rc}" -ne 0 ]; then
+			echo "::warning::Could not read the merge lease on ${open_rel_base} to release it for closed PR #${open_rel_pr}; the merge-train tick frees it."
+			return 0
+		fi
+		[ "${MERGE_LEASE_STATE:-}" = "held" ] || return 0
+		open_rel_rc=0
+		# Every holder row of the record (live or expired); a single-holder
+		# record is its one row, so this covers both record shapes.
+		open_rel_rows="${MERGE_LEASE_HOLDER_ALL_ROWS:-}"
+		if [ -z "$(_merge_lease_holder_row "${open_rel_pr}" "${open_rel_rows}")" ]; then
+			return 0
+		fi
+		open_rel_rows="$(_merge_lease_rows_without "${open_rel_pr}" "${open_rel_rows}")"
+		if [ -z "${open_rel_rows}" ]; then
+			_merge_lease_write "${open_rel_base}" released "${open_rel_pr}" "${MERGE_LEASE_HEAD:-}" "" || open_rel_rc=$?
+		else
+			_merge_lease_write_holders "${open_rel_base}" "${open_rel_rows}" || open_rel_rc=$?
+		fi
+		if [ "${open_rel_rc}" -eq 0 ]; then
+			_merge_lease_log "${open_rel_pr}" "${open_rel_base}" release released pr_closed
+			return 0
+		fi
+		[ "${open_rel_rc}" -eq 3 ] || break
+	done
+	echo "::warning::Could not release the merge lease on ${open_rel_base} for closed PR #${open_rel_pr}; the merge-train tick frees it."
+	return 0
+}
+
+# ---------------------------------------------------------------------------
 # Required-checks wait before enabling auto-merge (2026-10-09).
 #
 # `gh pr merge --auto` merges as soon as the base branch's required status

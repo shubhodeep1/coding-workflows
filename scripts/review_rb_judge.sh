@@ -3189,6 +3189,40 @@ rb_judge_sync_merge_guard() {
   return 0
 }
 
+# Issue #10260: the PR must still be open, not a draft and at the judged head
+# right before the head-gate success status and the merge call (a maintainer
+# may close it while the judge waits on checks). Wraps _pr_merge_open_guard
+# (scripts/pr_checks_lib.sh; 1 GET). A closed PR gives back the merge lease
+# it holds. Returns 1 with PR_MERGE_OPEN_GUARD_REASON set on a refusal;
+# fails closed (pr_state_unavailable) when the library did not load.
+# Optional: $1 phase (default pre_merge); $2 the PR JSON the judge already
+# read (no call; used for the start check before the first freshness/lease
+# call and for the not-open exits).
+rb_judge_merge_open_guard() {
+  if ! declare -F _pr_merge_open_guard >/dev/null 2>&1; then
+    PR_MERGE_OPEN_GUARD_REASON="pr_state_unavailable"
+    echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER:-unknown} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} reason=pr_state_unavailable"
+    echo "::warning::scripts/pr_checks_lib.sh is not loaded; the merge of PR #${PR_NUMBER:-unknown} is refused (its live state cannot be verified)."
+    return 1
+  fi
+  if PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_open_guard "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${1:-pre_merge}" "${2:-}"; then
+    return 0
+  fi
+  if [ "${PR_MERGE_OPEN_GUARD_REASON:-}" = "pr_closed" ] && declare -F _pr_merge_open_guard_release_lease >/dev/null 2>&1; then
+    PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_open_guard_release_lease "${PR_NUMBER}" "${PR_BASE_REF:-${PR_MERGE_OPEN_GUARD_BASE_REF:-}}" || true
+  fi
+  return 1
+}
+
+# RB_MERGE_STATUS for a refusal of rb_judge_merge_open_guard: a PR that is no
+# longer open is `not_open`; anything else waits for the next judge firing.
+rb_judge_merge_open_guard_status() {
+  case "${PR_MERGE_OPEN_GUARD_REASON:-}" in
+    pr_closed|pr_merged) echo "not_open" ;;
+    *) echo "mergeability_pending" ;;
+  esac
+}
+
 # Called only after the site's own `gh pr merge` attempts all failed
 # (`<attempts> || rb_judge_merge_retry_transient <auto|direct> <path>`).
 # Non-transient failures return 1 at once with no extra API call, so the
@@ -3500,7 +3534,11 @@ case "${RB_ACTION}" in
         # instead; other failures still fall through at once.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
-        if ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
+        if ! rb_judge_merge_open_guard start "${_pr_json:-}"; then
+          # Issue #10260: start check on the judge's own PR read (no call):
+          # a draft or moved head asks for no lease and gets no branch update.
+          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
+        elif ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
@@ -3518,6 +3556,13 @@ case "${RB_ACTION}" in
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
           # #10063: a red required check goes to the final-CI repair or a hand-over.
           rb_judge_route_red_checks merge || true
+        elif ! rb_judge_merge_open_guard; then
+          # Issue #10260: closed, draft or moved since the judge read it; no
+          # success status, no merge and no ai:ready-to-merge. One live read
+          # right after the checks wait and before the post-wait freshness
+          # re-check, so a PR closed during the wait asks for no lease and
+          # gets no branch update.
+          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
@@ -3588,6 +3633,14 @@ case "${RB_ACTION}" in
       RB_MERGE_STATUS="mergeability_pending"
     else
       echo "PR #${PR_NUMBER} state=${PR_STATE:-unknown} mergeable=${PR_MERGEABLE:-null}, cannot merge (PR not open)."
+      if [ -z "${PR_STATE}" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+        # Issue #10260: the PR read failed (rate limit, 5xx); nothing merges.
+        echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} reason=pr_state_unavailable"
+      elif [ "${PR_STATE}" = "closed" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+        # Issue #10260: closed before the judge's read; the guard on that read
+        # (no call) logs pr_closed/pr_merged and gives back a held lease.
+        rb_judge_merge_open_guard start "${_pr_json:-}" || true
+      fi
       RB_MERGE_STATUS="not_open"
     fi
 
@@ -3628,7 +3681,11 @@ case "${RB_ACTION}" in
         # Best-effort merge — see note above re: gh_retry.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
-        if ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
+        if ! rb_judge_merge_open_guard start "${_rb_terminal_pr_json:-}"; then
+          # Issue #10260: start check on the judge's own PR read (no call):
+          # a draft or moved head asks for no lease and gets no branch update.
+          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
+        elif ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
@@ -3646,6 +3703,13 @@ case "${RB_ACTION}" in
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
           # #10063: a red required check goes to the final-CI repair or a hand-over.
           rb_judge_route_red_checks terminal || true
+        elif ! rb_judge_merge_open_guard; then
+          # Issue #10260: closed, draft or moved since the judge read it; no
+          # success status, no merge and no ai:ready-to-merge. One live read
+          # right after the checks wait and before the post-wait freshness
+          # re-check, so a PR closed during the wait asks for no lease and
+          # gets no branch update.
+          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
@@ -3706,6 +3770,14 @@ case "${RB_ACTION}" in
         RB_MERGE_READY_LABEL_ALLOWED="true"
         RB_MERGE_STATUS="manual_merge_required"
       else
+        if [ -z "${PR_STATE}" ]; then
+          # Issue #10260: the PR read failed (rate limit, 5xx); nothing merges.
+          echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} reason=pr_state_unavailable"
+        elif [ "${PR_STATE}" = "closed" ]; then
+          # Issue #10260: closed before the judge's read; the guard on that read
+          # (no call) logs pr_closed/pr_merged and gives back a held lease.
+          rb_judge_merge_open_guard start "${_rb_terminal_pr_json:-}" || true
+        fi
         RB_MERGE_STATUS="not_open"
       fi
 
@@ -4159,6 +4231,16 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # rejected the PR. Don't create the follow-up against a base
         # that doesn't contain the PR's changes.
         echo "::warning::PR #${PR_NUMBER} is closed without merge (merged=false). Skipping follow-up creation; the deferred gap will not be tracked because the source PR's changes never landed."
+        if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+          # Issue #10260: the contractual skip line (and a held lease given
+          # back) on the judge's own read, no call. This arm checks the SHA
+          # only on its open path, so an unresolved one logs without it.
+          if [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            rb_judge_merge_open_guard start "${_pr_json:-}" || true
+          else
+            echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=unknown reason=pr_closed closed_at=$(printf '%s' "${_pr_json:-}" | jq -r '.closed_at // "-"' 2>/dev/null | grep -xE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z' || echo -)"
+          fi
+        fi
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
         # Check-runs gate: delegate to the shared `_pr_checks_completed`
         # helper in scripts/pr_checks_lib.sh — the SAME gate the
@@ -4232,6 +4314,17 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
                 echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
               fi
             fi
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_merge_open_guard start "${_pr_json:-}"; then
+            # Issue #10260: start check on the judge's own PR read (no call),
+            # before the freshness/lease call below: a draft or moved head
+            # asks for no lease and gets no branch update. Same mapping as
+            # the pre-merge guard further down.
+            if [ "$(rb_judge_merge_open_guard_status)" = "not_open" ]; then
+              echo "judge_skip_reason=pr_not_open" >> "$GITHUB_OUTPUT"
+              [ -z "${GITHUB_ENV:-}" ] || echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+            else
+              echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
+            fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
             && ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
             # Merge-base freshness gate (Q35: A): the base moved under files
@@ -4250,6 +4343,21 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}) — merge_with_followup deferred, no branch update requested. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
               rb_judge_emit_lease_blocker
+            fi
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_merge_open_guard; then
+            # Issue #10260: closed, draft or moved since the judge read it; no
+            # success status, no merge and so no follow-up issue. Mapped onto
+            # existing skip reasons so the alert and hand-over consumers in
+            # review_autofix.yml need no new case: a PR no longer open is
+            # `pr_not_open` (PR_CLOSED=true, as the early skip above); the
+            # rest retry through stall recovery (`mergeability_pending`).
+            if [ "$(rb_judge_merge_open_guard_status)" = "not_open" ]; then
+              echo "judge_skip_reason=pr_not_open" >> "$GITHUB_OUTPUT"
+              if [ -n "${GITHUB_ENV:-}" ]; then
+                echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+              fi
+            else
+              echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_followup_merge_guard sync "${_pr_json:-}"; then
             # Security follow-up guard (#9671): no success status, no merge and
@@ -4314,6 +4422,10 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is. Leaving linked issues in ai:review-blocked so the follow-up is not opened against unmerged code."
         echo "judge_skip_reason=merge_conflict" >> "$GITHUB_OUTPUT"
       else
+        if [ -z "${PR_STATE}" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+          # Issue #10260: the PR read failed (rate limit, 5xx); nothing merges.
+          echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} reason=pr_state_unavailable"
+        fi
         echo "::warning::PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null} merged=${PR_MERGED:-false}, cannot confirm merge (mergeability still computing or PR not open). Leaving linked issues in ai:review-blocked."
         echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
       fi

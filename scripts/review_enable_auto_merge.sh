@@ -67,6 +67,38 @@ if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
 	}
 fi
 
+if ! type _pr_merge_open_guard >/dev/null 2>&1; then
+	# Issue #10260: fail closed. Without the library the PR's live state
+	# (open, not a draft, still at the reviewed head) cannot be verified.
+	_pr_merge_open_guard()
+	{
+		PR_MERGE_OPEN_GUARD_REASON="pr_state_unavailable"
+		PR_MERGE_OPEN_GUARD_CLOSED_AT=""
+		PR_MERGE_OPEN_GUARD_BASE_REF=""
+		echo "AUTOFIX_MERGE_SKIPPED pr=${1:-unknown} head_sha=${2:-unknown} reason=pr_state_unavailable"
+		echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (its live state cannot be verified)."
+		return 1
+	}
+fi
+type _pr_merge_open_guard_release_lease >/dev/null 2>&1 || _pr_merge_open_guard_release_lease() { return 0; }
+
+# Issue #10260: refuse the merge of a PR that is no longer open (a
+# maintainer closed it while this run waited), a draft, or a moved head.
+# $1 phase (start|pre_merge); $2 optional PR JSON already read (no call).
+# A closed PR gives back the merge lease it holds. Exits 0 on a refusal: no
+# merge, no merge-authorization labels.
+review_enable_auto_merge_open_guard()
+{
+	if _pr_merge_open_guard "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "$1" "${2:-}"; then
+		return 0
+	fi
+	if [ "${PR_MERGE_OPEN_GUARD_REASON:-}" = "pr_closed" ]; then
+		_pr_merge_open_guard_release_lease "${PR_NUMBER}" "${_orch_pr_base_ref:-${PR_MERGE_OPEN_GUARD_BASE_REF:-}}" || true
+	fi
+	echo "Auto-merge not enabled for PR #${PR_NUMBER}: ${PR_MERGE_OPEN_GUARD_REASON:-pr_state_unavailable} (phase $1). Nothing is merged."
+	exit 0
+}
+
 # Final CI at the end of review (cut-ci-runner-time Phase 4): once this step
 # has posted ai-review/head-gate success for the reviewed head, make sure that
 # head gets its one full CI run, also for PRs that are never auto-merged.
@@ -291,6 +323,8 @@ if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${P
 	_orch_pr_meta_err="$(cat "${_orch_pr_meta_err_file}" 2>/dev/null || true)"
 	rm -f "${_orch_pr_meta_err_file}"
 	echo "::warning::Could not fetch PR metadata for #${PR_NUMBER} (gh_retry exhausted): ${_orch_pr_meta_err:-gh_retry error details unavailable}. Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped via auto-merge on a transient API blip. Next sync event will re-run review_autofix and retry."
+	# Issue #10260: the contractual skip line for an unreadable PR state.
+	echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} reason=pr_state_unavailable"
 	exit 0
 else
 	rm -f "${_orch_pr_meta_err_file}"
@@ -327,6 +361,11 @@ if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_
 	echo "::warning::PR #${PR_NUMBER} no longer points at reviewed head ${INITIAL_HEAD_SHA}. Failing closed: refusing auto-merge enablement and merge-authorization labels for current head ${_orch_pr_head_sha:-unknown}."
 	exit 0
 fi
+
+# Issue #10260: start check on the PR read above (no extra call), before the
+# merge lease is asked for or the branch is updated.
+_orch_pr_base_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+review_enable_auto_merge_open_guard start "${_ORCH_PR_META_JSON}"
 
 # Superseded security follow-up guard (#9479): a PR whose base is a standalone
 # PR's head branch must not merge once that branch's current head passed its
@@ -406,6 +445,12 @@ if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRAN
 	exit 0
 fi
 
+# Issue #10260: the PR may have been closed while the checks wait ran. One
+# live read, before the post-wait freshness re-check (which can ask for the
+# lease or update the branch) and both merge calls below.
+review_enable_auto_merge_open_guard pre_merge
+_auto_merge_open_guard_head="${INITIAL_HEAD_SHA}"
+
 # The wait above can take minutes; the base may have moved under this PR's
 # files meanwhile (`--match-head-commit` binds only the head), so re-check
 # freshness once more when the wait actually polled.
@@ -421,6 +466,15 @@ if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified after the checks wait (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
 	fi
 	exit 0
+fi
+
+# Issue #10260: the post-wait freshness re-check above can take the inline
+# merge path, which updates the branch and waits on the update head's checks
+# (up to AUTO_MERGE_CHECKS_WAIT_MINUTES). When it did (INITIAL_HEAD_SHA moved
+# to the update head), read the PR once more, bound to the new head, so a PR
+# closed during that wait is not merged. One extra GET on that path only.
+if [ "${INITIAL_HEAD_SHA}" != "${_auto_merge_open_guard_head}" ]; then
+	review_enable_auto_merge_open_guard pre_merge
 fi
 
 # The base branch's head may have received a clean security audit after the

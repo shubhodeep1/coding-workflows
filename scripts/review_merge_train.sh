@@ -3325,6 +3325,28 @@ _mt_final_ci_merge_resume()
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=waiting reason=no_named_ci_success ci_check=${PR_CHECKS_LAST_CI_NAME:-none}"
 			continue
 		fi
+		# Issue #10260: one live PR read before the lease/update request and
+		# the merge call; a PR closed since it was marked never merges. A
+		# missing guard (stale library) fails closed.
+		if ! declare -F _pr_merge_open_guard >/dev/null 2>&1; then
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=waiting reason=pr_state_unavailable"
+			continue
+		fi
+		if ! PR_MERGE_OPEN_GUARD_LOGGED="" PR_CHECKS_REPOSITORY="${MT_REPO}" _pr_merge_open_guard "${resume_num}" "${resume_sha}" pre_merge; then
+			case "${PR_MERGE_OPEN_GUARD_REASON:-pr_state_unavailable}" in
+				pr_closed|pr_merged)
+					_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
+					if [ "${PR_MERGE_OPEN_GUARD_REASON}" = "pr_closed" ] && declare -F _pr_merge_open_guard_release_lease >/dev/null 2>&1; then
+						PR_CHECKS_REPOSITORY="${MT_REPO}" _pr_merge_open_guard_release_lease "${resume_num}" "${resume_base}" || true
+					fi
+					_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=${PR_MERGE_OPEN_GUARD_REASON}"
+					;;
+				*)
+					_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=waiting reason=${PR_MERGE_OPEN_GUARD_REASON:-pr_state_unavailable}"
+					;;
+			esac
+			continue
+		fi
 		if ! PR_CHECKS_REPOSITORY="${MT_REPO}" REVIEW_FINAL_CI_WORKFLOW="" _pr_base_fresh_for_merge "${resume_num}" "${resume_sha}" "${resume_base}"; then
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=deferred reason=${PR_BASE_FRESHNESS_OUTCOME:-unknown}"
 			continue
