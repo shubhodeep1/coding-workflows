@@ -157,9 +157,31 @@ _DEF_LINE_RE = re.compile(r"^[+-](?![+-])\s*(?:async\s+)?def\s+([A-Za-z_]\w*)|^[
 _FAILED_RE = re.compile(r"\bFAILED\s+(\S+::\S+)")
 _FAIL_RUNNER_RE = re.compile(r"^\s*FAIL\s{2,}([A-Za-z_]\w*)")
 _UNITTEST_RE = re.compile(r"^(?:FAIL|ERROR):\s+([A-Za-z_]\w*)\s+\(")
+# The same unittest header with its `(module.Class)` qualifier, used only by the
+# baseline name comparison (issue #10249): failing_names() keeps the method
+# alone, so two classes failing a method of the same name would compare equal.
+_UNITTEST_QUALIFIED_RE = re.compile(r"^(?:FAIL|ERROR):\s+([A-Za-z_]\w*)\s+\(([^()\s]+)\)")
 # pytest summary line for a setup/teardown error: `ERROR path::node - ...`.
 _ERROR_NODE_RE = re.compile(r"^ERROR\s+(\S+::\S+)")
 _EVENT_PREFIX = "TEST_CASE_EVENT:"
+# `from <module> import` / `import <module>` at line start, the same shapes the
+# rule-3 helper import check matches (issue #10249: test modules as helpers).
+_TEST_MODULE_IMPORT_RE = re.compile(r"^\s*(?:from\s+([A-Za-z_]\w*)\s+import\b|import\s+([A-Za-z_]\w*)\b)", re.MULTILINE)
+# Name-level baseline comparison (issue #10249). The parsers keep at most 50
+# names, so 50 means "maybe more" and the names are not trusted as complete.
+MAX_PARSED_NAMES = 50
+# pytest exit codes that mean results are missing: 2 interrupted (for example
+# a collection error), 3 internal error, 4 usage error, 5 nothing collected.
+PYTEST_INCOMPLETE_RCS = (2, 3, 4, 5)
+_PYTEST_COLLECTION_ERROR_MARKERS = ("ERROR collecting", "errors during collection", "error during collection")
+_PYTEST_TOTALS_RE = re.compile(r"\bin \d+(?:\.\d+)?s\b")
+_PYTEST_FAILED_COUNT_RE = re.compile(r"\b(\d+) failed\b")
+_PYTEST_ERROR_COUNT_RE = re.compile(r"\b(\d+) errors?\b")
+_UNITTEST_TOTALS_RE = re.compile(r"^FAILED \(([^)]*)\)")
+_FIRST_FAILURE_E_RE = re.compile(r"^E\s+(.+)")
+_FIRST_FAILURE_SUMMARY_RE = re.compile(r"^(?:FAILED|ERROR)\s+\S+ - (.+)")
+_FIRST_FAILURE_EXCEPTION_RE = re.compile(r"^\s*(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*(?:Error|Exception):")
+_TIMESTAMP_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\S+\s+")
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
@@ -421,11 +443,33 @@ def select_tests(
 					add(test_file, reason)
 					break
 	test_dirs = {PurePosixPath(t).parent.as_posix() for t in test_files}
+	# A test module imported by another test module acts as a helper too
+	# (issue #10249: tests/test_orchestrate_stall_active_runs_cache.py reads
+	# scripts/orchestrate_poll_process.sh only through
+	# `import test_orchestrator_concurrency_caps`). It counts as matched only
+	# when it was selected directly above, which keeps this at one level.
+	direct = set(selected)
+	importers: dict[tuple[str, str], list[str]] | None = None
 	for helper in files:
 		hp = PurePosixPath(helper)
-		if hp.suffix != ".py" or is_test_file(helper) or hp.name in ("__init__.py", "conftest.py"):
+		if hp.suffix != ".py" or hp.name in ("__init__.py", "conftest.py"):
 			continue
 		if hp.parent.as_posix() not in test_dirs:
+			continue
+		if is_test_file(helper):
+			if helper not in direct:
+				continue
+			if importers is None:
+				# One pass over the test files, built only when a test module is a helper.
+				importers = {}
+				for test_file in test_files:
+					parent = PurePosixPath(test_file).parent.as_posix()
+					for match in _TEST_MODULE_IMPORT_RE.finditer(text_of(test_file)):
+						module_name = match.group(1) or match.group(2)
+						importers.setdefault((parent, module_name), []).append(test_file)
+			for test_file in importers.get((hp.parent.as_posix(), hp.stem), []):
+				if test_file != helper:
+					add(test_file, f"helper:{hp.stem}")
 			continue
 		matched = helper in changes
 		if not matched:
@@ -585,6 +629,21 @@ def _node_runner(repo: Path) -> str | None:
 	return "npm"
 
 
+def _is_indirect_entry(entry: dict) -> bool:
+	"""True when every reason is `helper:<test module>` (a test file found through a test module it imports).
+
+	The helper sits in the importer's directory (select_tests rule 3), so
+	is_test_file() on that path covers `test_*.py`, `*_test.py` and `__tests__/`.
+	"""
+	reasons = entry.get("reasons") or []
+	parent = PurePosixPath(str(entry.get("path") or "")).parent.as_posix()
+	return bool(reasons) and all(
+		isinstance(reason, str) and reason.startswith("helper:") and len(reason) > len("helper:")
+		and is_test_file(f"{parent}/{reason[len('helper:'):]}.py")
+		for reason in reasons
+	)
+
+
 def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 	"""Turn a selection into runnable units; unresolvable items become unverified."""
 	units: list[dict] = []
@@ -605,7 +664,8 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 				# `{files}` gets paths only: the listed `::name` filters do not apply.
 				unverified.append({"item": entry["path"], "reason": "tests_file_names_ignored"})
 		affected = []
-	for entry in affected:
+
+	def plan_entry(entry: dict) -> None:
 		path = entry["path"]
 		names = entry.get("functions") or []
 		if path.endswith(".py"):
@@ -651,6 +711,14 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 				units.append({"id": "make test", "file": None, "argv": ["make", "test"], "kind": "test"})
 		else:
 			unverified.append({"item": path, "reason": "no_test_command"})
+
+	# Entries selected only because they import a selected test module
+	# (`helper:test_*`, issue #10249) are planned last: run_units starts units
+	# in list order, so these are the ones a spent budget leaves unverified.
+	indirect = [entry for entry in affected if _is_indirect_entry(entry)]
+	for entry in affected:
+		if not _is_indirect_entry(entry):
+			plan_entry(entry)
 	for check in selection.get("registry_checks", []):
 		units.append({"id": check["check"], "file": None, "argv": list(check["argv"]), "kind": "registry"})
 	for check in selection.get("static_checks", []):
@@ -658,6 +726,8 @@ def plan_units(repo: Path, selection: dict) -> tuple[list[dict], list[dict]]:
 			unverified.append({"item": check["tool"], "reason": "tool_unavailable"})
 			continue
 		units.append({"id": check["tool"], "file": None, "argv": list(check["argv"]), "kind": "static", "files": list(check.get("files") or [])})
+	for entry in indirect:
+		plan_entry(entry)
 	return units, unverified
 
 
@@ -677,7 +747,7 @@ def _child_env() -> dict[str, str]:
 def _run_one(argv: list[str], cwd: Path, deadline: float) -> dict:
 	remaining = deadline - time.monotonic()
 	if remaining <= 0:
-		return {"status": "timeout", "rc": None, "tail": ""}
+		return {"status": "timeout", "rc": None, "tail": "", "full_names": None, "full_unittest_names": None, "full_first_failure": None}
 	start = time.monotonic()
 	try:
 		proc = subprocess.Popen(
@@ -685,7 +755,8 @@ def _run_one(argv: list[str], cwd: Path, deadline: float) -> dict:
 			stdin=subprocess.DEVNULL, start_new_session=True,
 		)
 	except OSError:
-		return {"status": "error", "rc": None, "tail": "", "reason": "command_unavailable"}
+		return {"status": "error", "rc": None, "tail": "", "reason": "command_unavailable",
+			"full_names": None, "full_unittest_names": None, "full_first_failure": None}
 	try:
 		output, _ = proc.communicate(timeout=remaining)
 	except subprocess.TimeoutExpired:
@@ -694,9 +765,23 @@ def _run_one(argv: list[str], cwd: Path, deadline: float) -> dict:
 		except OSError:
 			pass
 		output, _ = proc.communicate()
-		return {"status": "timeout", "rc": None, "tail": output[-TAIL_BYTES:].decode("utf-8", "replace"), "elapsed": round(time.monotonic() - start, 2)}
+		return {"status": "timeout", "rc": None, "tail": output[-TAIL_BYTES:].decode("utf-8", "replace"),
+			"truncated": len(output) > TAIL_BYTES, "elapsed": round(time.monotonic() - start, 2),
+			"full_names": None, "full_unittest_names": None, "full_first_failure": None}
 	tail = output[-TAIL_BYTES:].decode("utf-8", "replace")
-	return {"status": "pass" if proc.returncode == 0 else "fail", "rc": proc.returncode, "tail": tail, "elapsed": round(time.monotonic() - start, 2)}
+	# `truncated`: the output was longer than the kept tail (issue #10249).
+	# `full_names` / `full_unittest_names`: the failing names of the whole output
+	# when it was cut, so long tracebacks do not push earlier failure headers out
+	# of the tail. Always set (None when not cut): run_units merges a baseline
+	# result over the change's unit, which must not keep the change's lists.
+	# `full_first_failure`: baseline_first_failure() of the whole output, so the
+	# merge-base diagnostic is the first failure line, not one left in the tail.
+	full_text = output.decode("utf-8", "replace") if len(output) > TAIL_BYTES else None
+	return {"status": "pass" if proc.returncode == 0 else "fail", "rc": proc.returncode, "tail": tail,
+		"truncated": len(output) > TAIL_BYTES, "elapsed": round(time.monotonic() - start, 2),
+		"full_names": _output_failing_set(full_text) if full_text is not None else None,
+		"full_unittest_names": _unittest_qualified_names(full_text) if full_text is not None else None,
+		"full_first_failure": baseline_first_failure(full_text) if full_text is not None else None}
 
 
 def run_units(units: list[dict], cwd: Path, deadline: float, shards: int) -> list[dict]:
@@ -762,6 +847,101 @@ def error_node_names(tail: str) -> list[str]:
 			if name and name not in unique:
 				unique.append(name)
 	return unique[:50]
+
+
+def _output_failing_set(text: str) -> list[str]:
+	"""Failing and erroring test names of one run's output, in output order."""
+	names = failing_names(text)
+	for name in error_node_names(text):
+		if name not in names:
+			names.append(name)
+	return names
+
+
+def _unit_failing_set(unit: dict) -> list[str]:
+	"""Failing and erroring test names of one unit result, in output order.
+
+	Uses the names _run_one parsed from the whole output when the tail was cut.
+	"""
+	full = unit.get("full_names")
+	if isinstance(full, list):
+		return [name for name in full if isinstance(name, str)]
+	return _output_failing_set(str(unit.get("tail") or ""))
+
+
+def _unittest_qualified_names(text: str) -> list[str]:
+	"""`method (module.Class)` per unittest FAIL/ERROR header, for comparison only."""
+	unique: list[str] = []
+	for line in str(text or "").splitlines():
+		match = _UNITTEST_QUALIFIED_RE.match(_TIMESTAMP_PREFIX_RE.sub("", line))
+		if match:
+			name = _sanitize_name(f"{match.group(1)} ({match.group(2)})")
+			if name and name not in unique:
+				unique.append(name)
+	return unique[:MAX_PARSED_NAMES]
+
+
+def _unit_unittest_names(unit: dict) -> list[str]:
+	"""_unittest_qualified_names() of one unit result (whole output when the tail was cut)."""
+	full = unit.get("full_unittest_names")
+	if isinstance(full, list):
+		return [name for name in full if isinstance(name, str)]
+	return _unittest_qualified_names(str(unit.get("tail") or ""))
+
+
+def _failing_names_readable(unit: dict, names: list[str]) -> bool:
+	"""True when `names` can be trusted as the complete list of failing tests.
+
+	Not readable: no names; MAX_PARSED_NAMES or more (the parsers stop there);
+	a pytest unit that exited 2-5 or hit a collection error; output cut at
+	TAIL_BYTES whose totals line does not account for every name.
+	"""
+	if not names or len(names) >= MAX_PARSED_NAMES:
+		return False
+	# The class-qualified unittest list stops at MAX_PARSED_NAMES as well; at the
+	# cap a class past the 50th header would never be compared.
+	if len(_unit_unittest_names(unit)) >= MAX_PARSED_NAMES:
+		return False
+	tail = str(unit.get("tail") or "")
+	is_pytest = any(isinstance(arg, str) and "pytest" in arg for arg in unit.get("argv") or [])
+	if is_pytest and (unit.get("rc") in PYTEST_INCOMPLETE_RCS or any(marker in tail for marker in _PYTEST_COLLECTION_ERROR_MARKERS)):
+		return False
+	if not unit.get("truncated") or isinstance(unit.get("full_names"), list):
+		# Not cut, or the names came from the whole output (_run_one).
+		return True
+	lines = [_TIMESTAMP_PREFIX_RE.sub("", line).strip() for line in tail.splitlines()]
+	for line in reversed(lines):
+		match = _UNITTEST_TOTALS_RE.match(line)
+		if match:
+			counts = dict(re.findall(r"(\w+)=(\d+)", match.group(1)))
+			return int(counts.get("failures", 0)) + int(counts.get("errors", 0)) == len(names)
+		if _PYTEST_TOTALS_RE.search(line) and ("failed" in line or "error" in line):
+			failed = _PYTEST_FAILED_COUNT_RE.search(line)
+			errors = _PYTEST_ERROR_COUNT_RE.search(line)
+			return (int(failed.group(1)) if failed else 0) + (int(errors.group(1)) if errors else 0) == len(names)
+	return False
+
+
+def baseline_first_failure(tail: str) -> str:
+	"""The first failing assertion or error line of a run's output, sanitised.
+
+	Order: a pytest `E   ...` line, the reason of a `FAILED|ERROR node - ...`
+	summary line, an `...Error:` / `...Exception:` line, an AssertionError
+	line, else the last non-empty line. "" for empty output.
+	"""
+	lines = [_TIMESTAMP_PREFIX_RE.sub("", line) for line in str(tail or "").splitlines()]
+	for regex in (_FIRST_FAILURE_E_RE, _FIRST_FAILURE_SUMMARY_RE):
+		for line in lines:
+			match = regex.match(line)
+			if match and match.group(1).strip():
+				return _sanitize_name(match.group(1))
+	for line in lines:
+		if _FIRST_FAILURE_EXCEPTION_RE.match(line) or line.startswith("AssertionError"):
+			return _sanitize_name(line)
+	for line in reversed(lines):
+		if line.strip():
+			return _sanitize_name(line)
+	return ""
 
 
 def _static_findings(tool: str, files: list[str], cwd: Path, deadline: float) -> list[tuple[str, str, str]] | None:
@@ -854,6 +1034,16 @@ def classify_baseline(
 	whose re-run timed out or could not start stays in pr_caused here;
 	run_gate reports it as unverified, because nothing showed the change
 	caused it.
+
+	A test unit that fails on both trees is inherited only when every test
+	name failing (or erroring) on the change's tree also fails on the baseline
+	(issue #10249). Names failing on the change's tree only keep the unit in
+	pr_caused with `new_names` and `baseline_names`. When either side's names
+	cannot be read (_failing_names_readable) the unit gets `baseline_status`
+	"names_unreadable" and stays out of inherited. Registry units keep the
+	whole-unit comparison, and a single named `--tests-only` node missing on
+	both trees (exit 4/5 on both) stays inherited. Units that fail on both
+	trees carry `baseline_first_failure`, the baseline's first failure line.
 	"""
 	if baseline is None or not baseline.is_dir():
 		return failed, []
@@ -891,6 +1081,40 @@ def classify_baseline(
 				unit.get("tests_file_nodes") and unit.get("rc") in (4, 5) and pr_rcs.get(unit["id"]) not in (4, 5)
 			) and unit["id"] not in ambiguous_ids
 		}
+		# Compare failing test names, not whole files (issue #10249): a file red
+		# on the merge-base no longer hides new failures the change adds to it.
+		reran_by_id = {unit["id"]: unit for unit in reran}
+		for unit in rerun:
+			unit_id = unit["id"]
+			if unit_id not in inherited_ids:
+				continue
+			base_unit = reran_by_id.get(unit_id) or {}
+			full_first = base_unit.get("full_first_failure")
+			unit["baseline_first_failure"] = full_first if isinstance(full_first, str) else baseline_first_failure(str(base_unit.get("tail") or ""))
+			if unit.get("kind") != "test":
+				continue
+			if unit.get("tests_file_nodes") and pr_rcs.get(unit_id) in (4, 5) and baseline_rcs.get(unit_id) in (4, 5):
+				# The same named node is missing on both trees: nothing ran on
+				# either side, so the two trees agree (kept from before #10249).
+				continue
+			pr_names = _unit_failing_set(unit)
+			base_names = _unit_failing_set(base_unit)
+			if not _failing_names_readable(unit, pr_names) or not _failing_names_readable(base_unit, base_names):
+				unit["baseline_status"] = "names_unreadable"
+				inherited_ids.discard(unit_id)
+				continue
+			new_names = [name for name in pr_names if name not in base_names]
+			# failing_names() keeps only the method of a unittest header, so a
+			# method failing in another class on the change's tree only would
+			# match the baseline's; compare `method (module.Class)` as well.
+			base_qualified = set(_unit_unittest_names(base_unit))
+			for qualified in _unit_unittest_names(unit):
+				if qualified not in base_qualified and qualified not in new_names and qualified.split(" ", 1)[0] not in new_names:
+					new_names.append(qualified)
+			if new_names:
+				unit["new_names"] = new_names
+				unit["baseline_names"] = base_names[:MAX_PARSED_NAMES]
+				inherited_ids.discard(unit_id)
 	if repo is not None:
 		for unit in failed:
 			if unit.get("kind") != "static":
@@ -1127,12 +1351,18 @@ def run_gate(
 	# A failure whose baseline re-run did not finish is unverified, not caused
 	# by the change: a slow test that fails on both trees would otherwise
 	# trigger a repair turn and a second full gate run (release v1.40.3).
-	baseline_unfinished = [r for r in pr_caused if r.get("baseline_status") in ("timeout", "error")]
+	# A unit whose failing names could not be compared (issue #10249) is
+	# unverified too, never inherited and never blamed on the change.
+	baseline_unfinished = [r for r in pr_caused if r.get("baseline_status") in ("timeout", "error", "names_unreadable")]
 	if baseline_unfinished:
 		pr_caused = [r for r in pr_caused if r not in baseline_unfinished]
 		for r in baseline_unfinished:
 			# Keep the PR-side failing test names (not the tail) for diagnosis.
-			unverified.append({"item": r["id"], "reason": f"baseline_{r['baseline_status']}", "names": failing_names(r.get("tail", ""))})
+			entry = {"item": r["id"], "reason": f"baseline_{r['baseline_status']}", "names": failing_names(r.get("tail", ""))}
+			if r.get("baseline_status") == "names_unreadable":
+				entry["names"] = _unit_failing_set(r)[:MAX_PARSED_NAMES]
+				entry["first_failure"] = r.get("baseline_first_failure", "")
+			unverified.append(entry)
 	changed_assertions = assertion_diff(repo, baseline, selection.get("changed_files", [])) if baseline is not None and baseline.is_dir() else []
 	acceptance: dict[str, dict] = {}
 	if acceptance_requested:
@@ -1156,9 +1386,13 @@ def run_gate(
 		"schema": RESULT_SCHEMA,
 		"status": status,
 		"ran": [r["id"] for r in ran],
-		"failures": [{"test": r["id"], "file": r.get("file"), "names": failing_names(r.get("tail", "")), "tail": r.get("tail", "")} for r in pr_caused],
+		# `names` of a unit red on both trees holds only the names this change
+		# made red (issue #10249); `tail` stays the change's output for repair.
+		"failures": [{"test": r["id"], "file": r.get("file"), "names": r.get("new_names") or failing_names(r.get("tail", "")), "tail": r.get("tail", ""),
+			**({"baseline_names": r["baseline_names"]} if "baseline_names" in r else {})} for r in pr_caused],
 		"inherited": [{"test": r["id"], "file": r.get("file"), "names": failing_names(r.get("tail", "")),
-			"error_names": error_node_names(r.get("tail", ""))} for r in inherited],
+			"error_names": error_node_names(r.get("tail", "")),
+			**({"first_failure": r["baseline_first_failure"]} if "baseline_first_failure" in r else {})} for r in inherited],
 		"unverified": unverified,
 		"changed_assertions": changed_assertions,
 		"selected": selected_count,
@@ -1190,12 +1424,16 @@ def write_summary(result: dict) -> str:
 			lines += ["", f"### {title}", ""]
 			for entry in entries:
 				names = ", ".join(f"`{_sanitize_name(n)}`" for n in entry.get("names", [])[:10])
-				lines.append(f"- `{_sanitize_name(str(entry.get('test')))}`" + (f": {names}" if names else ""))
+				first = entry.get("first_failure") if key == "inherited" else None
+				merge_base = f" (merge-base: `{_sanitize_name(first)}`)" if isinstance(first, str) and first.strip() else ""
+				lines.append(f"- `{_sanitize_name(str(entry.get('test')))}`" + (f": {names}" if names else "") + merge_base)
 	if result.get("unverified"):
 		lines += ["", "### Unverified", ""]
 		for u in result["unverified"]:
 			names = ", ".join(f"`{_sanitize_name(n)}`" for n in [n for n in (u.get("names") or []) if isinstance(n, str)][:10])
-			lines.append(f"- `{_sanitize_name(str(u.get('item')))}`: {_sanitize_name(str(u.get('reason')))}" + (f" (failed on this change: {names})" if names else ""))
+			first = u.get("first_failure")
+			merge_base = f" (merge-base: `{_sanitize_name(first)}`)" if isinstance(first, str) and first.strip() else ""
+			lines.append(f"- `{_sanitize_name(str(u.get('item')))}`: {_sanitize_name(str(u.get('reason')))}" + (f" (failed on this change: {names})" if names else "") + merge_base)
 	if result.get("changed_assertions"):
 		lines += ["", "### Changed pre-existing assertions", ""]
 		lines += [f"- `{_sanitize_name(str(a.get('file')))}` ({a.get('kind')}): `{_sanitize_name(str(a.get('line')))}`" for a in result["changed_assertions"]]

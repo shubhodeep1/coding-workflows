@@ -157,8 +157,12 @@ def main(argv):
 			"ran": [str(r) for r in (result.get("ran") or []) if isinstance(r, (str, int))] if isinstance(result.get("ran"), list) else [],
 			"selected": result.get("selected") if isinstance(result.get("selected"), int) else 0,
 			"failures": [{"test": str(e.get("test")), "names": [n for n in (e.get("names") or []) if isinstance(n, str)][:10]} for e in entries(result, "failures")],
-			"inherited": [{"test": str(e.get("test")), "names": [n for n in (e.get("names") or []) if isinstance(n, str)][:10]} for e in entries(result, "inherited")],
-			"unverified": [{"item": str(e.get("item")), "reason": str(e.get("reason")), "names": [n for n in (e.get("names") or []) if isinstance(n, str)][:10]} for e in entries(result, "unverified")],
+			# first_failure: the first failure line of the merge-base run (issue #10249),
+			# passed through only as a string, cut to 200 characters.
+			"inherited": [{"test": str(e.get("test")), "names": [n for n in (e.get("names") or []) if isinstance(n, str)][:10],
+				**({"first_failure": e["first_failure"][:200]} if isinstance(e.get("first_failure"), str) else {})} for e in entries(result, "inherited")],
+			"unverified": [{"item": str(e.get("item")), "reason": str(e.get("reason")), "names": [n for n in (e.get("names") or []) if isinstance(n, str)][:10],
+				**({"first_failure": e["first_failure"][:200]} if isinstance(e.get("first_failure"), str) else {})} for e in entries(result, "unverified")],
 			"changed_assertions": [
 				{"file": str(e.get("file")), "kind": e.get("kind") if e.get("kind") in ("removed_or_modified", "skip_added") else "changed"}
 				for e in entries(result, "changed_assertions")

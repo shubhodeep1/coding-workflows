@@ -5121,6 +5121,11 @@ The gate selects:
 - tests named after a changed file (for example `scripts/foo.sh` → `tests/test_foo.py`);
 - test files that mention a changed file's path, name or stem, including
   through a shared test helper module;
+- test files that import a test module selected above (one level: for example
+  a test that reads `scripts/orchestrate_poll_process.sh` only through
+  `import test_orchestrator_concurrency_caps`). They run after every other
+  test and check, so they are the ones left unverified when the budget runs
+  out;
 - the registry guards that exist in the repository;
 - `ruff` and ShellCheck on the changed files.
 
@@ -5128,7 +5133,29 @@ It runs them with a 15-minute budget and re-runs any failure on the
 merge-base: failures that also happen there are reported as inherited, not
 caused by the change. For `ruff` and ShellCheck it compares findings instead:
 only findings the merge-base copy of the file did not have count, so a file
-that already had lint errors does not fail. The result is written as a stamp for `HEAD` under
+that already had lint errors does not fail.
+
+A test file that fails on both trees is compared test by test (issue #10249):
+it is inherited only when every test that fails or errors on the change also
+fails on the merge-base (a unittest test is compared with its class, and the
+names are read from the whole output, not only its last 4 KB). Tests that fail on the change only are reported as
+caused by the change, and only their names go to the repair turn. When the
+failing names cannot be read on either tree (no names in the output, 50 or
+more names, a pytest exit code 2 to 5 or a collection error, or output cut off
+without a totals line that accounts for every name), the file is reported as
+unverified with reason `baseline_names_unreadable`, never as inherited. A
+single named `--tests-only` node missing on both trees, and registry checks,
+keep the whole-file comparison. Each inherited file carries the first failure
+line of its merge-base run: the summary shows it as `(merge-base: ...)` and
+`scripts/prepush_test_gate_run.sh` logs one
+`PREPUSH_TEST_GATE phase=baseline outcome=inherited|unreadable test= first_failure=`
+line per file (at most 200, then one `outcome=truncated omitted=N` line). The
+implement and review gate images install
+`python3-yaml` and `python3-jsonschema`, which CI installs too: without them
+the contract tests that import them failed to collect on both trees and were
+reported as inherited.
+
+The result is written as a stamp for `HEAD` under
 `${TMPDIR:-/tmp}/claude-prepush-gate/`, outside the repository. Fix failures
 the change caused and stamp again; do not weaken an assertion unless the task
 names that behaviour change.

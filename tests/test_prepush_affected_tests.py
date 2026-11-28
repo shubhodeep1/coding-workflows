@@ -1772,3 +1772,289 @@ def test_red_on_base_target_failing_on_head_is_not_rerun_on_base(tmp_path, monke
 	assert reran == ["tests/red_case.py"]
 	assert result["acceptance"]["tests/broken_case.py"] == {"head": "fail", "base": "not_run"}
 	assert result["acceptance"]["tests/red_case.py"] == {"head": "pass", "base": "fail"}
+
+
+# ---------------------------------------------------------------------------
+# Issue #10249: name-level baseline comparison, test-module helpers, ordering
+# and the merge-base first-failure diagnostic.
+# ---------------------------------------------------------------------------
+
+def _script_failing(*names: str, extra: str = "") -> str:
+	lines = "".join(f"print('FAIL: {name} (mod.Case)')\n" for name in names)
+	return "import sys\n" + lines + (f"print({extra!r})\n" if extra else "") + "sys.exit(1)\n"
+
+
+def _whole(*paths: str) -> dict:
+	return {"changed_files": [], "affected_tests": [{"path": p, "reasons": []} for p in paths]}
+
+
+def test_new_failing_names_in_a_baseline_red_file_are_caused_by_the_change(tmp_path):
+	# PR #10228: a file red on the merge-base hid the tests the change broke.
+	root = _repo(tmp_path, {"tests/test_a.py": _script_failing("test_old", "test_new")})
+	baseline = _repo(tmp_path, {"tests/test_a.py": _script_failing("test_old")}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail"
+	assert result["inherited"] == []
+	assert [f["test"] for f in result["failures"]] == ["tests/test_a.py"]
+	assert result["failures"][0]["names"] == ["test_new"]
+	assert result["failures"][0]["baseline_names"] == ["test_old"]
+	assert "FAIL: test_new" in result["failures"][0]["tail"]
+
+
+def test_replay_10228_reports_six_new_names_as_caused(tmp_path):
+	cases = {
+		"tests/test_test_and_mark_stable_orchestrate_child_count.py": ["test_unchanged_poll_contract", "test_empty_poll_then_two_children",
+			"test_malformed_poll_then_duplicate_children", "test_old_grep_count_aborts_on_empty_poll"],
+		"tests/test_test_and_mark_stable_plan_polling_guard.py": ["test_implement_terminal_check_preserves_pr_recheck"],
+		"tests/test_review_autofix_sweep_zero_candidate_fast_exit.py": ["test_pat_budget_steps_bracket_every_active_job"],
+	}
+	root = _repo(tmp_path, {path: _script_failing("test_env_broken", *names) for path, names in cases.items()})
+	baseline = _repo(tmp_path, {path: _script_failing("test_env_broken") for path in cases}, name="baseline")
+	result = gate.run_gate(root, _whole(*cases), baseline, timeout_minutes=2, shards=3)
+	assert result["status"] == "fail"
+	assert result["inherited"] == []
+	assert sorted(f["test"] for f in result["failures"]) == sorted(cases)
+	caused = sorted(name for f in result["failures"] for name in f["names"])
+	assert caused == sorted(name for names in cases.values() for name in names)
+	assert len(caused) == 6
+	assert "Failures caused by this change: 3" in gate.write_summary(result)
+
+
+def test_same_failing_names_on_both_trees_stay_inherited(tmp_path):
+	text = _script_failing("test_old", extra="AssertionError: 1 != 2")
+	root = _repo(tmp_path, {"tests/test_a.py": text})
+	baseline = _repo(tmp_path, {"tests/test_a.py": text}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass"
+	assert result["failures"] == []
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_a.py"]
+
+
+def test_inherited_entries_carry_the_merge_base_first_failure(tmp_path):
+	text = _script_failing("test_old", extra="AssertionError: 1 != 2")
+	root = _repo(tmp_path, {"tests/test_a.py": text})
+	baseline = _repo(tmp_path, {"tests/test_a.py": text}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert result["inherited"][0]["first_failure"] == "AssertionError: 1 != 2"
+	assert "- `tests/test_a.py`: `test_old` (merge-base: `AssertionError: 1 != 2`)" in gate.write_summary(result)
+
+
+PYTEST_ARGV = ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_a.py"]
+
+
+def _fake_both_trees(monkeypatch, fields: dict) -> None:
+	def fake_run_units(units, cwd, deadline, shards):
+		return [{**u, "status": "fail", "rc": 1, "truncated": False, **fields} for u in units]
+
+	monkeypatch.setattr(gate, "run_units", fake_run_units)
+
+
+@pytest.mark.parametrize("fields", [
+	pytest.param({"tail": "Traceback: something broke\n"}, id="no_names"),
+	pytest.param({"argv": PYTEST_ARGV, "rc": 2, "tail": "ERROR tests/test_a.py - ModuleNotFoundError\n"
+		"=== short test summary info ===\nFAILED tests/test_a.py::test_x - boom\n"}, id="pytest_rc_2"),
+	pytest.param({"argv": PYTEST_ARGV, "rc": 1, "tail": "ERROR collecting tests/test_a.py\n"
+		"=== short test summary info ===\nFAILED tests/test_a.py::test_x - boom\n"}, id="collection_error"),
+	pytest.param({"argv": PYTEST_ARGV, "truncated": True, "tail": "FAILED tests/test_a.py::test_x - boom\n"}, id="truncated_no_totals"),
+	pytest.param({"argv": PYTEST_ARGV, "truncated": True, "tail": "FAILED tests/test_a.py::test_x - boom\n3 failed in 1.00s\n"}, id="truncated_short_totals"),
+	pytest.param({"argv": PYTEST_ARGV, "tail": "".join(f"FAILED tests/test_a.py::test_{n} - boom\n" for n in range(60))}, id="too_many_names"),
+])
+def test_unreadable_failing_names_are_unverified_not_inherited(tmp_path, monkeypatch, fields):
+	root = _repo(tmp_path, {"tests/test_a.py": ""})
+	baseline = _repo(tmp_path, {"tests/test_a.py": ""}, name="baseline")
+	_fake_both_trees(monkeypatch, fields)
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=1, shards=1)
+	assert result["status"] == "unverified"
+	assert result["inherited"] == [] and result["failures"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_names_unreadable")]
+	assert isinstance(result["unverified"][0]["first_failure"], str)
+
+
+def test_truncated_output_with_matching_pytest_totals_is_still_compared(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_a.py": ""})
+	baseline = _repo(tmp_path, {"tests/test_a.py": ""}, name="baseline")
+	_fake_both_trees(monkeypatch, {"argv": PYTEST_ARGV, "truncated": True,
+		"tail": "E   assert 1 == 2\n=== short test summary info ===\nFAILED tests/test_a.py::test_x - assert 1 == 2\n1 failed, 3 passed in 0.10s\n"})
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=1, shards=1)
+	assert result["status"] == "pass"
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_a.py"]
+	assert result["inherited"][0]["first_failure"] == "assert 1 == 2"
+
+
+def test_registry_unit_failing_on_both_trees_stays_inherited(tmp_path, monkeypatch):
+	# Registry checks print no test names; they keep the whole-unit comparison.
+	root = _repo(tmp_path, {"Makefile": "generate-check:\n\tfalse\n"})
+	baseline = _repo(tmp_path, {"Makefile": "generate-check:\n\tfalse\n"}, name="baseline")
+	_fake_both_trees(monkeypatch, {"tail": "make: *** [generate-check] Error 1\n"})
+	selection = {"changed_files": [], "affected_tests": [], "registry_checks": [{"check": "generate-check", "argv": ["make", "generate-check"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=1, shards=1)
+	assert result["status"] == "pass"
+	assert [i["test"] for i in result["inherited"]] == ["generate-check"]
+
+
+def test_baseline_first_failure_prefers_assertion_lines():
+	assert gate.baseline_first_failure("") == ""
+	assert gate.baseline_first_failure("x\nE   ModuleNotFoundError: No module named 'yaml'\nE   other\n") == "ModuleNotFoundError: No module named 'yaml'"
+	assert gate.baseline_first_failure("FAILED tests/t.py::test_x - KeyError: 'a'\n") == "KeyError: 'a'"
+	assert gate.baseline_first_failure("noise\nsubprocess.CalledProcessError: boom\nlast\n") == "subprocess.CalledProcessError: boom"
+	assert gate.baseline_first_failure("one\n`two` <three>\n\n") == "two three"
+	assert len(gate.baseline_first_failure("E   " + "x" * 500)) == 200
+
+
+def test_rule3_follows_a_test_module_imported_by_another_test(tmp_path):
+	# PR #10152: test_orchestrate_stall_active_runs_cache.py reads the poller
+	# only through `import test_orchestrator_concurrency_caps as caps`.
+	root = _repo(tmp_path, {
+		"scripts/orchestrate_poll_process.sh": "echo hi\n",
+		"tests/test_caps.py": "TEXT = open('scripts/orchestrate_poll_process.sh').read()\n",
+		"tests/test_stall.py": "import test_caps as caps\n",
+		"tests/test_third.py": "from test_stall import caps\n",
+		"tests/test_other.py": "import os\n",
+	})
+	selected = _by_path(_select(root, "M\tscripts/orchestrate_poll_process.sh"))
+	assert "path_text" in selected["tests/test_caps.py"]["reasons"]
+	assert selected["tests/test_stall.py"]["reasons"] == ["helper:test_caps"]
+	assert "tests/test_third.py" not in selected  # one level only
+	assert "tests/test_other.py" not in selected
+
+
+def test_indirect_test_module_units_are_planned_last(tmp_path):
+	root = _repo(tmp_path, {"tests/test_stall.py": "", "tests/test_direct.py": "", "Makefile": "generate-check:\n\ttrue\n"})
+	selection = {
+		"affected_tests": [
+			{"path": "tests/test_stall.py", "reasons": ["helper:test_caps"]},
+			{"path": "tests/test_direct.py", "reasons": ["path_text", "helper:test_caps"]},
+		],
+		"registry_checks": [{"check": "generate-check", "argv": ["make", "generate-check"]}],
+	}
+	units, _unverified = gate.plan_units(root, selection)
+	assert [u["id"] for u in units] == ["tests/test_direct.py", "generate-check", "tests/test_stall.py"]
+
+
+def test_wrapper_logs_baseline_first_failure_per_inherited_file(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, _log = _wrapper_env(tmp_path)
+	forged = tmp_path / "forged_result.json"
+	forged.write_text(json.dumps({
+		"schema": "prepush_test_gate.v1", "status": "pass", "ran": ["tests/test_a.py"], "failures": [],
+		"inherited": [
+			{"test": "tests/test_a.py", "first_failure": "ModuleNotFoundError: No module named 'yaml'"},
+			{"test": "tests/test_b.py", "first_failure": "x\n::error::forged\r\x1b[31m"},
+			{"test": "tests/test_c.py", "first_failure": ["not", "a", "string"]},
+		],
+		"unverified": [{"item": "tests/test_d.py", "reason": "baseline_names_unreadable", "first_failure": "boom here"}],
+	}), encoding="utf-8")
+	docker = tmp_path / "bin" / "docker"
+	text = docker.read_text(encoding="utf-8")
+	old = "printf '{\"schema\": \"prepush_test_gate.v1\", \"status\": \"pass\", \"ran\": [\"x\"]}\\n'"
+	assert old in text
+	docker.write_text(text.replace(old, f"cat '{forged}'"), encoding="utf-8")
+	proc, _out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	lines = proc.stderr.splitlines()
+	assert "PREPUSH_TEST_GATE phase=baseline outcome=inherited test=tests/test_a.py first_failure=ModuleNotFoundError:_No_module_named_'yaml'" in lines
+	assert "PREPUSH_TEST_GATE phase=baseline outcome=inherited test=tests/test_b.py first_failure=x::error::forged[31m" in lines
+	assert "PREPUSH_TEST_GATE phase=baseline outcome=inherited test=tests/test_c.py first_failure=" in lines
+	assert "PREPUSH_TEST_GATE phase=baseline outcome=unreadable test=tests/test_d.py first_failure=boom_here" in lines
+	assert not any(line.startswith("::") or "\x1b" in line for line in lines)
+	assert "PREPUSH_TEST_GATE phase=wrapper outcome=pass" in proc.stderr
+
+
+@pytest.mark.parametrize(("dockerfile_source", "packages"), [
+	("scripts/codex_isolated_exec.sh", ("python3-yaml", "python3-jsonschema")),  # implement gate
+	("scripts/review_sandbox/Dockerfile", ("python3-yaml", "python3-jsonschema")),  # review and conflict-resolver gates
+	("scripts/clarify_sandbox/Dockerfile", ("python3-yaml",)),  # heal gate
+])
+def test_gate_images_install_python_test_deps(dockerfile_source, packages):
+	# Issue #10249: without PyYAML the contract tests failed to collect on both
+	# trees in the gate container and were reported as inherited.
+	text = (REPO_ROOT / dockerfile_source).read_text(encoding="utf-8")
+	installs = [line for line in text.splitlines() if "apt-get install" in line]
+	for package in packages:
+		assert any(package in line.split() for line in installs), (dockerfile_source, package)
+
+
+def test_unittest_method_failing_in_another_class_is_caused_by_the_change(tmp_path):
+	# Review of #10249: failing_names() keeps the method only, so ClassB.test_same
+	# must not hide behind the merge-base's ClassA.test_same.
+	base = "import sys\nprint('FAIL: test_same (mod.ClassA)')\nsys.exit(1)\n"
+	head = "import sys\nprint('FAIL: test_same (mod.ClassA)')\nprint('FAIL: test_same (mod.ClassB)')\nsys.exit(1)\n"
+	root = _repo(tmp_path, {"tests/test_a.py": head})
+	baseline = _repo(tmp_path, {"tests/test_a.py": base}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail"
+	assert result["inherited"] == []
+	assert result["failures"][0]["names"] == ["test_same (mod.ClassB)"]
+
+
+def _script_failing_long(*names: str) -> str:
+	# Each failure prints a header and a traceback longer than TAIL_BYTES.
+	lines = "".join(f"print('FAIL: {name} (mod.Case)')\nprint('x' * 5000)\n" for name in names)
+	return "import sys\n" + lines + f"print('FAILED (failures={len(names)})')\nsys.exit(1)\n"
+
+
+def test_names_cut_from_the_tail_are_read_from_the_whole_output(tmp_path):
+	# Review of #10249: long unittest tracebacks pushed earlier headers out of
+	# the 4 KB tail and turned a caused failure into baseline_names_unreadable.
+	root = _repo(tmp_path, {"tests/test_a.py": _script_failing_long("test_old", "test_new")})
+	baseline = _repo(tmp_path, {"tests/test_a.py": _script_failing_long("test_old")}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail"
+	assert result["unverified"] == []
+	assert result["failures"][0]["names"] == ["test_new"]
+	assert result["failures"][0]["baseline_names"] == ["test_old"]
+
+
+def test_indirect_entries_cover_every_test_module_convention():
+	assert gate._is_indirect_entry({"path": "tests/test_stall.py", "reasons": ["helper:test_caps"]})
+	assert gate._is_indirect_entry({"path": "tests/stall_test.py", "reasons": ["helper:caps_test"]})
+	assert gate._is_indirect_entry({"path": "src/__tests__/stall.py", "reasons": ["helper:caps"]})
+	assert not gate._is_indirect_entry({"path": "tests/test_stall.py", "reasons": ["helper:_helpers"]})
+	assert not gate._is_indirect_entry({"path": "tests/stall_test.py", "reasons": ["helper:caps_test", "path_text"]})
+	assert not gate._is_indirect_entry({"path": "tests/test_stall.py", "reasons": []})
+
+
+def test_wrapper_reports_baseline_lines_past_the_cap(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, _log = _wrapper_env(tmp_path)
+	forged = tmp_path / "forged_result.json"
+	forged.write_text(json.dumps({
+		"schema": "prepush_test_gate.v1", "status": "pass", "ran": ["tests/test_a.py"], "failures": [],
+		"inherited": [{"test": f"tests/test_{n}.py", "first_failure": "boom"} for n in range(203)],
+		"unverified": [],
+	}), encoding="utf-8")
+	docker = tmp_path / "bin" / "docker"
+	text = docker.read_text(encoding="utf-8")
+	old = "printf '{\"schema\": \"prepush_test_gate.v1\", \"status\": \"pass\", \"ran\": [\"x\"]}\\n'"
+	assert old in text
+	docker.write_text(text.replace(old, f"cat '{forged}'"), encoding="utf-8")
+	proc, _out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	lines = proc.stderr.splitlines()
+	assert sum(1 for line in lines if line.startswith("PREPUSH_TEST_GATE phase=baseline outcome=inherited ")) == 200
+	assert "PREPUSH_TEST_GATE phase=baseline outcome=truncated omitted=3" in lines
+
+
+def test_unittest_classes_at_the_qualified_cap_are_unverified(tmp_path):
+	# Review of #10249: 51 classes failing one method give one method name but
+	# cut the class-qualified list at 50, so a new class past the cap was inherited.
+	def script(classes: int) -> str:
+		lines = "".join(f"print('FAIL: test_x (mod.Case{n})')\n" for n in range(classes))
+		return "import sys\n" + lines + "sys.exit(1)\n"
+
+	root = _repo(tmp_path, {"tests/test_a.py": script(51)})
+	baseline = _repo(tmp_path, {"tests/test_a.py": script(50)}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_names_unreadable")]
+
+
+def test_first_failure_is_read_from_the_whole_baseline_output(tmp_path):
+	# Review of #10249: the first failure line scrolled out of the 4 KB tail.
+	text = ("import sys\nprint('FAIL: test_old (mod.Case)')\nprint('KeyError: first')\n"
+		"print('x' * 5000)\nprint('FAILED (failures=1)')\nsys.exit(1)\n")
+	root = _repo(tmp_path, {"tests/test_a.py": text})
+	baseline = _repo(tmp_path, {"tests/test_a.py": text}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_a.py"]
+	assert result["inherited"][0]["first_failure"] == "KeyError: first"

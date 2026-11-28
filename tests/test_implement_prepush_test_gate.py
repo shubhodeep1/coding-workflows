@@ -757,3 +757,18 @@ def _collect_inline_prompt_files_touched_scope_cases() -> None:
 
 
 _collect_inline_prompt_files_touched_scope_cases()
+
+
+def test_summary_shows_baseline_first_failure_for_inherited_files(tmp_path):
+	# Issue #10249: the PR body says why each inherited file fails on the
+	# merge-base; a first_failure that is not a string is dropped.
+	result = _result("pass", inherited=[
+		{"test": "tests/test_a.py", "file": "tests/test_a.py", "names": ["test_x"], "first_failure": "ModuleNotFoundError: No module named 'yaml'"},
+		{"test": "tests/test_b.py", "file": "tests/test_b.py", "names": ["test_y"], "first_failure": ["not", "a", "string"]},
+	])
+	repo, env = _setup(tmp_path, [result])
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	text = _summary(tmp_path).read_text(encoding="utf-8")
+	assert "- `tests/test_a.py`: `test_x` (merge-base: `ModuleNotFoundError: No module named 'yaml'`)" in text
+	assert "- `tests/test_b.py`: `test_y`\n" in text

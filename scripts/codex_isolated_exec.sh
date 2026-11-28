@@ -239,7 +239,11 @@ FROM node:22.16.0-bookworm-slim
 ARG CODEX_VERSION=v0.171.0
 # jq: the pre-push gate runs the repo's shell-script tests in this image, and
 # most scripts call jq (without it they fail on every tree).
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv git ca-certificates build-essential ripgrep gawk shellcheck jq \
+# python3-yaml, python3-jsonschema: the gate runs the contract tests here;
+# many test files import yaml (a few jsonschema) at module level, CI installs
+# both (.github/workflows/ci.yml), and without them those files failed to
+# collect on both trees and were reported as inherited (issue #10249).
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv python3-yaml python3-jsonschema git ca-certificates build-essential ripgrep gawk shellcheck jq \
     && rm -rf /var/lib/apt/lists/*
 # ruff for the pre-push affected-test gate's static checks (issue #8190).
 RUN python3 -m pip install --no-cache-dir --break-system-packages ruff==0.17.2
