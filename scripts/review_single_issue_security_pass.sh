@@ -149,9 +149,11 @@
 # `false`, the dispatch is not an exhausted-head retry and the latest trusted
 # completed (clean/findings) marker is for an older head, the gate adds
 # `-f audit_diff_since=<that head>` and, for findings,
-# `-f prior_findings=<that comment id>`. A rejected delta dispatch (a consumer
-# wrapper without the inputs) is retried once with today's arguments
-# (`outcome=delta_fallback reason=dispatch_rejected`). The first cycle, the
+# `-f prior_findings=<that comment id>`. Any failed delta dispatch (for
+# example a consumer wrapper without the inputs, or a transient failure that
+# used up the shared retry budget) is retried once with today's arguments
+# (`outcome=delta_fallback reason=dispatch_rejected dispatch_error=<class>`,
+# where the class names the cause; #10104). The first cycle, the
 # exhausted-head retry and the switch off keep today's exact arguments, so the
 # final exhausted-head audit stays a full merge-base..head audit.
 #
@@ -176,7 +178,10 @@
 # concurrency throttle before a dispatch), then one dispatch
 # and up to SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
 # valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
-# write. A rejected delta dispatch adds one dispatch (the legacy retry). A head
+# write. A failed delta dispatch adds one dispatch (the legacy retry). A
+# transient dispatch failure (#10104) repeats the same call at most
+# SECURITY_PASS_DISPATCH_RETRIES more times per run (default 2, range 0-5),
+# one budget shared by the delta dispatch and its fallback. A head
 # with no clean marker may add the base-sync carry's one commits/<head> and one
 # compare read (issue #9533; only when a trusted merge-base-sync marker names
 # the head).
@@ -312,6 +317,131 @@ single_pass_post_pending_marker()
 		single_pass_log "mode=gate pr=${PR_NUMBER} outcome=marker_retry attempt=${attempt}"
 	done
 	return 1
+}
+
+# Audit dispatch retry settings (#10104). One budget per gate run, shared by
+# the delta dispatch and its plain fallback, so the added wait stays at most
+# retries x delay (40s by default). Invalid or out-of-range values (retries
+# 0-5, delay 0-60s) use the defaults; the raw value is never echoed.
+single_pass_dispatch_settings()
+{
+	local retries="${SECURITY_PASS_DISPATCH_RETRIES:-2}" delay="${SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS:-20}"
+	if [[ "${retries}" =~ ^[0-9]{1,2}$ ]] && [ "$((10#${retries}))" -le 5 ]; then
+		retries=$((10#${retries}))
+	else
+		echo "::warning::SECURITY_PASS_DISPATCH_RETRIES is not a whole number from 0 to 5; using the default 2."
+		retries=2
+	fi
+	if [[ "${delay}" =~ ^[0-9]{1,3}$ ]] && [ "$((10#${delay}))" -le 60 ]; then
+		delay=$((10#${delay}))
+	else
+		echo "::warning::SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS is not a whole number from 0 to 60; using the default 20."
+		delay=20
+	fi
+	SINGLE_PASS_DISPATCH_RETRIES_LEFT="${retries}"
+	SINGLE_PASS_DISPATCH_RETRY_DELAY="${delay}"
+	SINGLE_PASS_DISPATCH_ATTEMPTS=0
+	SINGLE_PASS_DISPATCH_ERROR=""
+}
+
+# Classifies `gh workflow run` error output: rate_limited, server_error,
+# network, rejected, auth or other. Status extraction and rate-limit patterns
+# follow _gh_api_classify (gh_helpers.sh), which activate-only mode does not load.
+single_pass_dispatch_error_class()
+{
+	local text="${1:-}" lower status
+	lower="${text,,}"
+	if [[ "${text}" =~ HTTP\ ([0-9]{3}) ]]; then
+		status="${BASH_REMATCH[1]}"
+		if [ "${status}" = "429" ] || { [ "${status}" = "403" ] && [[ "${lower}" =~ rate\ limit|secondary\ rate|abuse\ detection ]]; }; then
+			echo rate_limited
+		elif [[ "${status}" =~ ^5 ]]; then
+			echo server_error
+		elif [ "${status}" = "401" ] || [ "${status}" = "403" ]; then
+			echo auth
+		elif [ "${status}" = "404" ] || [ "${status}" = "422" ]; then
+			echo rejected
+		else
+			echo other
+		fi
+	elif [[ "${lower}" == *"could not find any workflows"* ]]; then
+		# gh's unknown-workflow error carries no HTTP status; retrying cannot help.
+		echo rejected
+	elif [ -z "${text//[[:space:]]/}" ]; then
+		# No output is no evidence of a transient fault: no retry, as before.
+		echo other
+	else
+		echo network
+	fi
+}
+
+# Prints the dispatch error for the log: the job's token values and token-
+# shaped strings are redacted and control characters removed BEFORE the text
+# is cut to 200 characters, so a token split at the cut is never shown.
+single_pass_dispatch_error_excerpt()
+{
+	local text="${1:-}" token
+	for token in "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}"; do
+		if [ -n "${token}" ]; then
+			text="${text//"${token}"/[redacted]}"
+		fi
+	done
+	text="$(printf '%s' "${text}" \
+		| tr '\n\r\t' '   ' \
+		| LC_ALL=C tr -cd '[:print:]' \
+		| sed -E 's#([[:alpha:]][[:alnum:]+.-]*://)[^/@[:space:]]+@#\1[redacted]@#g; s#([Aa]uthorization:[[:space:]]*)(([Bb]earer|[Bb]asic|[Tt]oken)[[:space:]]+)?[^[:space:]]+#\1[redacted]#g; s#([Bb]earer[[:space:]]+)[^[:space:]]+#\1[redacted]#g; s#(github_pat_|gh[pousr]_)[[:alnum:]_]+#\1[redacted]#g; s#(sk-or-)[[:alnum:]_-]+#\1[redacted]#g; s#eyJ[[:alnum:]_-]{10,}(\.[[:alnum:]_-]*){0,2}#[redacted]#g' \
+		| tr -s ' ' \
+		| sed -E 's/^ //; s/ $//')"
+	text="${text:0:200}"
+	printf '%s' "${text:-(empty)}"
+}
+
+# Runs one audit dispatch (`gh <args>`), keeping its error output in memory
+# only. rate_limited, server_error and network failures are retried while the
+# run's budget lasts; each retry repeats the same single call. Accepted
+# residual (#10104 Risks): a `network` failure may hide a dispatch GitHub
+# already accepted, so a retry can start a second audit of the same head; the
+# per-PR concurrency group in security-audit.yml keeps at most one pending run.
+single_pass_dispatch_audit()
+{
+	local err dispatch_class
+	while :; do
+		SINGLE_PASS_DISPATCH_ATTEMPTS=$((${SINGLE_PASS_DISPATCH_ATTEMPTS:-0} + 1))
+		# 2>&1 first captures stderr into err; >/dev/null then drops stdout. Do not reorder.
+		# gh-loop-ok: one dispatch, repeated only for a transient class within the bounded retry budget (0-5).
+		if err="$(gh "$@" 2>&1 >/dev/null)"; then
+			SINGLE_PASS_DISPATCH_ERROR=""
+			return 0
+		fi
+		dispatch_class="$(single_pass_dispatch_error_class "${err}")"
+		SINGLE_PASS_DISPATCH_ERROR="${dispatch_class}"
+		echo "::warning::security-audit dispatch attempt ${SINGLE_PASS_DISPATCH_ATTEMPTS} failed (dispatch_error=${dispatch_class}): $(single_pass_dispatch_error_excerpt "${err}")"
+		case "${dispatch_class}" in
+			rate_limited|server_error|network) ;;
+			*) return 1 ;;
+		esac
+		if [ "${SINGLE_PASS_DISPATCH_RETRIES_LEFT:-0}" -le 0 ]; then
+			return 1
+		fi
+		SINGLE_PASS_DISPATCH_RETRIES_LEFT=$((SINGLE_PASS_DISPATCH_RETRIES_LEFT - 1))
+		if [ "${SINGLE_PASS_DISPATCH_RETRY_DELAY:-0}" -gt 0 ]; then
+			sleep "${SINGLE_PASS_DISPATCH_RETRY_DELAY}"
+		fi
+		single_pass_log "mode=gate pr=${PR_NUMBER:-} head=${SINGLE_PASS_DISPATCH_HEAD:-} outcome=dispatch_retry attempt=${SINGLE_PASS_DISPATCH_ATTEMPTS} dispatch_error=${dispatch_class}"
+	done
+}
+
+# Short reader-facing phrase for a dispatch error class (comment text only).
+single_pass_dispatch_error_phrase()
+{
+	case "${1:-}" in
+		rate_limited) echo "a GitHub API rate limit" ;;
+		server_error) echo "a GitHub server error" ;;
+		network) echo "a network error" ;;
+		rejected) echo "GitHub rejected the workflow, ref or inputs" ;;
+		auth) echo "an authentication or permission error" ;;
+		*) echo "an unrecognised error" ;;
+	esac
 }
 
 # Issue #10176: echo only the signing shim's own AI_COMMENT_SIG lines from a
@@ -1282,7 +1412,7 @@ single_pass_gate()
 	# Issue #10176: comments-view bookkeeping (see single_pass_fresh_comments).
 	local gate_view_source="snapshot" snapshot_detail="" gate_reread_on="true" gate_guard_on="true"
 	local fresh_detail="" fresh_view="" fresh_markers="" guard_markers="" renumbered_cycle reentry_rc
-	local delta_source="" delta_since="" delta_comment_id="" delta_status="" delta_note="" dispatch_ok="false"
+	local delta_source="" delta_since="" delta_comment_id="" delta_status="" delta_note="" dispatch_ok="false" dispatch_error_class="" dispatch_error_sentence="" dispatch_wrapper_hint=""
 	local -a dispatch_args=() delta_dispatch_args=()
 	# Set by single_pass_base_sync_carry for a verified resolution head.
 	single_pass_remerge_since=""
@@ -1739,6 +1869,8 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			next_cycle="${renumbered_cycle}"
 		fi
 	fi
+	single_pass_dispatch_settings
+	SINGLE_PASS_DISPATCH_HEAD="${head_sha}"
 	dispatch_args=(workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}")
 	# Delta re-audit (stuck-states P5a): never for the exhausted-head retry, so
 	# the final audit of an exhausted head stays a full merge-base..head audit.
@@ -1777,7 +1909,7 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 		fi
 	fi
 	if [ -n "${delta_since}" ]; then
-		if gh "${delta_dispatch_args[@]}" >/dev/null 2>&1; then
+		if single_pass_dispatch_audit "${delta_dispatch_args[@]}"; then
 			dispatch_ok="true"
 			delta_note="This is a delta re-audit of the changes since \`${delta_since}\`, the last audited head"
 			if [ "${delta_status}" = "findings" ]; then
@@ -1786,45 +1918,55 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 				delta_note+="."
 			fi
 		else
-			# A consumer wrapper that predates the delta inputs rejects them;
-			# retry once with today's arguments instead of burning a cycle.
-			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=delta_fallback reason=dispatch_rejected cycle=${next_cycle} workflow=${workflow}"
-			if gh "${dispatch_args[@]}" >/dev/null 2>&1; then
+			# Any failed delta dispatch (for example a consumer wrapper that
+			# predates the delta inputs, or a transient failure that used up the
+			# shared retry budget; dispatch_error names the cause) is retried once
+			# with today's arguments instead of burning a cycle.
+			# reason=dispatch_rejected keeps its historical form (#10104).
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=delta_fallback reason=dispatch_rejected cycle=${next_cycle} workflow=${workflow} dispatch_error=${SINGLE_PASS_DISPATCH_ERROR:-other}"
+			if single_pass_dispatch_audit "${dispatch_args[@]}"; then
 				dispatch_ok="true"
 			fi
 		fi
-	elif gh "${dispatch_args[@]}" >/dev/null 2>&1; then
+	elif single_pass_dispatch_audit "${dispatch_args[@]}"; then
 		dispatch_ok="true"
 	fi
 	if [ "${dispatch_ok}" != "true" ]; then
+		dispatch_error_class="${SINGLE_PASS_DISPATCH_ERROR:-other}"
+		dispatch_error_sentence="The error class is \`${dispatch_error_class}\`: $(single_pass_dispatch_error_phrase "${dispatch_error_class}")."
 		if [ "${exhausted_retry}" = "true" ]; then
 			# Record the failed retry as a used head attempt (head_attempts counts
 			# failed markers above the cap), so repeated dispatch failures reach
 			# the ai:security-pass-failed label instead of retrying forever.
 			body="## Single-issue security pass: retry audit
 
-The retry audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). Auto-merge stays off, and this counts as head attempt $((head_attempts + 1)) of ${exhausted_head_limit}. Once the head attempts are used up, the PR is labelled \`ai:security-pass-failed\`.
+The retry audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). ${dispatch_error_sentence} Auto-merge stays off, and this counts as head attempt $((head_attempts + 1)) of ${exhausted_head_limit}. Once the head attempts are used up, the PR is labelled \`ai:security-pass-failed\`.
 
 $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
 			if ! single_pass_post_comment_logged "${body}"; then
 				echo "::error::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the head attempt is not recorded. Holding the merge and failing closed so workflow recovery retries."
 				failed_marker_unrecorded="true"
 			fi
-			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed_exhausted cycle=${next_cycle}"
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed_exhausted cycle=${next_cycle} dispatch_error=${dispatch_error_class}"
 		else
 			# Below the cycle cap, record the failed dispatch as a used cycle so
 			# repeated failures count toward exhaustion.
 			echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; holding auto-merge and recording cycle $((cycles_used + 1)) of ${effective_max} as failed. A later review run retries the dispatch."
+			# Only a rejected dispatch can come from an old consumer wrapper.
+			dispatch_wrapper_hint=""
+			if [ "${dispatch_error_class}" = "rejected" ]; then
+				dispatch_wrapper_hint=" A consumer \`ai-security-audit.yml\` that predates the \`pr_number\` input fails this way; syncing the wrapper fixes it."
+			fi
 			body="## Single-issue security pass
 
-The audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). A consumer \`ai-security-audit.yml\` that predates the \`pr_number\` input fails this way; syncing the wrapper fixes it. Auto-merge stays off, and this counts as cycle $((cycles_used + 1)) of ${effective_max}. A later review run retries the dispatch. Once the cycles are used up, the PR is labelled \`ai:security-pass-failed\`.
+The audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). ${dispatch_error_sentence}${dispatch_wrapper_hint} Auto-merge stays off, and this counts as cycle $((cycles_used + 1)) of ${effective_max}. A later review run retries the dispatch. Once the cycles are used up, the PR is labelled \`ai:security-pass-failed\`.
 
 $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
 			if ! single_pass_post_comment_logged "${body}"; then
 				echo "::error::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the cycle is not recorded. Holding the merge and failing closed so workflow recovery retries."
 				failed_marker_unrecorded="true"
 			fi
-			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed workflow=${workflow} cycle=${next_cycle}"
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed workflow=${workflow} cycle=${next_cycle} dispatch_error=${dispatch_error_class}"
 		fi
 		echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; holding the merge until an audit can run."
 		single_pass_output true dispatch_failed
@@ -1857,7 +1999,7 @@ $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 		single_pass_output true pending_marker_failed
 		return 1
 	fi
-	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')$([ -n "${delta_note}" ] && printf ' delta_since=%s' "${delta_since}")${lease_throttle_note}"
+	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')$([ -n "${delta_note}" ] && printf ' delta_since=%s' "${delta_since}")$([ "${SINGLE_PASS_DISPATCH_ATTEMPTS:-1}" -gt 1 ] && printf ' dispatch_attempts=%s' "${SINGLE_PASS_DISPATCH_ATTEMPTS}")${lease_throttle_note}"
 	single_pass_output true audit_dispatched
 }
 
