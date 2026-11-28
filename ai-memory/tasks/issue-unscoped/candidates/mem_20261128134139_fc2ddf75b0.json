@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml (step selection and placement around lines 4388-4428), tests/test_ci_poll_test_sharding.py (documentation of the move rationale)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml comment at lines 4390-4401 states the run's step timings (run 46098026068) were unreadable and the three steps were chosen from estimated test and subprocess counts, changelog.d/10248-promote-job-budget-move.md and the comment above MOVED_PROMOTE_10248_STEPS in tests/test_ci_poll_test_sharding.py say the same, group 3 headroom is unmeasured and group 3 now has eight guarded steps; it is not demonstrated that the moved steps are the slowest or that group 3 has the most headroom (severity disagreement: NIT from anthropic_claude-sonnet-5_5, MAJOR from the others; highest is MAJOR; anthropic_claude-sonnet-5_5 notes this was deferred in earlier rounds and the other constraints are met)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: the pick of steps and target in `.github/workflows/ci.yml`, in the block around lines 4388-4425.\n  Evidence of absence: The run's step timings were not readable, so the three steps were chosen by an estimate from test and subprocess counts; the workflow comment, `changelog.d/10248-promote-job-budget-move.md` and the comment above `MOVED_PROMOTE_10248_STEPS` in `tests/test_ci_poll_test_sharding.py` all say so. Reviewed and deferred in earlier rounds because no timing data is available. Other constraints met: step names and bodies unchanged, `timeout-minutes` not raised, no new required job names, steps run once in `orchestrate-poll` group 3, `MovedPromote10248StepsContractTest` pins the new location.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n(All other checklist sections: NONE. Group 3 load unmeasured, not a demonstrated defect; budget-watch warns at 22m30s of 30 minutes. HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: .github/workflows/ci.yml (step selection), tests/test_ci_poll_test_sharding.py (documentation of the move rationale).\n  Evidence of absence: The workflow comments state that run 46098026068's step timings were unreadable, and therefore the selection was estimated from test and subprocess counts. The requirement \"see the run's step timings\" could not be satisfied, and consequently, it is not demonstrated that the moved steps were indeed the slowest steps.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, step selection and placement around lines 4388-4428.\n  Evidence of absence: The workflow comment at lines 4390-4401 states the run's step timings could not be read and the steps were selected by estimated test and subprocess counts. It also states the target group's headroom is unmeasured and that group 3 now has eight guarded steps, more than the other groups. The diff therefore does not establish that the moved steps are the slowest or that group 3 has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "18ff8e9b52106be2b68c84cf1927fd6b5c737a31afdd56be5d5488e9fc03010d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10250,
+    "run_id": "46147383585",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46147383585",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128134139_fc2ddf75b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10250,
+    "run_id": "46147383585"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T13:41:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
