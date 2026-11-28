@@ -202,6 +202,14 @@ jobs:
         if: steps.cycle.outputs.outcome == 'skipped:runner_wait_long'
         run: echo "PROMOTE_CYCLE_RETRY_MARKER run=${GITHUB_RUN_ID}"
 
+      # Same contract for a smoke gate that cancelled itself for a long runner
+      # wait (issue #10266): the poller retries it within the hour, at most
+      # PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX times per main tip. A gate
+      # cancelled by a person or another run gets cause=other and no marker.
+      - name: Record runner-wait gate cancel for the poller retry
+        if: steps.cycle.outputs.outcome == 'skipped:smoke_gate_cancelled' && steps.cycle.outputs.gate_cancel_cause == 'runner_wait'
+        run: echo "PROMOTE_CYCLE_RETRY_MARKER cause=gate_runner_wait_cancel run=${GITHUB_RUN_ID}"
+
   promote:
     if: github.event_name == 'workflow_dispatch' && inputs.cycle_retry != true
     runs-on: ubuntu-latest

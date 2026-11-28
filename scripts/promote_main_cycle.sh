@@ -66,9 +66,18 @@
 #   PROMOTE_CYCLE_SKIPPED reason=gate_busy                  another test-and-mark-stable run (a
 #                                                           stable release, any branch) stayed
 #                                                           active for the whole wait budget
-#   PROMOTE_CYCLE_SKIPPED reason=smoke_gate_cancelled run=<id>  the gate was cancelled, not
+#   PROMOTE_CYCLE_SKIPPED reason=smoke_gate_cancelled run=<id> cause=<runner_wait|other|unknown>
+#                                                           the gate was cancelled, not
 #                                                           failed: nothing was proven either
-#                                                           way, so the tip is retried next tick
+#                                                           way, so the tip is retried next tick.
+#                                                           cause=runner_wait: the gate cancelled
+#                                                           itself for a long runner wait (its job
+#                                                           log carries RELEASE_GATE_RUNNER_WAIT
+#                                                           outcome=cancel_requested gate_run=<id>);
+#                                                           the step output gate_cancel_cause
+#                                                           carries the same value and the
+#                                                           workflow's marker step lets the poller
+#                                                           retry within the hour (issue #10266)
 #   PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=<id> conclusion=<c> failed_job=<name|unknown> failed_step=<name|unknown>
 #   PROMOTE_CYCLE_FAILED reason=smoke_gate_timeout
 #   PROMOTE_CYCLE_FAILED reason=smoke_head_checkout_failed  main advanced during the gate and
@@ -161,6 +170,15 @@
 #                                       runner_wait_long (`-f cycle_retry=true`, at
 #                                       most once an hour) and exits 0 (log prefix
 #                                       PROMOTE_CYCLE_RETRY). It never runs the cycle.
+#                                       Issue #10266: it also re-dispatches a cycle
+#                                       skipped with smoke_gate_cancelled
+#                                       cause=runner_wait (reason=gate_runner_wait_cancel)
+#   PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX default 3 (issue #10266): at most this many
+#                                       poller retries after a gate runner-wait
+#                                       self-cancel: [cycle-retry] runs created in
+#                                       the last 24 h on any main tip (retries run on
+#                                       the tip of their dispatch); 1-99, any other
+#                                       value warns and uses 3
 #                                       and when a release-blocker report is not delivered
 #   RELEASE_BLOCKER_HEAL_ENABLED        default true (kill switch for the
 #                                       release-blocker reporters below)
@@ -342,6 +360,14 @@ PROMOTE_CYCLE_RETRY_CHECK_ONLY="${PROMOTE_CYCLE_RETRY_CHECK_ONLY:-false}"
 PROMOTE_CYCLE_RETRY_TITLE="Promote main to stable [cycle-retry]"
 # Name of the cycle job's marker step; a contract with the workflow YAML.
 PROMOTE_CYCLE_RETRY_MARKER_STEP="Record runner-wait skip for the poller retry"
+# Marker step for a gate that cancelled itself for a long runner wait (issue
+# #10266); a contract with the workflow YAML, like the step above.
+PROMOTE_CYCLE_GATE_CANCEL_MARKER_STEP="Record runner-wait gate cancel for the poller retry"
+PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX="${PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX:-3}"
+if ! [[ "${PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX}" =~ ^[1-9][0-9]?$ ]]; then
+	echo "::warning::PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX must be an integer from 1 to 99; using 3."
+	PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX=3
+fi
 APPLY_ANALYSIS_DISPATCHER="${APPLY_ANALYSIS_DISPATCHER:-${SCRIPT_DIR}/apply_analysis_on_main.sh}"
 PROMOTE_CYCLE_OPERATOR_STEP_HELPER="${PROMOTE_CYCLE_OPERATOR_STEP_HELPER:-${SCRIPT_DIR}/operator_step_issue.py}"
 PROMOTE_CYCLE_PIN_ENABLED="${PROMOTE_CYCLE_PIN_ENABLED:-true}"
@@ -471,7 +497,8 @@ gate_failure_location()
 	# actions/workflows/<gate>/runs listing. None of them returns job or step
 	# data (workflow-run objects carry only status and conclusion), so one
 	# jobs read is needed. It is made only on the failure path; a successful
-	# or cancelled gate makes no extra call.
+	# gate makes no extra call (a cancelled gate makes the reads of
+	# gate_cancel_cause below instead).
 	if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
 		if ! jobs_json="$(GH_RETRY_MAX_ATTEMPTS="${jobs_attempts}" gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null)"; then
 			jobs_json=""
@@ -491,6 +518,80 @@ gate_failure_location()
 		step_name="${located#*$'\t'}"
 	fi
 	printf 'failed_job=%s failed_step=%s\n' "$(sanitize_gate_name "${job_name}")" "$(sanitize_gate_name "${step_name}")"
+}
+
+# gate_cancel_cause <run_id> (issue #10266): prints why a cancelled gate run
+# was cancelled. runner_wait: a job cancelled in one of the gate's watch steps
+# logged `RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=<run_id>`
+# (scripts/dispatch_and_watch_workflow_run.sh: the gate stopped itself for a
+# long runner wait). other: every read succeeded and no such line was found
+# (a person or another run cancelled it). unknown: a read failed. Never fails.
+# The watch-step names are the ones workflow_failure_heal_intake.sh treats as
+# watch steps. API calls (cancelled path only): 1 jobs read (at most 2
+# attempts, as gate_failure_location) + at most 6 job-log reads; it stops at
+# the first match. No listing this script already reads carries job or log
+# data, so these reads are needed; they run once per cancelled gate.
+gate_cancel_cause()
+{
+	local run_id="$1"
+	local jobs_json="" candidates="" job_id="" step_name="" log_file="" read_failed="false" checked=0
+	local jobs_attempts="${GH_RETRY_MAX_ATTEMPTS:-2}"
+	if ! [[ "${jobs_attempts}" =~ ^[0-9]+$ ]] || [ "${jobs_attempts}" -gt 2 ] || [ "${jobs_attempts}" -lt 1 ]; then
+		jobs_attempts=2
+	fi
+	if ! [[ "${run_id}" =~ ^[0-9]{1,20}$ ]]; then
+		printf 'unknown\n'
+		return 0
+	fi
+	if ! jobs_json="$(GH_RETRY_MAX_ATTEMPTS="${jobs_attempts}" gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null)" \
+		|| ! printf '%s' "${jobs_json}" | jq -e '(.jobs | type) == "array"' >/dev/null 2>&1; then
+		printf 'unknown\n'
+		return 0
+	fi
+	if ! candidates="$(printf '%s' "${jobs_json}" | jq -r '.jobs[]? | select((.conclusion // "") == "cancelled")
+		| [((.id // "") | tostring), ([.steps[]? | select((.conclusion // "") == "cancelled")] | first | .name // "" | tostring | gsub("[\\t\\r\\n]"; " "))]
+		| @tsv' 2>/dev/null)"; then
+		printf 'unknown\n'
+		return 0
+	fi
+	if ! log_file="$(mktemp 2>/dev/null)"; then
+		printf 'unknown\n'
+		return 0
+	fi
+	while IFS=$'\t' read -r job_id step_name; do
+		[[ "${job_id}" =~ ^[0-9]{1,20}$ ]] || continue
+		case "${step_name}" in
+			"Phase 4: Wait for review & autofix to complete"|"Dispatch & watch — "*|"Dispatch internal-orchestrate.yml with multi-issue project"|"Dispatch internal-validate.yml standalone"|"Wait for clarify→plan→implement (alt-model)") ;;
+			*) continue ;;
+		esac
+		if [ "${checked}" -ge 6 ]; then
+			# Candidates left unread: not proven foreign, so unknown, not other.
+			read_failed="true"
+			break
+		fi
+		checked=$((checked + 1))
+		# Job logs carry ANSI colour codes; gh rejects them without
+		# --allow-escape-sequences (as in release_blocker_check_skip_streak).
+		if ! GH_RETRY_MAX_ATTEMPTS="${jobs_attempts}" gh_retry gh api --allow-escape-sequences "repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs" > "${log_file}" 2>/dev/null; then
+			read_failed="true"
+			continue
+		fi
+		# The line must start with the marker (after the log timestamp) and
+		# name this gate run; process substitution keeps an early grep exit
+		# from failing the match under pipefail.
+		if grep -qE "^[^ ]+ RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=${run_id}( |\$)" < <(tr -d '\r' < "${log_file}" | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g'); then
+			rm -f "${log_file}"
+			printf 'runner_wait\n'
+			return 0
+		fi
+	done <<< "${candidates}"
+	rm -f "${log_file}"
+	if [ "${read_failed}" = "true" ]; then
+		printf 'unknown\n'
+	else
+		printf 'other\n'
+	fi
+	return 0
 }
 
 is_truthy()
@@ -1753,9 +1854,22 @@ release_blocker_on_skip()
 # (outcome=wait_long otherwise). API calls: 0 when disabled, 1 runs listing,
 # +1 jobs read and +1 runner-wait read (2 when more than 100 runs are queued)
 # only for a due candidate, +1 dispatch. Always exits 0.
+#
+# Issue #10266: a newest cycle run whose gate cancelled itself for a long
+# runner wait (its "Record runner-wait gate cancel for the poller retry"
+# marker step ran) is retried the same way, logged with
+# reason=gate_runner_wait_cancel. A cancel by a person or another run leaves
+# no marker (outcome=not_runner_wait). That path is also capped: once
+# PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX [cycle-retry] runs were created in the
+# last 24 h, on any main tip (each retry runs on the tip of its dispatch, so a
+# per-head count would restart whenever main moves; runner_wait_long retries
+# count too), counted from the runs listing above (per_page=100, no extra
+# call), it logs outcome=cap_reached and dispatches nothing. The
+# runner_wait_long path itself is unchanged and uncapped.
 promote_cycle_retry_check()
 {
 	local rc_runs="" rc_active="" rc_fields="" rc_id="" rc_status="" rc_conclusion="" rc_updated="" rc_age="" rc_jobs="" rc_marker=""
+	local rc_head="" rc_cancel_marker="" rc_reason="" rc_tip_retries=""
 	local rc_cutoff="0" rc_def="" rc_wait="" rc_wait_outcome="" rc_wait_min=""
 	if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
 		echo "PROMOTE_CYCLE_RETRY outcome=disabled reason=cycle_disabled"
@@ -1765,7 +1879,10 @@ promote_cycle_retry_check()
 		echo "PROMOTE_CYCLE_RETRY outcome=disabled reason=runner_wait_check_off"
 		return 0
 	fi
-	if ! rc_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_WORKFLOW_FILE}/runs?per_page=20" 2>/dev/null)" \
+	# per_page=100 (issue #10266): this one listing also counts the
+	# gate-cancel retries of the last 24 h, so it must hold more runs than
+	# the largest cap (99).
+	if ! rc_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_WORKFLOW_FILE}/runs?per_page=100" 2>/dev/null)" \
 		|| ! printf '%s' "${rc_runs}" | jq -e '(.workflow_runs | type) == "array"' >/dev/null 2>&1; then
 		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=runs"
 		return 0
@@ -1783,8 +1900,8 @@ promote_cycle_retry_check()
 		echo "PROMOTE_CYCLE_RETRY outcome=cycle_active active_runs=${rc_active}"
 		return 0
 	fi
-	rc_fields="$(printf '%s' "${rc_runs}" | jq -r --arg retry_title "${PROMOTE_CYCLE_RETRY_TITLE}" '[.workflow_runs[]? | select(.event == "schedule" or (.event == "workflow_dispatch" and (.display_title // "") == $retry_title))] | sort_by(.created_at) | last // empty | ((.id // "") | tostring), ((.status // "") | tostring), ((.conclusion // "") | tostring), ((.updated_at // "") | tostring)' 2>/dev/null || true)"
-	{ IFS= read -r rc_id; IFS= read -r rc_status; IFS= read -r rc_conclusion; IFS= read -r rc_updated; } <<< "${rc_fields}" || true
+	rc_fields="$(printf '%s' "${rc_runs}" | jq -r --arg retry_title "${PROMOTE_CYCLE_RETRY_TITLE}" '[.workflow_runs[]? | select(.event == "schedule" or (.event == "workflow_dispatch" and (.display_title // "") == $retry_title))] | sort_by(.created_at) | last // empty | ((.id // "") | tostring), ((.status // "") | tostring), ((.conclusion // "") | tostring), ((.updated_at // "") | tostring), ((.head_sha // "") | tostring)' 2>/dev/null || true)"
+	{ IFS= read -r rc_id; IFS= read -r rc_status; IFS= read -r rc_conclusion; IFS= read -r rc_updated; IFS= read -r rc_head; } <<< "${rc_fields}" || true
 	if ! [[ "${rc_id:-}" =~ ^[0-9]{1,20}$ ]]; then
 		echo "PROMOTE_CYCLE_RETRY outcome=no_cycle_run"
 		return 0
@@ -1814,8 +1931,29 @@ promote_cycle_retry_check()
 	fi
 	rc_marker="$(printf '%s' "${rc_jobs}" | jq -r --arg step "${PROMOTE_CYCLE_RETRY_MARKER_STEP}" '[.jobs[]? | .steps[]? | select((.name // "") == $step and (.conclusion // "") == "success")] | length' 2>/dev/null || echo 0)"
 	if ! [[ "${rc_marker}" =~ ^[0-9]+$ ]] || [ "${rc_marker}" -eq 0 ]; then
-		echo "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=${rc_id}"
-		return 0
+		# Issue #10266: a gate that cancelled itself for a long runner wait.
+		rc_cancel_marker="$(printf '%s' "${rc_jobs}" | jq -r --arg step "${PROMOTE_CYCLE_GATE_CANCEL_MARKER_STEP}" '[.jobs[]? | .steps[]? | select((.name // "") == $step and (.conclusion // "") == "success")] | length' 2>/dev/null || echo 0)"
+		if ! [[ "${rc_cancel_marker}" =~ ^[0-9]+$ ]] || [ "${rc_cancel_marker}" -eq 0 ]; then
+			echo "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=${rc_id}"
+			return 0
+		fi
+		rc_reason="gate_runner_wait_cancel"
+		# Counted on any head: each retry runs on main's tip at dispatch, so a
+		# head_sha filter restarts the count whenever main moves, and a pool
+		# that never clears could start a gate every hour. Every [cycle-retry]
+		# run created in the last 24 h counts, the retries of runner_wait_long
+		# skips included (the listing carries no step data). head= in the
+		# cap line is the newest cycle run's head, for context only.
+		rc_head="$(printf '%s' "${rc_head:-}" | tr -cd '0-9a-f' | cut -c1-12)"
+		rc_tip_retries="$(printf '%s' "${rc_runs}" | jq -r --arg retry_title "${PROMOTE_CYCLE_RETRY_TITLE}" '[.workflow_runs[]? | select(.event == "workflow_dispatch" and (.display_title // "") == $retry_title) | select((((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0) > (now - 86400))] | length' 2>/dev/null || true)"
+		if ! [[ "${rc_tip_retries}" =~ ^[0-9]+$ ]]; then
+			echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=runs run=${rc_id} reason=${rc_reason}"
+			return 0
+		fi
+		if [ "${rc_tip_retries}" -ge "${PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX}" ]; then
+			echo "PROMOTE_CYCLE_RETRY outcome=cap_reached reason=${rc_reason} after_run=${rc_id} head=${rc_head:-unknown} retries=${rc_tip_retries} max=${PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX}"
+			return 0
+		fi
 	fi
 	# Retry only when the wait has dropped (G2): a retry dispatched into a
 	# long wait takes a runner slot just to skip again (§26). Same reader and
@@ -1825,7 +1963,7 @@ promote_cycle_retry_check()
 	rc_wait_outcome="$(printf '%s' "${rc_wait}" | sed -n 's/^outcome=\([a-z_]*\) .*/\1/p' | head -n 1)"
 	rc_wait_min="$(printf '%s' "${rc_wait}" | sed -n 's/.* oldest_queued_min=\([0-9]*\) .*/\1/p' | head -n 1)"
 	if [ "${rc_wait_outcome}" = "long" ] && [[ "${rc_wait_min}" =~ ^[0-9]+$ ]] && [ "${rc_wait_min}" -ge "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" ]; then
-		echo "PROMOTE_CYCLE_RETRY outcome=wait_long after_run=${rc_id} oldest_queued_min=${rc_wait_min} max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}"
+		echo "PROMOTE_CYCLE_RETRY outcome=wait_long after_run=${rc_id} oldest_queued_min=${rc_wait_min} max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}${rc_reason:+ reason=${rc_reason}}"
 		return 0
 	fi
 	if [ "${rc_wait_outcome}" != "short" ] && [ "${rc_wait_outcome}" != "long" ]; then
@@ -1834,7 +1972,7 @@ promote_cycle_retry_check()
 	# One attempt, no gh_retry: a retried dispatch is not idempotent. The
 	# dispatched run's another_run_active guard covers a race.
 	if gh workflow run "${PROMOTE_CYCLE_WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${PROMOTE_CYCLE_DEFAULT_BRANCH}" -f cycle_retry=true >/dev/null 2>&1; then
-		echo "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=${rc_id} age_min=${rc_age}"
+		echo "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=${rc_id} age_min=${rc_age}${rc_reason:+ reason=${rc_reason}}"
 	else
 		echo "::warning::PROMOTE_CYCLE_RETRY outcome=dispatch_failed after_run=${rc_id}"
 	fi
@@ -2149,8 +2287,16 @@ fi
 if [ "${gate_conclusion}" = "cancelled" ]; then
 	# A cancelled gate proved nothing either way (concurrency, a runner loss,
 	# an operator). Skip rather than fail so the tip is retried next tick
-	# instead of waiting for main to move.
-	skip_cycle smoke_gate_cancelled "run=${gate_run_id}"
+	# instead of waiting for main to move. Issue #10266: record whether the
+	# gate cancelled itself for a long runner wait, so the workflow's marker
+	# step lets the poller retry it within the hour.
+	gate_cancel_cause_value="$(gate_cancel_cause "${gate_run_id}" || echo unknown)"
+	case "${gate_cancel_cause_value}" in
+		runner_wait|other|unknown) ;;
+		*) gate_cancel_cause_value="unknown" ;;
+	esac
+	emit_output gate_cancel_cause "${gate_cancel_cause_value}"
+	skip_cycle smoke_gate_cancelled "run=${gate_run_id} cause=${gate_cancel_cause_value}"
 fi
 if [ "${gate_conclusion}" != "success" ]; then
 	gate_failure_where="$(gate_failure_location "${gate_run_id}" || echo "failed_job=unknown failed_step=unknown")"

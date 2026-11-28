@@ -834,6 +834,8 @@ def test_promote_cycle_runner_wait_retry_step_is_wired() -> None:
 	assert "          PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}\n" in step
 	assert "          RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES: ${{ vars.RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES || '30' }}\n" in step
 	assert "          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}\n" in step
+	# Issue #10266: the same step retries a gate runner-wait self-cancel, capped per tip.
+	assert "          PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX: ${{ vars.PROMOTE_CYCLE_GATE_CANCEL_RETRY_MAX || '3' }}\n" in step
 	assert 'src=".codex-workflow-src/scripts/promote_main_cycle.sh"' in step
 	assert "grep -q 'PROMOTE_CYCLE_RETRY_CHECK_ONLY' \"${src}\"" in step
 	assert 'install -m 0755 "${src}" scripts/promote_main_cycle.sh' in step
