@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"PR read returns 403 rate limit on the pre-merge read: no merge, `reason=pr_state_unavailable`.\" (linked issue Tests section, bullet 4)\n  expected_change_site: `tests/test_pr_merge_state_guard.py`, `StateCheck.test_rate_limited_read_fails_closed_without_lease_calls` (currently at `tests/test_pr_merge_state_guard.py:103-108`); `tests/merge_lease_fake_gh.py`\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The test seeds the generic `{\"fail\": [\"pulls/5800\"]}` / `\"fail\": [\"pulls/<PR>\"]` mechanism, which in `tests/merge_lease_fake_gh.py:58-60, 83-85` calls `fail(f\"forced failure on {needle}\")`, writing a generic stderr message and exiting nonzero; it never simulates an HTTP 403 or rate-limit-shaped response (e.g. an error JSON body on stdout with a nonzero exit). The production `_pr_merge_state_check` in `scripts/pr_checks_lib.sh` treats every nonzero read as unavailable (`|| ms_json=\"\"`; a body without `.state` means unavailable), so it still fails closed and the asserted behaviour is correct; the gap is that the test name advertises rate-limit coverage that the fixture does not provide (severity NIT from all flagging reviewers).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"PR read returns 403 rate limit on the pre-merge read: no merge, reason=pr_state_unavailable.\"\n  Expected change site: tests/test_pr_merge_state_guard.py, StateCheck.test_rate_limited_read_fails_closed_without_lease_calls\n  Evidence of absence: The test seeds {\"fail\": [\"pulls/5800\"]}. In tests/merge_lease_fake_gh.py (lines 83-85, fail() at lines 58-60), that writes \"forced failure on ...\" to stderr and exits 1. It never simulates an HTTP 403 or rate-limit response, such as an error JSON body on stdout with a nonzero exit. The production code still fails closed: _pr_merge_state_check discards the output on a nonzero exit (`|| ms_json=\"\"`), and a body without `.state` is treated as unavailable. Only the fixture named in the issue is missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"PR read returns 403 rate limit on the pre-merge read: no merge, `reason=pr_state_unavailable`.\"\n  Expected change site: `tests/test_pr_merge_state_guard.py`, `StateCheck.test_rate_limited_read_fails_closed_without_lease_calls` (currently at `tests/test_pr_merge_state_guard.py:103-108`).\n  Evidence of absence: The test uses the generic `{\"fail\": [f\"pulls/{PR}\"]}` mechanism (`tests/merge_lease_fake_gh.py:58-60, 83-85`). It only verifies that `gh_retry _safe_gh_jq ... 2>/dev/null` swallows any nonzero exit and that an empty `ms_json` yields `PR_MERGE_STATE_OUTCOME=\"unavailable\"`. The production `scripts/pr_checks_lib.sh` `_pr_merge_state_check` has no HTTP-status-aware branch, so the test is enough for \"fails closed\". It does not exercise the 403/rate-limit path with a distinct failure signal, and the test name advertises rate-limit coverage the fixture does not provide.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"PR read returns 403 rate limit on the pre-merge read: no merge, `reason=pr_state_unavailable`.\"\n  Expected change site: `tests/test_pr_merge_state_guard.py`, `StateCheck.test_rate_limited_read_fails_closed_without_lease_calls`; `tests/merge_lease_fake_gh.py`.\n  Evidence of absence: The test configures a generic `\"fail\": [\"pulls/<PR>\"]` response. The fake exits with a generic forced-failure message and does not simulate an HTTP 403 or rate-limit response, so the specified rate-limit case is not exercised.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"PR read returns 403 rate limit on the pre-merge read: no merge, `reason=pr_state_unavailable`\" (linked issue Tests section, bullet 4).\n  Expected change site: tests/test_pr_merge_state_guard.py, StateCheck.test_rate_limited_read_fails_closed_without_lease_calls.\n  Evidence of absence: The test uses the fake's generic `\"fail\": [\"pulls/<PR>\"]` mechanism (tests/merge_lease_fake_gh.py:83-85, which calls `fail(f\"forced failure on {needle}\")`), which gives a generic stderr message and a nonzero exit, not an HTTP 403 / rate-limit-shaped response. The asserted runtime behaviour (no merge, `reason=pr_state_unavailable`, no lease calls) is correct and matches production, because `_pr_merge_state_check` treats any nonzero read as unavailable. Only the 403-specific simulation is missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0411d60bc5d19b4bf557b1a1fa73fdd6a1dcf680c99a94d5f347050d5d009447",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10054,
+    "run_id": "46105939578",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46105939578",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128050515_903ddfb683",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10054,
+    "run_id": "46105939578"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T05:05:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
