@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-28T15:58:34Z",
+  "issue_number": 10270,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=docs/INVENTORY.md:126; cited_path=docs/INVENTORY.md; files_touched=.github/workflows/alert-self-fix.yml, .github/workflows/alert-triage.yml, changelog.d/10270-alert-break-glass-template-and-codex-pin.md, prompts/_templates/mode-alert-break-glass-review.txt, tests/test_codex_agent_isolation_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 10271,
+  "record_id": "lesson_20261128155834_3dc238156c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "docs/INVENTORY.md",
+    ".github/workflows/alert-self-fix.yml",
+    ".github/workflows/alert-triage.yml",
+    "changelog.d/10270-alert-break-glass-template-and-codex-pin.md",
+    "prompts/_templates/mode-alert-break-glass-review.txt",
+    "tests/test_codex_agent_isolation_contract.py"
+  ]
+}
