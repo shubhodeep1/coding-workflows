@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Pass the two switches through the env: of the steps that run these scripts\". G5 adds MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, and setting it to false must turn the lease guard (G4) off.\n  expected_change_site: .github/workflows/review_autofix_sweep.yml, at the two steps that already forward MERGE_LEASE_REVOKE_ENABLED and run the pr_checks_lib.sh lease paths (lines 267 and 1035), including the final-CI base-sync step that runs review_final_ci_sweep.sh\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Both steps forward only MERGE_LEASE_REVOKE_ENABLED (lines 267 and 1035), not MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, and the PR diff has no hunk in this file; The step exports `MERGE_LEASE_REVOKE_ENABLED` at line 1035 and runs `review_final_ci_sweep.sh` at line 1051, but does not export `MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED`; the PR diff does not add `MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED: ${{ vars.MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED || 'true' }}` to either `env:` block; `scripts/pr_checks_lib.sh` `_merge_lease_source_issue_guard_enabled` defaults an unset value to `true` (lines 3903-3907), so the guard stays on but setting the variable to false does not turn it off in the sweep path; the gap is documented in README.md and `agents.d/10241-unblock-reissue-own-pr-guard.md`; the file is outside the plan grant's files_touched, and earlier autofix runs deferred it for that reason. Reviewers disagreed on severity: NIT (anthropic_claude-sonnet-5_5, openai_gpt-6-luna) and MAJOR (google_gemini-3_1-flash-lite, minimax_minimax-m3).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Pass the two switches through the env: of the steps that run these scripts\". G5 adds MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, and setting it to false must turn the lease guard (G4) off.\n  Expected change site: .github/workflows/review_autofix_sweep.yml, at the two steps that already forward MERGE_LEASE_REVOKE_ENABLED and run the pr_checks_lib.sh lease paths.\n  Evidence of absence: Both steps forward only MERGE_LEASE_REVOKE_ENABLED (lines 267 and 1035), not MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED. The PR diff has no hunk in this file. _merge_lease_source_issue_guard_enabled in scripts/pr_checks_lib.sh treats an unset value as true, so setting the repository variable to false does not reach the sweep's lease gate and tick. The gap is documented in README.md and the agents fragment. The file is not in the plan grant's files_touched list, and earlier autofix runs deferred it. The kill switch does not reach this path, but the default keeps the guard on. Likely fix: one env line in each of the two steps.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Forward MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED in .github/workflows/review_autofix_sweep.yml to the final-CI base-sync step that runs review_final_ci_sweep.sh to ensure the source-issue guard is active in that path (as required by G4).\n  Expected change site: .github/workflows/review_autofix_sweep.yml\n  Evidence of absence: The PR diff and last run diff do not add the MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED switch to the environment block of the review_autofix_sweep.yml workflow; the step (around line 1035) forwards MERGE_LEASE_REVOKE_ENABLED but lacks the new guard switch.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Approach step 4 says \"Pass the two switches through the env: of the steps that run these scripts; check wc -c of orchestrate_poll.yml (\u00a727).\" G5 introduces `MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED` (default `true`) so consumers can disable G4 in a tick that calls `pr_checks_lib.sh`; the base-sync step in `review_autofix_sweep.yml` is one of those steps.\n  Expected change site: `.github/workflows/review_autofix_sweep.yml`, the steps that forward `MERGE_LEASE_REVOKE_ENABLED` (lines 267 and 1035 per the autofix editor summary) without the new switch.\n  Evidence of absence: The PR diff does not add `MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED: ${{ vars.MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED || 'true' }}` to either of those `env:` blocks. Earlier autofix editor summaries deferred this (file outside the plan grant, no workflow edits this run, safe fallback). Because `scripts/pr_checks_lib.sh` defaults an unset value to `true`, the guard stays on in the sweep tick, which is the safe direction, but setting `MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED=false` does not turn it off there. The README and `agents.d/10241-unblock-reissue-own-pr-guard.md` both call out this gap.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Pass the two switches through the env: of the steps that run these scripts.\" G4 adds `MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED`, whose documented `false` value turns the guard off.\n  Expected change site: `.github/workflows/review_autofix_sweep.yml`, the final-CI base-sync step.\n  Evidence of absence: The step exports `MERGE_LEASE_REVOKE_ENABLED` at line 1035 and runs `review_final_ci_sweep.sh` at line 1051, but does not export `MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED`. That script's lease path uses `scripts/pr_checks_lib.sh`, where an unset switch defaults to `true` (lines 3903-3907). Therefore setting the repository variable to `false` does not disable the guard in this sweep path.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4d462779b96efef3842934dab3852f10c9fa2c8233ba608b918bcf4e1b1cdf15",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10246,
+    "run_id": "46136187996",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46136187996",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128110752_5ec96c78b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10246,
+    "run_id": "46136187996"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T11:07:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
