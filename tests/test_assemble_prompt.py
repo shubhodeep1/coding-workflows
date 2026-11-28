@@ -64,6 +64,10 @@ def _first_difference_message(prompt_name: str, actual: str, expected: str) -> s
 
 	lines = [
 		f"{prompt_name}: assembled template differs from legacy prompt",
+		# Issue #10206: name the twin to edit so the review editor can fix the
+		# drift from the CI log alone. Leading spaces keep the line from
+		# starting a workflow command.
+		f"  fix: edit prompts/_templates/{prompt_name} (or a fragment it includes) to match prompts/{prompt_name}, or revert the edit to prompts/{prompt_name}",
 		f"  actual:   {_summary(actual)}",
 		f"  expected: {_summary(expected)}",
 	]
@@ -131,6 +135,9 @@ def test_first_difference_message_reports_offset_and_prompt_name() -> None:
 	assert repr(expected) in message, message
 	assert hashlib.sha256(actual.encode("utf-8")).hexdigest()[:12] in message, message
 	assert hashlib.sha256(expected.encode("utf-8")).hexdigest()[:12] in message, message
+	assert "edit prompts/_templates/mode-sample.txt" in message, message
+	assert "to match prompts/mode-sample.txt" in message, message
+	assert not any(line.startswith("::") for line in message.splitlines()), message
 
 	prefix_message = _first_difference_message("mode-sample.txt", "abc", "abcdef")
 	assert "mode-sample.txt" in prefix_message, prefix_message
