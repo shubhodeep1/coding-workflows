@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_gh_rate_limit_routing.py:150-181 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `_WRITE_FLAG` (line 150) is searched against the whole argument text in `_is_raw_read()` (lines 174-180/181) with no quote handling, so a read such as `gh api repos/o/r/issues --jq 'select(.body | contains(\" -f \"))'` is classified as a write.\n  WHY: `raw_reads()` and `_raw_read_positions()` then leave the call out, so `test_gate_reads_go_through_rate_limit_aware_helpers` lets an unallowlisted raw read through without asking for an allowlist entry; severity disagreement: gemini rated it MAJOR, while minimax, luna and glm rated it NIT, so the highest (MAJOR\u2192high) is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- (hardening suggestion) tests/test_test_and_mark_stable_gh_rate_limit_routing.py: `_WRITE_FLAG` (line 150), `_METHOD` (line 151) and `_is_raw_read` (line 174)\n  PROBLEM: Both patterns search the whole rest of the command, including quoted option values, so a quoted ` -f ` or ` -X POST` inside a `--jq` filter makes a read look like a write, and it passes the contract test without an allowlist entry; no current call site has this form, and the limitation predates the last run.\n  WHY: Suggested fix: remove quoted spans from `rest` before running `_METHOD.search` and `_WRITE_FLAG.search`, and add a self-test line for the quoted `-f` case; about 4 lines changed.\n- (hardening suggestion) tests/test_test_and_mark_stable_gh_rate_limit_routing.py: the command-start alternatives of `_GH_CALL` and `_SAFE_GH_JQ_CALL`\n  PROBLEM: A raw read written after `elif`, after a case-pattern `)`, or as `<(gh api ...)` / `(gh api ...)` is not recognised as a call; no current line uses these forms.\n  WHY: Suggested fix: add `elif|until` to the keyword group, allow `\\(` without trailing whitespace after `<` or at line start, and add one self-test line per form; about 4 lines changed. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_gh_rate_limit_routing.py:174-180 | severity=MAJOR | confidence=5\n  PROBLEM: `_WRITE_FLAG = re.compile(r\"(?:^|\\s)(?:-f|-F|--field|--raw-field|--input)(?:\\s|=|$)\")` does not account for flags inside quoted strings such as `--jq` filters (e.g., --jq 'select(.body | contains(\" -f \"))').\n  WHY: `_is_raw_read()` classifies such a read as a write, so `raw_reads()` leaves it out, and new raw reads can be added without the contract test failing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_test_and_mark_stable_gh_rate_limit_routing.py:_WRITE_FLAG regex at line 150; _is_raw_read() body at lines 174-180 | severity=NIT | confidence=5\n  PROBLEM: `_WRITE_FLAG` matches write flags anywhere in `rest` with no quote handling, so a read whose `--jq` filter contains `-f ` and that has no `-X`/`--method` hits `if _WRITE_FLAG.search(rest) and not method`, which returns False and marks it as a write.\n  WHY: Such a read passes the contract test with no allowlist entry; the new position-aware path (`_unlisted_reads` \u2192 `_raw_read_positions` \u2192 `_is_raw_read`) inherits the misclassification, and `test_scanner_recognises_reads_and_writes` never tests this case.\n- (hardening suggestion) tests/test_test_and_mark_stable_gh_rate_limit_routing.py: _GH_CALL regex (around lines 110-120) and _SAFE_GH_JQ_CALL regex\n  PROBLEM: The command-start context class leaves out `}` and `)` (case-pattern end), so a raw `gh` call directly after either token is not detected.\n  WHY: Suggested fix: extend `[;|&!{`]` to `[;|&!{}()]` in both patterns; about 2 lines changed. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_gh_rate_limit_routing.py:`_WRITE_FLAG` at line 150 and `_is_raw_read()` at lines 174-180 | severity=NIT | confidence=5\n  PROBLEM: `_is_raw_read()` searches the full argument text for write flags, including quoted `--jq` filter contents, so `gh api repos/o/r/issues --jq 'select(.body | contains(\" -f \"))'` is classified as a write.\n  WHY: `raw_reads()` leaves out the call, so the routing contract test accepts an unallowlisted raw read instead of requiring a rate-limit-aware helper.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_test_and_mark_stable_gh_rate_limit_routing.py:`_WRITE_FLAG` (line 150) and `_is_raw_read()` (lines 174-181) | severity=NIT | confidence=4\n  PROBLEM: `_WRITE_FLAG` matches ` -f ` inside a quoted jq filter (e.g. `gh api repos/o/r/x --jq '.a | contains(\" -f \")'`), so `_is_raw_read` returns False, `raw_reads()` (line 241) leaves out the line, and `_raw_read_positions()` (line 287) records no position for it.\n  WHY: `test_gate_reads_go_through_rate_limit_aware_helpers()` silently skips such a raw read and asks for no allowlist entry, because `_WRITE_FLAG.search(rest)` has no quote awareness.\n- (hardening suggestion) tests/test_test_and_mark_stable_gh_rate_limit_routing.py: `_WRITE_FLAG` (line 150) / `_is_raw_read()` (lines 174-181)\n  PROBLEM: Write-flag detection matches quoted option values.\n  WHY: Suggested fix: strip quoted spans from `rest` (reuse the `_command_segments` quote walker) before `_WRITE_FLAG.search`; about 4 lines changed. HARDENING_RISK_SCORE: 1\n- (hardening suggestion) tests/test_test_and_mark_stable_gh_rate_limit_routing.py: `_GH_CALL` context class (lines 137-140) and `_SAFE_GH_JQ_CALL` (line 144)\n  PROBLEM: The command-start context class leaves out `)` (e.g. `*) gh api repos/o/r/x ;;`) and `}`, so a raw read directly after either token escapes both detection and allowlist coverage.\n  WHY: Suggested fix: add `}` and `)` to the shared bracket context class in both patterns; about 2 lines changed. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "84aef415ac4594577e74ba78fa986f42f443e111c34319ba92c5c9cf5cce52b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10228,
+    "run_id": "46128691491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46128691491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128092518_298b96a040",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10228,
+    "run_id": "46128691491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T09:25:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
