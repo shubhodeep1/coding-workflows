@@ -407,14 +407,14 @@ def test_replay_pr_5800_timeline(tmp_path: Path) -> None:
 # review_enable_auto_merge.sh run
 # ---------------------------------------------------------------------------
 
-def _auto_merge(tmp_path: Path, pulls: list[str]) -> subprocess.CompletedProcess[str]:
+def _auto_merge(tmp_path: Path, pulls: list[str], shim: str = SHIM_LIB) -> subprocess.CompletedProcess[str]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir()
 	shutil.copy(AUTO_MERGE, scripts / "review_enable_auto_merge.sh")
 	# Production stages gh_helpers.sh next to the script; it provides
 	# gh_retry and _safe_gh_jq, the library's transport.
 	shutil.copy(ROOT / "scripts" / "gh_helpers.sh", scripts / "gh_helpers.sh")
-	(scripts / "pr_checks_lib.sh").write_text(SHIM_LIB, encoding="utf-8")
+	(scripts / "pr_checks_lib.sh").write_text(shim, encoding="utf-8")
 	(scripts / "review_single_issue_security_pass.sh").write_text(
 		"echo SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow\n", encoding="utf-8")
 	fake = _fake_gh(tmp_path, pulls)
@@ -501,6 +501,8 @@ def test_rb_judge_guard_precedes_every_merge() -> None:
 	for site in sites:
 		assert text.rindex("_pr_wait_for_required_checks", 0, site) > text.rindex("_pr_base_fresh_for_merge", 0, text.rindex("_pr_wait_for_required_checks", 0, site))
 		assert site < text.index('success "review-blocked judge approved"', site) < text.index("gh pr merge", site)
+		# The guard precedes the post-wait freshness/lease re-check (#10260).
+		assert site < text.index("_pr_base_fresh_for_merge", site) < text.index("gh pr merge", site)
 	sync = text.index('[ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_merge_open_guard; then')
 	assert sync < text.index("rb_judge_followup_merge_guard sync", sync) < text.index("_match_head_arg=(--match-head-commit", sync)
 	assert "judge_skip_reason=pr_not_open" in text[sync:sync + 1500]
@@ -517,3 +519,44 @@ def test_merge_train_resume_guard_order() -> None:
 def test_skip_log_key_is_documented() -> None:
 	fragment = (ROOT / "agents.d" / "10049-merge-open-pr-guard.md").read_text(encoding="utf-8")
 	assert "LOG_PREFIX.name=AUTOFIX_MERGE_SKIPPED" in fragment
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups (#10260)
+# ---------------------------------------------------------------------------
+
+def test_auto_merge_script_logs_an_unreadable_initial_pr_read(tmp_path: Path) -> None:
+	res = _auto_merge(tmp_path, ["FAIL"])
+	assert res.returncode == 0, res.stdout + res.stderr
+	assert _merge_calls(tmp_path) == []
+	assert f"AUTOFIX_MERGE_SKIPPED pr={PR} head_sha={SHA} reason=pr_state_unavailable" in res.stdout
+
+
+INLINE_SHIM = SHIM_LIB.replace(
+	'_pr_base_fresh_for_merge() { echo "FRESH_CALL $*" >> "${FAKE_CALLS}"; PR_BASE_FRESHNESS_OUTCOME=fresh; return 0; }',
+	'_pr_base_fresh_for_merge() { echo "FRESH_CALL $*" >> "${FAKE_CALLS}"; '
+	'if [ "$(grep -c "^FRESH_CALL" "${FAKE_CALLS}")" -ge 2 ]; then '
+	'PR_BASE_FRESHNESS_OUTCOME=overlap; return 1; fi; PR_BASE_FRESHNESS_OUTCOME=fresh; return 0; }\n'
+	'_pr_base_sync_inline_merge() { echo "INLINE_CALL $*" >> "${FAKE_CALLS}"; '
+	f'PR_BASE_SYNC_INLINE_HEAD={OTHER_SHA}; return 0; }}',
+)
+
+
+def test_auto_merge_script_rechecks_after_a_post_wait_inline_merge(tmp_path: Path) -> None:
+	# Post-wait freshness takes the inline merge (branch update + checks wait on
+	# the update head); the PR is closed during that wait.
+	assert INLINE_SHIM != SHIM_LIB
+	closed_on_update_head = _pull("closed", head=OTHER_SHA, closed_at="2026-11-24T12:30:00Z")
+	res = _auto_merge(tmp_path, [_pull(), _pull(), closed_on_update_head], shim=INLINE_SHIM)
+	assert res.returncode == 0, res.stdout + res.stderr
+	assert any(c.startswith("INLINE_CALL") for c in _calls(tmp_path))
+	assert _merge_calls(tmp_path) == []
+	assert f"AUTOFIX_MERGE_SKIPPED pr={PR} head_sha={OTHER_SHA} reason=pr_closed closed_at=2026-11-24T12:30:00Z" in res.stdout
+
+
+def test_det_skip_head_check_reports_closed_at_and_merged() -> None:
+	body = _step_run_body(DET_SKIP_STEP)
+	fn = body[body.index("deterministic_skip_head_is_current()"):body.index("deterministic_skip_head_ref_is_integration_pr()")]
+	assert '\\(.closed_at // "-") \\(.merged_at // "-")' in fn
+	assert "reason=pr_closed closed_at=${ready_label_closed_at}" in fn
+	assert "reason=pr_merged" in fn

@@ -323,6 +323,8 @@ if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${P
 	_orch_pr_meta_err="$(cat "${_orch_pr_meta_err_file}" 2>/dev/null || true)"
 	rm -f "${_orch_pr_meta_err_file}"
 	echo "::warning::Could not fetch PR metadata for #${PR_NUMBER} (gh_retry exhausted): ${_orch_pr_meta_err:-gh_retry error details unavailable}. Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped via auto-merge on a transient API blip. Next sync event will re-run review_autofix and retry."
+	# Issue #10260: the contractual skip line for an unreadable PR state.
+	echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} reason=pr_state_unavailable"
 	exit 0
 else
 	rm -f "${_orch_pr_meta_err_file}"
@@ -447,6 +449,7 @@ fi
 # live read, before the post-wait freshness re-check (which can ask for the
 # lease or update the branch) and both merge calls below.
 review_enable_auto_merge_open_guard pre_merge
+_auto_merge_open_guard_head="${INITIAL_HEAD_SHA}"
 
 # The wait above can take minutes; the base may have moved under this PR's
 # files meanwhile (`--match-head-commit` binds only the head), so re-check
@@ -463,6 +466,15 @@ if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified after the checks wait (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
 	fi
 	exit 0
+fi
+
+# Issue #10260: the post-wait freshness re-check above can take the inline
+# merge path, which updates the branch and waits on the update head's checks
+# (up to AUTO_MERGE_CHECKS_WAIT_MINUTES). When it did (INITIAL_HEAD_SHA moved
+# to the update head), read the PR once more, bound to the new head, so a PR
+# closed during that wait is not merged. One extra GET on that path only.
+if [ "${INITIAL_HEAD_SHA}" != "${_auto_merge_open_guard_head}" ]; then
+	review_enable_auto_merge_open_guard pre_merge
 fi
 
 # The base branch's head may have received a clean security audit after the

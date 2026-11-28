@@ -3549,6 +3549,13 @@ case "${RB_ACTION}" in
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
           # #10063: a red required check goes to the final-CI repair or a hand-over.
           rb_judge_route_red_checks merge || true
+        elif ! rb_judge_merge_open_guard; then
+          # Issue #10260: closed, draft or moved since the judge read it; no
+          # success status, no merge and no ai:ready-to-merge. One live read
+          # right after the checks wait and before the post-wait freshness
+          # re-check, so a PR closed during the wait asks for no lease and
+          # gets no branch update.
+          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
@@ -3564,10 +3571,6 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
-        elif ! rb_judge_merge_open_guard; then
-          # Issue #10260: closed, draft or moved since the judge read it; no
-          # success status, no merge and no ai:ready-to-merge.
-          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
         elif ! rb_judge_followup_merge_guard merge "${_pr_json:-}"; then
           # Security follow-up guard (#9671): no success status and no merge.
           RB_MERGE_STATUS="security_followup_guard"
@@ -3623,6 +3626,10 @@ case "${RB_ACTION}" in
       RB_MERGE_STATUS="mergeability_pending"
     else
       echo "PR #${PR_NUMBER} state=${PR_STATE:-unknown} mergeable=${PR_MERGEABLE:-null}, cannot merge (PR not open)."
+      if [ -z "${PR_STATE}" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+        # Issue #10260: the PR read failed (rate limit, 5xx); nothing merges.
+        echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} reason=pr_state_unavailable"
+      fi
       RB_MERGE_STATUS="not_open"
     fi
 
@@ -3681,6 +3688,13 @@ case "${RB_ACTION}" in
           [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
           # #10063: a red required check goes to the final-CI repair or a hand-over.
           rb_judge_route_red_checks terminal || true
+        elif ! rb_judge_merge_open_guard; then
+          # Issue #10260: closed, draft or moved since the judge read it; no
+          # success status, no merge and no ai:ready-to-merge. One live read
+          # right after the checks wait and before the post-wait freshness
+          # re-check, so a PR closed during the wait asks for no lease and
+          # gets no branch update.
+          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
         elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
           && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           # The wait can take minutes and --match-head-commit binds only the
@@ -3696,10 +3710,6 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
-        elif ! rb_judge_merge_open_guard; then
-          # Issue #10260: closed, draft or moved since the judge read it; no
-          # success status, no merge and no ai:ready-to-merge.
-          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
         elif ! rb_judge_followup_merge_guard terminal "${_rb_terminal_pr_json:-}"; then
           # Security follow-up guard (#9671): no success status and no merge.
           RB_MERGE_STATUS="security_followup_guard"
@@ -3745,6 +3755,10 @@ case "${RB_ACTION}" in
         RB_MERGE_READY_LABEL_ALLOWED="true"
         RB_MERGE_STATUS="manual_merge_required"
       else
+        if [ -z "${PR_STATE}" ]; then
+          # Issue #10260: the PR read failed (rate limit, 5xx); nothing merges.
+          echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} reason=pr_state_unavailable"
+        fi
         RB_MERGE_STATUS="not_open"
       fi
 

@@ -1569,23 +1569,39 @@ jobs:
 
           deterministic_skip_head_is_current()
           {
-            local ready_label_current_head_sha=""
+            local ready_label_current_head_sha="" ready_label_closed_at=""
             if [ -z "${PR_HEAD_SHA}" ]; then
               return 1
             fi
             # The gate snapshot cannot prove freshness on paths that
             # intentionally skip gh pr merge, so those paths refresh only the
             # head SHA instead of adding another call to the normal merge path.
-            # #10260: the same read also carries the state; labels need an
-            # open, non-draft PR.
-            if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '"\(.state // "") \(.draft // false) \(.head.sha // "")"' 2>/dev/null)"; then
+            # #10260: the same read also carries the state (plus closed_at and
+            # merged_at for the skip line); labels need an open, non-draft PR.
+            if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '"\(.state // "") \(.draft // false) \(.head.sha // "") \(.closed_at // "-") \(.merged_at // "-")"' 2>/dev/null)"; then
               echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing deterministic-skip merge-authorization labels."
               return 1
             fi
             case "${ready_label_current_head_sha}" in
-              "open false "*) ready_label_current_head_sha="${ready_label_current_head_sha#open false }" ;;
+              "open false "*)
+                ready_label_current_head_sha="${ready_label_current_head_sha#open false }"
+                ready_label_current_head_sha="${ready_label_current_head_sha%% *}"
+                ;;
+              "closed "*)
+                # Last two fields: closed_at, merged_at ("-" when null).
+                ready_label_closed_at="${ready_label_current_head_sha% *}"
+                ready_label_closed_at="${ready_label_closed_at##* }"
+                [[ "${ready_label_closed_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || ready_label_closed_at="-"
+                if [ "${ready_label_current_head_sha##* }" != "-" ]; then
+                  echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} reason=pr_merged"
+                else
+                  echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} reason=pr_closed closed_at=${ready_label_closed_at}"
+                fi
+                echo "::warning::PR #${PR_NUMBER} is not an open, ready PR (closed); refusing deterministic-skip merge-authorization labels."
+                return 1
+                ;;
               *)
-                echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} reason=$(case "${ready_label_current_head_sha}" in "closed "*) echo pr_closed ;; "open true "*) echo pr_draft ;; *) echo pr_state_unavailable ;; esac)"
+                echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} reason=$(case "${ready_label_current_head_sha}" in "open true "*) echo pr_draft ;; *) echo pr_state_unavailable ;; esac)"
                 echo "::warning::PR #${PR_NUMBER} is not an open, ready PR (${ready_label_current_head_sha%% *}); refusing deterministic-skip merge-authorization labels."
                 return 1
                 ;;

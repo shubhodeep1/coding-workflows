@@ -41,9 +41,13 @@ jobs:
       PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
       # Issue #10260: GitHub empties a run's pull_requests list once the PR is
       # closed, so runs of the closed PR are also matched by head repository
-      # and creation time. Both are empty on schedule.
+      # and creation time. Both are empty on schedule. PR_CLOSED_AT bounds the
+      # match from above (runs the close itself starts are left alone) and
+      # PR_MERGED keeps merged closes on the linked-only match.
       PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
+      PR_CLOSED_AT: ${{ github.event.pull_request.closed_at }}
+      PR_MERGED: ${{ github.event.pull_request.merged }}
       REPOSITORY: ${{ github.repository }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
@@ -354,14 +358,22 @@ jobs:
             # empty pull_requests list (PR #5800's review run kept going and
             # merged the closed PR). An unlinked run also matches when it ran
             # on this PR's head repository (no fork on a same-named branch)
-            # and started at or after the PR was opened. Without both values,
-            # or with a malformed time, only linked runs match, as before.
+            # and started at or after the PR was opened and before it was
+            # closed, so the runs the close event itself starts (AI Issue PR
+            # Status, the post-merge AI Review) are left alone. On a merged
+            # close only linked runs match, so the run that merged the PR
+            # finishes its post-merge work. Without all three values, or with
+            # a malformed time, only linked runs match, as before.
             cpr_unlinked_head_repo="${PR_HEAD_REPO:-}"
             cpr_unlinked_created_at="${PR_CREATED_AT:-}"
+            cpr_unlinked_closed_at="${PR_CLOSED_AT:-}"
             if [ -z "${cpr_unlinked_head_repo}" ] \
-              || ! [[ "${cpr_unlinked_created_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+              || [ "${PR_MERGED:-false}" = "true" ] \
+              || ! [[ "${cpr_unlinked_created_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+              || ! [[ "${cpr_unlinked_closed_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
               cpr_unlinked_head_repo=""
               cpr_unlinked_created_at=""
+              cpr_unlinked_closed_at=""
             fi
             mapfile -t target_run_ids < <(
               jq -r \
@@ -370,15 +382,17 @@ jobs:
                 --arg current_run_id "${CURRENT_RUN_ID}" \
                 --arg head_repo "${cpr_unlinked_head_repo}" \
                 --arg pr_created_at "${cpr_unlinked_created_at}" \
+                --arg pr_closed_at "${cpr_unlinked_closed_at}" \
                 '.workflow_runs[]
                 | select(.head_branch == $head_ref)
                 | select(
                     ((.pull_requests // [])
                       | any(.number == ($pr_number | tonumber)))
-                    or ($head_repo != "" and $pr_created_at != ""
+                    or ($head_repo != "" and $pr_created_at != "" and $pr_closed_at != ""
                       and ((.pull_requests // []) | length) == 0
                       and ((.head_repository.full_name // "") == $head_repo)
-                      and ((.created_at // "") >= $pr_created_at)))
+                      and ((.created_at // "") >= $pr_created_at)
+                      and ((.created_at // "") < $pr_closed_at)))
                 | select(.event == "pull_request")
                 | select((.id | tostring) != $current_run_id)
                 | select(

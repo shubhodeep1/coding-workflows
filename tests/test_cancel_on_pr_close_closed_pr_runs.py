@@ -76,6 +76,7 @@ def _cancel(tmp_path: Path, runs: list[dict], **env_extra: str) -> tuple[subproc
 		"PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_RUNS": str(tmp_path / "runs.json"), "FAKE_CALLS": str(calls),
 		"EVENT_NAME": "pull_request", "PR_NUMBER": "5800", "PR_HEAD_REF": BRANCH, "REPOSITORY": REPO,
 		"CURRENT_RUN_ID": "1", "PR_HEAD_REPO": REPO, "PR_CREATED_AT": "2026-11-24T11:40:00Z",
+		"PR_CLOSED_AT": "2026-11-24T12:04:00Z", "PR_MERGED": "false",
 	})
 	env.update(env_extra)
 	res = subprocess.run(["bash", "-c", _step_run_body()], cwd=tmp_path, env=env, capture_output=True, text=True,
@@ -134,7 +135,30 @@ def test_malformed_created_at_keeps_linked_only_behaviour(tmp_path: Path) -> Non
 	assert cancelled == ["20"]
 
 
+def test_sibling_runs_started_by_the_close_are_left_alone(tmp_path: Path) -> None:
+	# AI Issue PR Status / post-merge AI Review start on the close event itself.
+	runs = [_run(21, created_at="2026-11-24T12:04:00Z"), _run(22, created_at="2026-11-24T12:04:05Z"),
+		_run(23, path=".github/workflows/ai-issue-pr-status.yml", created_at="2026-11-24T12:04:01Z")]
+	_, cancelled = _cancel(tmp_path, runs)
+	assert cancelled == []
+
+
+def test_merged_close_keeps_linked_only_behaviour(tmp_path: Path) -> None:
+	# The run that merged the PR still has post-merge work (labels, follow-up).
+	runs = [_run(24), _run(25, linked=[5800])]
+	_, cancelled = _cancel(tmp_path, runs, PR_MERGED="true")
+	assert cancelled == ["25"]
+
+
+def test_missing_closed_at_keeps_linked_only_behaviour(tmp_path: Path) -> None:
+	runs = [_run(26), _run(27, linked=[5800])]
+	_, cancelled = _cancel(tmp_path, runs, PR_CLOSED_AT="")
+	assert cancelled == ["27"]
+
+
 def test_job_env_wires_the_head_repository_and_creation_time() -> None:
 	text = WORKFLOW.read_text(encoding="utf-8")
 	assert "PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}" in text
 	assert "PR_CREATED_AT: ${{ github.event.pull_request.created_at }}" in text
+	assert "PR_CLOSED_AT: ${{ github.event.pull_request.closed_at }}" in text
+	assert "PR_MERGED: ${{ github.event.pull_request.merged }}" in text
