@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,6 +23,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "ci_final_status.sh"
+CLASSIFIER = REPO_ROOT / "scripts" / "ci_cancelled_rerun.py"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 QUICK_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci_pr_quick.yml"
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -45,6 +47,7 @@ def _run(
 	work = tmp_path / "work" / "scripts"
 	work.mkdir(parents=True)
 	shutil.copy(SCRIPT, work / "ci_final_status.sh")
+	shutil.copy(CLASSIFIER, work / "ci_cancelled_rerun.py")
 	# Stub gh_helpers.sh: gh_retry runs the command once.
 	(work / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
 	bin_dir = tmp_path / "bin"
@@ -53,9 +56,22 @@ def _run(
 	gh = bin_dir / "gh"
 	gh.write_text(
 		"#!/usr/bin/env python3\n"
-		"import json, os, sys\n"
+		"import json, os, re, sys\n"
 		"with open(os.environ['GH_CALL_LOG'], 'a', encoding='utf-8') as fh:\n"
 		"\tfh.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+		"endpoint = next((arg for arg in sys.argv[1:] if arg.startswith('repos/')), '')\n"
+		"if re.search(r'/attempts/[0-9]+/jobs$', endpoint):\n"
+		"\tif os.environ.get('GH_STUB_JOBS_EXIT', '0') != '0':\n"
+		"\t\tsys.exit(1)\n"
+		"\tprint(os.environ.get('GH_STUB_JOBS', ''))\n"
+		"\tsys.exit(0)\n"
+		"match = re.search(r'/check-runs/([0-9]+)/annotations$', endpoint)\n"
+		"if match:\n"
+		"\tvalue = json.loads(os.environ.get('GH_STUB_ANNOTATIONS', '{}')).get(match[1], [])\n"
+		"\tif value == 'error':\n"
+		"\t\tsys.exit(1)\n"
+		"\tprint(json.dumps(value))\n"
+		"\tsys.exit(0)\n"
 		"print('{\"secret_response\": true}')\n"
 		"sys.exit(int(os.environ.get('GH_STUB_EXIT', '0')))\n",
 		encoding="utf-8",
@@ -69,6 +85,7 @@ def _run(
 		"GITHUB_REPOSITORY": repo,
 		"GITHUB_SERVER_URL": "https://github.com",
 		"GITHUB_RUN_ID": run_id,
+		"GITHUB_RUN_ATTEMPT": "1",
 		"CI_FINAL_STATUS_SHA": sha,
 		"CI_FINAL_STATUS_AGGREGATE_OUTCOME": aggregate,
 		"CI_FINAL_STATUS_DOCS_ONLY_REQUESTED": docs_only_requested,
@@ -80,9 +97,14 @@ def _run(
 	return proc, calls
 
 
+def _post_calls(calls: list[list[str]]) -> list[list[str]]:
+	return [call for call in calls if "POST" in call]
+
+
 def _posted_state(calls: list[list[str]]) -> str:
-	assert len(calls) == 1, calls
-	fields = dict(arg.split("=", 1) for arg in calls[0] if "=" in arg and not arg.startswith("repos/"))
+	posts = _post_calls(calls)
+	assert len(posts) == 1, calls
+	fields = dict(arg.split("=", 1) for arg in posts[0] if "=" in arg and not arg.startswith("repos/"))
 	return fields["state"]
 
 
@@ -226,7 +248,9 @@ def test_status_steps_are_the_last_steps_of_lint() -> None:
 	assert checkout["with"]["fetch-depth"] == 1
 	assert checkout["with"]["persist-credentials"] is False
 	assert checkout["with"]["sparse-checkout-cone-mode"] is False
-	assert checkout["with"]["sparse-checkout"].split() == ["scripts/ci_final_status.sh", "scripts/gh_helpers.sh"]
+	assert checkout["with"]["sparse-checkout"].split() == [
+		"scripts/ci_final_status.sh", "scripts/gh_helpers.sh", "scripts/ci_cancelled_rerun.py",
+	]
 
 	assert status["if"] == "always() && !cancelled()"
 	assert status["continue-on-error"] is True
@@ -237,6 +261,8 @@ def test_status_steps_are_the_last_steps_of_lint() -> None:
 		"CI_FINAL_STATUS_AGGREGATE_OUTCOME": "${{ steps.ci_require_all_jobs.outcome }}",
 		"CI_FINAL_STATUS_DOCS_ONLY_REQUESTED": "${{ inputs.docs_only == 'true' }}",
 		"CI_FINAL_STATUS_DOCS_ONLY_OUTCOME": "${{ steps.docs_only_verify.outcome }}",
+		"CI_FINAL_STATUS_NEEDS_JSON": "${{ toJSON(needs) }}",
+		"CI_FINAL_STATUS_RUN_CANCELLED_SKIP_ENABLED": "${{ vars.CI_FINAL_STATUS_RUN_CANCELLED_SKIP_ENABLED || 'true' }}",
 	}
 
 
@@ -245,6 +271,7 @@ def test_lint_permissions_are_explicit() -> None:
 		"contents": "read",
 		"pull-requests": "read",
 		"actions": "read",
+		"checks": "read",
 		"statuses": "write",
 	}
 
@@ -267,3 +294,215 @@ def test_status_step_text_is_in_ci_without_yaml() -> None:
 	assert "run: bash .ci-final-status/scripts/ci_final_status.sh" in text
 	assert "id: ci_require_all_jobs" in text
 	assert "statuses: write" in QUICK_WORKFLOW.read_text(encoding="utf-8")
+
+
+# --- run-cancelled skip (issue #10131) ----------------------------------------
+
+TIMEOUT_TEXT = "The job running on runner GitHub Actions 12 has exceeded the maximum execution time of 30 minutes."
+CANCELED_TEXT = "The operation was canceled."
+
+
+def _needs(**results: str) -> str:
+	return json.dumps({name: {"result": result, "outputs": {}} for name, result in results.items()})
+
+
+def _job(name: str, job_id: int, conclusion: str = "cancelled", started: bool = False, status: str = "completed") -> dict:
+	item = {
+		"id": job_id, "name": name, "status": status, "conclusion": conclusion if status == "completed" else None,
+		"check_run_url": f"https://api.github.com/repos/o/r/check-runs/{job_id + 1000}",
+		"runner_id": job_id + 50 if started else None,
+		"steps": [{"name": "Set up job", "conclusion": "success"}] if started else [],
+	}
+	return item
+
+
+def _jobs_payload(jobs: list[dict]) -> str:
+	return json.dumps({"total_count": len(jobs), "jobs": jobs})
+
+
+def _lint_running() -> dict:
+	return _job("lint", 99, status="in_progress", started=True)
+
+
+CANCELLED_NEEDS = _needs(**{"static-checks": "cancelled", "orchestrate-poll": "cancelled", "tests-sync-quick": "skipped"})
+
+
+def _cancel_env(jobs: list[dict] | None = None, annotations: dict | None = None, **extra: str) -> dict[str, str]:
+	env = {"CI_FINAL_STATUS_NEEDS_JSON": CANCELLED_NEEDS}
+	if jobs is not None:
+		env["GH_STUB_JOBS"] = _jobs_payload(jobs)
+	if annotations is not None:
+		env["GH_STUB_ANNOTATIONS"] = json.dumps(annotations)
+	env.update(extra)
+	return env
+
+
+def _jobs_calls(calls: list[list[str]]) -> list[list[str]]:
+	return [call for call in calls if any(re.search(r"/attempts/[0-9]+/jobs$", arg) for arg in call)]
+
+
+def _annotation_calls(calls: list[list[str]]) -> list[list[str]]:
+	return [call for call in calls if any(arg.endswith("/annotations") for arg in call)]
+
+
+def test_needs_all_success_posts_success_without_jobs_read(tmp_path: Path) -> None:
+	proc, calls = _run(tmp_path, extra_env={"CI_FINAL_STATUS_NEEDS_JSON": _needs(**{"static-checks": "success"})})
+	assert proc.returncode == 0
+	assert _posted_state(calls) == "success"
+	assert _jobs_calls(calls) == []
+
+
+def test_needs_with_failure_posts_failure_without_jobs_read(tmp_path: Path) -> None:
+	needs = _needs(**{"static-checks": "failure", "orchestrate-poll": "cancelled"})
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env={"CI_FINAL_STATUS_NEEDS_JSON": needs})
+	assert proc.returncode == 0
+	assert _posted_state(calls) == "failure"
+	assert _jobs_calls(calls) == []
+
+
+def test_never_started_cancelled_jobs_post_nothing(tmp_path: Path) -> None:
+	jobs = [_job("static-checks", 1), _job("orchestrate-poll (0)", 2), _job("tests-sync-quick", 3, "skipped"), _lint_running()]
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs))
+	assert proc.returncode == 0, proc.stderr
+	assert _post_calls(calls) == []
+	assert len(_jobs_calls(calls)) == 1
+	assert _annotation_calls(calls) == []
+	lines = proc.stdout.splitlines()
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=run_cancelled" in lines
+	assert lines[-1] == f"CI_FINAL_STATUS sha={SHA} outcome=skipped reason=run_cancelled"
+
+
+def test_jobs_read_ignores_lint_final_ci_failed_and_budget_watch(tmp_path: Path) -> None:
+	jobs = [_job("static-checks", 1), _lint_running(), _job("final-ci-failed", 98, status="queued"),
+		_job("budget-watch", 97, status="in_progress", started=True)]
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs))
+	assert _post_calls(calls) == []
+	jobs_call = _jobs_calls(calls)[0]
+	assert jobs_call[:4] == ["api", "-X", "GET", "repos/o/r/actions/runs/4242/attempts/1/jobs"]
+
+
+def test_started_cancelled_job_with_timeout_annotation_posts_failure(tmp_path: Path) -> None:
+	jobs = [_job("static-checks", 1, started=True), _job("orchestrate-poll (0)", 2, started=True), _lint_running()]
+	annotations = {
+		"1001": [{"message": CANCELED_TEXT, "annotation_level": "failure"}],
+		"1002": [{"message": TIMEOUT_TEXT, "annotation_level": "failure"},
+			{"message": CANCELED_TEXT, "annotation_level": "failure"}],
+	}
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs, annotations))
+	assert _posted_state(calls) == "failure"
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=not_cancelled" in proc.stdout.splitlines()
+	assert "outcome=skipped" not in proc.stdout
+
+
+def test_started_cancelled_jobs_with_cancel_annotation_only_are_skipped(tmp_path: Path) -> None:
+	jobs = [_job("static-checks", 1, started=True), _job("orchestrate-poll (0)", 2, started=True), _lint_running()]
+	annotations = {key: [{"message": CANCELED_TEXT, "annotation_level": "failure"}] for key in ("1001", "1002")}
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs, annotations))
+	assert _post_calls(calls) == []
+	assert len(_annotation_calls(calls)) == 2
+	assert proc.stdout.splitlines()[-1] == f"CI_FINAL_STATUS sha={SHA} outcome=skipped reason=run_cancelled"
+
+
+def test_more_started_cancelled_jobs_than_the_cap_post_failure(tmp_path: Path) -> None:
+	jobs = [_job(f"job-{index}", index, started=True) for index in range(1, 12)] + [_lint_running()]
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs))
+	assert _posted_state(calls) == "failure"
+	assert _annotation_calls(calls) == []
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=unverified" in proc.stdout.splitlines()
+
+
+def test_jobs_read_failure_posts_failure(tmp_path: Path) -> None:
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env([], GH_STUB_JOBS_EXIT="1"))
+	assert _posted_state(calls) == "failure"
+	# One retry of the jobs read, then fail closed.
+	assert len(_jobs_calls(calls)) == 2
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=unverified" in proc.stdout.splitlines()
+
+
+def test_annotation_read_failure_posts_failure(tmp_path: Path) -> None:
+	jobs = [_job("static-checks", 1, started=True), _lint_running()]
+	_proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs, {"1001": "error"}))
+	assert _posted_state(calls) == "failure"
+
+
+def test_unlisted_running_job_posts_failure(tmp_path: Path) -> None:
+	jobs = [_job("static-checks", 1), _job("other", 5, status="in_progress", started=True), _lint_running()]
+	_proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs))
+	assert _posted_state(calls) == "failure"
+
+
+@pytest.mark.parametrize("value", ["false", "False", "0", "no"])
+def test_switch_off_posts_failure_without_jobs_read(tmp_path: Path, value: str) -> None:
+	jobs = [_job("static-checks", 1), _lint_running()]
+	proc, calls = _run(tmp_path, aggregate="failure",
+		extra_env=_cancel_env(jobs, CI_FINAL_STATUS_RUN_CANCELLED_SKIP_ENABLED=value))
+	assert _posted_state(calls) == "failure"
+	assert _jobs_calls(calls) == []
+	assert "check=run_cancelled" not in proc.stdout
+
+
+def test_later_attempt_reads_its_own_jobs_and_skips(tmp_path: Path) -> None:
+	jobs = [_job("static-checks", 1), _lint_running()]
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs, GITHUB_RUN_ATTEMPT="2"))
+	assert _post_calls(calls) == []
+	jobs_calls = _jobs_calls(calls)
+	assert len(jobs_calls) == 1
+	assert jobs_calls[0][3] == "repos/o/r/actions/runs/4242/attempts/2/jobs"
+	assert proc.stdout.splitlines()[-1] == f"CI_FINAL_STATUS sha={SHA} outcome=skipped reason=run_cancelled"
+
+
+@pytest.mark.parametrize("attempt", ["", "0", "x", "12345"])
+def test_invalid_attempt_posts_failure_without_jobs_read(tmp_path: Path, attempt: str) -> None:
+	proc, calls = _run(tmp_path, aggregate="failure",
+		extra_env=_cancel_env([_job("static-checks", 1)], GITHUB_RUN_ATTEMPT=attempt))
+	assert _posted_state(calls) == "failure"
+	assert _jobs_calls(calls) == []
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=unverified" in proc.stdout.splitlines()
+
+
+def test_started_cancelled_jobs_with_hand_cancel_annotation_are_skipped(tmp_path: Path) -> None:
+	jobs = [_job("static-checks", 1, started=True), _job("orchestrate-poll (0)", 2, started=True), _lint_running()]
+	annotations = {key: [{"message": "The run was canceled by @someone.", "annotation_level": "failure"},
+		{"message": CANCELED_TEXT, "annotation_level": "failure"}] for key in ("1001", "1002")}
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs, annotations))
+	assert _post_calls(calls) == []
+	assert proc.stdout.splitlines()[-1] == f"CI_FINAL_STATUS sha={SHA} outcome=skipped reason=run_cancelled"
+
+
+def test_classifier_timeout_logs_reason_and_posts_failure(tmp_path: Path) -> None:
+	# A `timeout` stub that exits 124 with no output stands in for the 90 s
+	# limit firing, so the classifier never runs.
+	stub_dir = tmp_path / "timeout-stub"
+	stub_dir.mkdir()
+	stub = stub_dir / "timeout"
+	stub.write_text("#!/usr/bin/env bash\nexit 124\n", encoding="utf-8")
+	stub.chmod(0o755)
+	path = f"{stub_dir}:{tmp_path / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env([_job("static-checks", 1)], PATH=path))
+	assert proc.returncode == 0, proc.stderr
+	assert _posted_state(calls) == "failure"
+	assert _jobs_calls(calls) == []
+	lines = proc.stdout.splitlines()
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=none reason=timeout" in lines
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=none" not in lines
+	assert "outcome=skipped" not in proc.stdout
+
+
+@pytest.mark.parametrize("needs", ["not json", "[]", "{}", "null", ""])
+def test_invalid_needs_json_posts_failure_without_request(tmp_path: Path, needs: str) -> None:
+	_proc, calls = _run(tmp_path, aggregate="failure", extra_env={"CI_FINAL_STATUS_NEEDS_JSON": needs})
+	assert _posted_state(calls) == "failure"
+	assert len(calls) == 1
+
+
+def test_missing_run_id_never_reads_jobs(tmp_path: Path) -> None:
+	proc, calls = _run(tmp_path, aggregate="failure", run_id="", extra_env=_cancel_env([_job("static-checks", 1)]))
+	assert _posted_state(calls) == "failure"
+	assert _jobs_calls(calls) == []
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=unverified" in proc.stdout.splitlines()
+
+
+def test_success_state_never_reads_jobs(tmp_path: Path) -> None:
+	_proc, calls = _run(tmp_path, aggregate="success", extra_env=_cancel_env([_job("static-checks", 1)]))
+	assert _posted_state(calls) == "success"
+	assert _jobs_calls(calls) == []
