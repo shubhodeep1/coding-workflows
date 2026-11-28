@@ -5,13 +5,26 @@
   "entry_id": "processed_command_10270_7241443242_approved",
   "issue_number": 10270,
   "metadata": {
+    "branch": "ai/issue-10270",
+    "changed_files": [
+      ".github/workflows/alert-self-fix.yml",
+      ".github/workflows/alert-triage.yml",
+      "changelog.d/10270-alert-break-glass-template-and-codex-pin.md",
+      "prompts/_templates/mode-alert-break-glass-review.txt",
+      "tests/test_codex_agent_isolation_contract.py"
+    ],
+    "issue_number": 10270,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10270",
+    "pr_number": 10271,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10271",
+    "run_attempt": "1",
+    "run_id": "46159710719",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/46159710719"
   },
   "run_attempt": 1,
   "run_id": "46159710719",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-28T15:26:28Z",
+  "status": "completed",
+  "timestamp": "2026-11-28T15:38:48Z",
   "workflow": "implement"
 }
