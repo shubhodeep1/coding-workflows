@@ -29335,6 +29335,7 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	) in stage_helper_body
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_docs_only_paths.sh"' in stage_helper_body
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} ci_sync_quick.sh"' in stage_helper_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} alert_inbox_capture.sh truncate_to_utf8_byte_cap.py"' in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
 	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." not in stage_helper_body

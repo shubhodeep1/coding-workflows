@@ -6,6 +6,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 ## Phase prompts
 
 - `prompts/mode-activation-verify.txt` — Role: activation verifier. Goal: grade work that just merged LIVE or DORMANT and list each gap as code or operator (port P4).
+- `prompts/mode-alert-triage.txt` — Role: ALERT TRIAGE investigator of the coding-workflows automation (alert triage plan Phase 2). Goal: classify one group of captured workflow alerts as noise, environmental, healable, pipeline_blocked or unsure, from the evidence and the code, and reply with the JSON the host routes.
 - `prompts/mode-check-failure-triage.txt` — Role: CI failure triager. Goal: analyze a failing pull-request check and write a GitHub issue body describing the likely root cause and suggested fix.
 - `prompts/mode-clarify-respond.txt` — You are an AI assistant resolving clarification questions on behalf of the project orchestrator.
 - `prompts/mode-clarify.txt` — Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
@@ -47,12 +48,14 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Workflows
 
+- `.github/workflows/alert-inbox-intake.yml` — GitHub Actions workflow: Alert Inbox Intake (stores one `repository_dispatch` `alert-inbox` record on the `ai/alert-inbox` branch; alert triage Phase 1).
+- `.github/workflows/alert-triage.yml` — GitHub Actions workflow: Alert Triage.
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/auto-release-stable.yml` — GitHub Actions workflow: Auto release stable.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
-- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick; per-push static checks for every PR (`static-checks` in mode `quick`), while the full `ci.yml` suite runs once per PR head after review (cut-ci-runner-time Phase 4, #9563).
+- `.github/workflows/ci_pr_quick.yml` — GitHub Actions workflow: CI quick (per-push `static-checks` in `quick` mode for every PR; the full suite runs once per head after review through ci.yml's workflow_dispatch final run; cut-ci-runner-time Phase 4, #9563). Its check-runs are named `quick / <job>`; it never reports `lint`.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/claude-engine-smoke.yml` — GitHub Actions workflow: Claude engine smoke (dispatch-only self-test of the Claude engine plumbing).
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
@@ -119,6 +122,10 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
 - `scripts/ai_memory.py` — CLI for AI memory operations used by GitHub workflows.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
+- `scripts/alert_inbox_capture.sh` — Sourced by `tg_helpers.sh`: reads the trusted `.github/ai/alert_inbox.json` switches and sends one `alert-inbox` `repository_dispatch` per captured WARNING/ERROR/CRITICAL alert (alert triage Phase 1, default off).
+- `scripts/alert_inbox_store.sh` — Body of `alert-inbox-intake.yml`: validates an `alert_inbox.v1` record and writes it to `ai/alert-inbox` with the Contents API (409 retry, branch bootstrap). A 409 is retried up to 3 times with jittered backoff.
+- `scripts/alert_triage.py` — Hourly alert triage, the deterministic half: groups captured alerts, applies the ledger and tracking checks, collects bounded evidence, renders the model input, parses the reply and decides each group's route (alert triage Phase 2, default off).
+- `scripts/alert_triage_route.sh` — Body of `alert-triage.yml`: fetches the alert inbox, runs the triage model per group and performs the routes `scripts/alert_triage.py` decides (heal report, self-fix dispatch, escalation; dry-run by default).
 - `scripts/analyze_soft_errors.py` — Soft-error log analyzer for the release-gate smoke test.
 - `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
 - `scripts/apply_analysis_on_main.sh` — Dispatch one pending workflow-analysis document to the orchestrator.
@@ -145,7 +152,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
-- `scripts/ci_docs_only_paths.sh` — The list of paths no test job or CI step reads; a PR whose changed files are all on it gets a final CI run with `docs_only=true` (static checks and lint only, test jobs skipped; #9566). `classify` decides whether a PR's changed files are all docs-only and `verify` re-checks that in `ci.yml`'s `lint` job (log prefix `CI_DOCS_ONLY_GATE`, Refs #9528).
+- `scripts/ci_docs_only_paths.sh` — Docs-only final CI path list (paths no test job or CI step reads): `classify` prints `docs_only` or `code <reason>` for NUL-separated paths, `verify` checks a docs-only run's merge in ci.yml's `lint` job; a PR whose changed files are all on it gets a final CI run with `docs_only=true` (static checks and lint only, test jobs skipped; log prefix `CI_DOCS_ONLY_GATE`, #9566). Refs #9528.
 - `scripts/ci_final_merge_ref_fresh.sh` — Final-CI step after each `refs/pull/<n>/merge` checkout: pins the run's base (the base tip when the run was dispatched, the same in every job), refreshes a merge ref GitHub has not recomputed, else merges the PR head into the pinned base locally (`outcome=merged_locally`); fails the job only on a conflict or a merge it cannot build (final-CI self-heal).
 - `scripts/ci_final_status.sh` — Last step of `ci.yml`'s `lint` job: posts the `ci/final` commit status (`success` only when every CI job succeeded and, in a docs-only run, the docs-only verify step did too; `failure` otherwise; nothing when cancelled) on the tested head, because GitHub does not evaluate the dispatched final CI's check-runs for a PR. Always exits 0; a failed post leaves the PR blocked (log prefix `CI_FINAL_STATUS`, Refs #9939).
 - `scripts/ci_sync_quick.sh` — Sync-quick final CI for merge-base freshness updates: `classify` says whether every overlap path is a CI-wiring file, `full-ci-green` whether the approved head passed a full final CI run; ci.yml's `tests-sync-quick` re-checks both (#9642).
@@ -325,9 +332,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
+- `scripts/review_final_ci_failed.sh` — Body of ci.yml's `final-ci-failed` job: sends a PR whose final CI run (full suite, dispatched once per head after review) failed back to review/autofix by posting one head-bound `ai:final-ci-failed:v1` marker per head and dispatching the PR's review workflow once (log prefix `REVIEW_FINAL_CI_FAILED`; cut-ci-runner-time Phase 4, #9535). It runs when a final-CI dispatch run's `lint` fails and is gated by `FINAL_CI_FAILED_REDISPATCH_ENABLED`.
+- `scripts/review_final_ci_sweep.sh` — Review sweep safety net: each tick hands open PR heads with a successful `ai-review/head-gate` but no final CI run to `_pr_ensure_final_ci` (cut-ci-runner-time Phase 4, #9535). Runs as the review sweep step "Ensure the final CI run on reviewed PR heads" (`REVIEW_FINAL_CI_WORKFLOW`, `FINAL_CI_SWEEP_MAX_PER_TICK`).
 - `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
-- `scripts/review_final_ci_failed.sh` — Marks a PR head whose final CI run failed (`ai:final-ci-failed:v1`) and dispatches the PR's review workflow so the autofix can fix it (run by the `final-ci-failed` job of `ci.yml`, Refs #9528).
-- `scripts/review_final_ci_sweep.sh` — Review-sweep safety net that hands review-passed heads without a final CI run to `_pr_ensure_final_ci` (run by `review_autofix_sweep.yml`, Refs #9528).
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.

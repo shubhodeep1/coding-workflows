@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -311,6 +312,21 @@ def test_errexit_abort_in_branch_switch_is_recorded(layout: Layout) -> None:
 	_assert_no_temp_files(layout)
 
 
+# Issue #9405: on ubuntu-26.04 runners `date +%s%3N` sometimes printed a
+# reading one digit short, so the fetch start and the exit-trap clock came
+# from different fallbacks and fetch_ms went negative -> `na`. The clock
+# must read bash's EPOCHREALTIME first. `date` is a shell function (not a
+# PATH shim) because the pre-push gate mounts temp dirs noexec.
+FAKE_SHORT_DATE = """date() {
+  case "${1:-}" in
+    +%s%3N) printf '170000000000\\n'; return 0 ;;
+    +%s) printf '1700000000\\n'; return 0 ;;
+  esac
+  return 1
+}
+"""
+
+
 # A `date` that goes backwards on every call, like `date +%s%3N` on the
 # ubuntu-26.04 runners (Rust uutils coreutils, #9240 / #9375).
 BACKWARDS_DATE_FUNCTION = """date() {
@@ -320,6 +336,28 @@ BACKWARDS_DATE_FUNCTION = """date() {
   printf '%s\\n' "${fake_date_now}"
 }
 """
+
+
+def _now_ms_function() -> str:
+	src = SCRIPT_PATH.read_text(encoding="utf-8")
+	match = re.search(r"^review_head_checkout_now_ms\(\)\n\{\n.*?^\}\n", src, re.M | re.S)
+	assert match, "review_head_checkout_now_ms not found"
+	return match.group(0)
+
+
+def _run_now_ms(prelude: str) -> str:
+	script = FAKE_SHORT_DATE + _now_ms_function() + prelude + "review_head_checkout_now_ms\n"
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+	return result.stdout.strip()
+
+
+def test_now_ms_prefers_epochrealtime_over_short_date_reading() -> None:
+	value = _run_now_ms("")
+	assert re.fullmatch(r"[0-9]{13,}", value), value
+	assert abs(int(value) - time.time() * 1000) < 5000, value
+	# Without EPOCHREALTIME a short `date +%s%3N` reading is rejected and the
+	# whole-seconds fallback is used.
+	assert _run_now_ms("unset EPOCHREALTIME\n") == "1700000000000"
 
 
 def test_elapsed_fields_ignore_a_date_clock_that_goes_backwards(layout: Layout) -> None:

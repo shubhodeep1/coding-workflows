@@ -2826,6 +2826,41 @@ through `clarify → plan → implement → review`.
   the issue with the raw context; an empty model response files an
   `inconclusive` issue with a fallback body; a failed `gh issue create` or a
   crash of either workflow sends a Telegram CRITICAL.
+- **Hourly alert triage reports (`alert_triage`, alert triage Phase 2, Refs #9394):**
+  `.github/workflows/alert-triage.yml` sends a `healable` alert group as
+  `source_kind: alert_triage`. The intake accepts it only from this repository
+  with a verified OIDC identity of `alert-triage.yml` (manual, binding-only and
+  identity-less reports are rejected), keys the fingerprint on the alert group
+  (`alert-triage:<fp>`), scopes the issue to the host-resolved
+  `alert_workflow_path` plus the reporting run, labels it `ai:workflow-heal` and
+  `ai:alert-triage`, and passes the triage diagnosis to the prompt only as
+  untrusted evidence. Kill switch: `HEAL_ALERT_TRIAGE_KIND_ENABLED=false`.
+
+### Alert inbox capture (Phase 1)
+
+The Telegram Bot API cannot read the bot's own messages back, so alerts are
+captured where they are sent. `tg_send_msg` in `scripts/tg_helpers.sh` reads
+two switches from `.github/ai/alert_inbox.json` (trusted support checkout
+only, both `false` by default) through `scripts/alert_inbox_capture.sh`:
+
+| Switches | WARNING / ERROR | CRITICAL | DEBUG |
+|---|---|---|---|
+| capture off | Telegram (unchanged) | Telegram (unchanged) | Telegram (unchanged) |
+| capture on, routing off | Telegram and inbox | Telegram and inbox | Telegram |
+| capture on, routing on | inbox only; Telegram if capture fails | Telegram and inbox | Telegram |
+
+- A capture is one `repository_dispatch` (`alert-inbox`, `curl --max-time 10`)
+  to coding-workflows with the `GH_TOKEN` already in the job; it never fails the
+  caller. An alert routed only to the inbox returns an empty message id.
+- `.github/workflows/alert-inbox-intake.yml` runs `scripts/alert_inbox_store.sh`,
+  which validates the `alert_inbox.v1` record (`source_repo` must be in
+  `.github/ai/consumer_repos.json` or coding-workflows) and writes
+  `inbox/<YYYY>/<MM>/<DD>/<HH>/<epoch_ms>-<owner-repo>-<run_id>-<id8>.json` on
+  the branch `ai/alert-inbox` (created from an empty root commit on first use;
+  never force-pushed or deleted).
+- `tg_send_msg_direct` sends without capture, for messages the triage system
+  sends about itself; `tg_send_report_msg` is never captured.
+- Logs use the `ALERT_INBOX` prefix. Rollback: set both switches to `false`.
 
 ## Required Secrets
 
@@ -3196,7 +3231,28 @@ through `clarify → plan → implement → review`.
 | `THINKING_LEVEL_WORKFLOW_HEAL` | `high` | coding-workflows only. Reasoning effort for the heal diagnosis call. |
 | `VERBOSITY_WORKFLOW_HEAL` | `low` | coding-workflows only. Codex verbosity for the heal diagnosis call. |
 | `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED` | `true` | Close a CI-repair issue before planning (#7216), or in implement once its CI-triage pull request is no longer open (#7540), when that pull request already merged with the failing check passing |
+| `capture_enabled` (`.github/ai/alert_inbox.json`) | `false` | coding-workflows config, not a repository variable. Alert inbox capture (alert triage Phase 1): when `true`, `tg_send_msg` sends WARNING, ERROR and CRITICAL alerts to the `alert-inbox` intake as well as Telegram. Read only from the trusted support checkout; a missing or invalid file means off. |
+| `route_warning_error_to_inbox` (`.github/ai/alert_inbox.json`) | `false` | coding-workflows config. With `capture_enabled`, WARNING and ERROR alerts go only to the inbox (Telegram when capture fails); CRITICAL still goes to Telegram. |
 | `SCOPE_GUARD_AUTO_ALLOW_PATHS` | `changelog.d/*.md,tests/fixtures/**` | Globs the general `files_touched` scope guard auto-allows outside the issue's list (automation and `.git` paths never); `none` turns it off. See main table above. |
+| `ALERT_TRIAGE_ENABLED` | `false` | Run the hourly alert triage (`.github/workflows/alert-triage.yml`, alert triage Phase 2, Refs #9394); the job is skipped unless `true` |
+| `ALERT_TRIAGE_DRY_RUN` | `true` | Alert triage logs its decisions (`ALERT_TRIAGE` prefix) and commits done markers and ledger occurrences, but dispatches nothing and sends no Telegram; `false` acts |
+| `ALERT_TRIAGE_MAX_ALERTS` | `30` | Unprocessed inbox records read per alert triage run, oldest first |
+| `ALERT_TRIAGE_MAX_EVIDENCE_GETS` | `5` | GitHub GETs (jobs list and job log) alert triage spends on evidence per run, largest and oldest groups first |
+| `ALERT_TRIAGE_SELF_FIX_ENABLED` | `false` | Dispatch `alert-self-fix.yml` for a host-decided `pipeline_blocked` alert group; off (or the workflow missing) escalates instead |
+| `ALERT_TRIAGE_HEAL_STALL_HOURS` | `6` | An `ai:alert-triage` heal issue for the same fingerprint open longer than this makes the group `pipeline_blocked` |
+| `ALERT_TRIAGE_ISSUE_ESCALATE_HOURS` | `24` | Escalate (once) an `ai:alert-triage` issue open longer than this |
+| `ALERT_TRIAGE_PR_ESCALATE_HOURS` | `6` | Escalate (once) an `ai:alert-self-fix` pull request open longer than this |
+| `ALERT_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL`, then `openai/gpt-6-sol` | Codex model of the `ALERT_TRIAGE` role's fallback (the Claude model comes from `.github/ai/claude_engine.json`) |
+| `THINKING_LEVEL_ALERT_TRIAGE` | `high` | Codex reasoning effort of the `ALERT_TRIAGE` role |
+| `HEAL_ALERT_TRIAGE_KIND_ENABLED` | `true` | Heal intake accepts `alert_triage` reports (only from this repository's `alert-triage.yml` OIDC identity); `false` skips them |
+| `ALERT_TRIAGE_BREAK_GLASS_ENABLED` | `false` | Turns on the hourly break-glass scan of `alert-self-fix.yml`: it posts `ai-review/head-gate=success` on an `ai:alert-self-fix` PR head only when all six conditions hold (ownership, no gate status after 60 minutes or an `error` one, never over a `failure`; allowed paths; an independent `ALERT_BREAK_GLASS_REVIEWER` approve; the full test suite in the credential-free gate container; the daily cap) |
+| `ALERT_TRIAGE_BREAK_GLASS_MAX_PER_DAY` | `2` | Break-glass passes allowed in any 24 hours (integer 0-10; an invalid value means 0, no pass) |
+| `ALERT_TRIAGE_BREAK_GLASS_TEST_TIMEOUT_MINUTES` | `90` | Timeout of the break-glass full test-suite run (condition 5) in the gate container |
+| `ALERT_SELF_FIX_EDITOR_TIMEOUT_SECS` | `3600` | Wall clock of the alert self-fix editor (`IMPLEMENT` role, Claude then codex fallback) |
+| `ALERT_SELF_FIX_GATE_TIMEOUT_MINUTES` | `20` | Timeout of the pre-push affected-test gate that verifies an alert self-fix before its PR opens |
+| `AI_ENGINE_ALERT_BREAK_GLASS_REVIEWER` | — | Per-role engine override (`claude`/`codex`) of the read-only break-glass reviewer; empty uses `.github/ai/claude_engine.json` (Claude, codex fallback) |
+| `ALERT_SELF_FIX_MODEL` | `WORKFLOW_EDITOR_MODEL`, then `openai/gpt-6-sol` | Codex model of the alert self-fix editor's fallback (`IMPLEMENT` role; the Claude model comes from `.github/ai/claude_engine.json`) |
+| `ALERT_BREAK_GLASS_MODEL` | `WORKFLOW_EDITOR_MODEL`, then `openai/gpt-6-sol` | Codex model of the `ALERT_BREAK_GLASS_REVIEWER` role's fallback (the Claude model comes from `.github/ai/claude_engine.json`) |
 | `CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED` | `true` | Conflict resolver (`scripts/review_conflict_prepare.sh`, `scripts/review_conflict_resolve.sh`): a file the PR changed only as part of a repo-wide sweep (every changed line also changed in another file of the PR, at most `CONFLICT_MODIFY_DELETE_MAX_CHANGED_LINES` lines, script-only, default `20`) and that a squash-merged base PR `(#N)` deleted takes the deletion without a model call, and the dropped edit is posted on the PR (`<!-- ai:modify-delete-take-base:v1 -->`). Not on `orchestrator/project-*` integration-sync heads: merged sub-issue fingerprints are checked only later, so those paths go to the model (`Modify/delete take-base: ... outcome=skip reason=integration_sync`). Other modify/delete paths reach the model with stage context, and on this repo a conflicted path the model left untouched (without listing it under `Conflicts resolved:`) retries inside the loop. `false` restores the previous behaviour. |
 | `PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED` | `true` | Plan (`scripts/plan_nothing_to_implement_verify.sh`, #10015): when planning blocks with "work is already on the planning ref; nothing to implement", run the plan's `ACCEPTANCE:` tests (else the `tests/` paths in the issue body) on the planning ref in the credential-free gate container and close the issue as completed with the `ai:implement-success-noop:v1` marker when every listed test passes; otherwise the blocked comment gains one `Verify:` line. `false` keeps today's blocked comment. |
 | `OPERATOR_STEP_DAILY_TICK_ENABLED` | `true` | Daily operator-step tick (`scripts/operator_step_daily_tick.sh`, `workflow-log-analysis.yml` job `collect-logs`, `0 6 * * *` schedule only, #10118): runs `operator_step_issue.py tick --observable` with `GH_PAT`, ticking `ai:operator-step` entries without a source commit when every unticked step is observably done (a named PR merged into `stable`, Allow auto-merge on, a successful credentialed review or audit run in the last 7 days, or a conditional step that is not a gate; a credential step that hands the secret to someone else, names another repository (or a value that is not a literal `OWNER/REPO`) with `--repo`/`-R`, or targets an organisation, environment, app or user secret stays open), then closes the tracker when no unticked step is left. `false` restores today's behaviour (no daily tick, no API call). |
