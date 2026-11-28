@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:990-996 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: When a reissue goes ahead with an open CI-owner PR, `_own_pr_retire_ops` keeps that PR and the replacement is routed onto its head `ai/issue-<item>` (scripts/unblock_actions.py:1632-1636). The source issue is then closed as `not_planned` (:1679-1683), so the G4 source-issue guard treats the kept PR as an orphan (scripts/pr_checks_lib.sh:3949-3952; scripts/review_merge_train.sh:2476-2480 and :2955-2962) and the PR can never get the merge lease.\n  WHY: The tick reads issue `<n>` as NOT_PLANNED, logs `MERGE_LEASE ... outcome=skipped reason=source_issue_not_planned` and removes the wait label. The update-mode gate refuses a lease with \"no grant will come\" (scripts/pr_checks_lib.sh:2622-2625), and `_pr_base_fresh_for_merge` returns `lease_wait` forever, so the integration branch is stranded with no re-dispatch path. The source severity was MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cWhen a `reissue` goes ahead and the issue has an open own pull request that is not green, the operations also comment on that pull request and close it.\u201d\n  expected_change_site: `scripts/unblock_actions.py:_own_pr_retire_ops` and the `reissue` branch of `plan()`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `_own_pr_retire_ops` explicitly skips the open CI-owner PR when its number matches `keep` (lines 989-995), and `tests/test_unblock_judge.py:test_open_ci_owner_pr_is_never_retired` confirms the pending own PR stays open. The re-issue still closes the source issue as not planned (`plan()`, lines 1679-1683), after which the lease guard treats the retained `ai/issue-<n>` PR as orphaned and skips it (`scripts/pr_checks_lib.sh`, lines 3949-3952; `scripts/review_merge_train.sh`, lines 2476-2480).\n- requirement: G4 gets MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, default true.\n  expected_change_site: .github/workflows/review_autofix_sweep.yml, in the environment for the final-CI base-sync step that calls the update-mode lease gate\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: That step forwards MERGE_LEASE_REVOKE_ENABLED but not MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED. The base-sync path can renew a merge lease, and the helper treats an unset source-issue switch as enabled, so setting the repository switch to false does not disable the guard on this path.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: G4 gets MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, default true.\n  Expected change site: .github/workflows/review_autofix_sweep.yml, in the environment for the final-CI base-sync step that calls the update-mode lease gate.\n  Evidence of absence: That step forwards MERGE_LEASE_REVOKE_ENABLED but not MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED. The base-sync path can renew a merge lease, while the helper treats an unset source-issue switch as enabled. Thus setting the repository switch to false does not disable the guard on this path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cWhen a `reissue` goes ahead and the issue has an open own pull request that is not green, the operations also comment on that pull request and close it.\u201d\n  Expected change site: `scripts/unblock_actions.py:_own_pr_retire_ops` and the `reissue` branch of `plan()`.\n  Evidence of absence: `_own_pr_retire_ops` explicitly skips the open CI-owner PR when its number matches `keep` (lines 989-995). `tests/test_unblock_judge.py:test_open_ci_owner_pr_is_never_retired` confirms that a pending own PR in this case remains open. The re-issue still closes the source issue as not planned (`plan()`, lines 1679-1683), after which the lease guard treats the retained `ai/issue-<n>` PR as orphaned and skips it (`scripts/pr_checks_lib.sh`, lines 3949-3952; `scripts/review_merge_train.sh`, lines 2476-2480). This leaves an own PR that the task requires retiring open while preventing it from using the lease path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_actions.py:990-996 | severity=MAJOR | confidence=4\n  Line or code reference: `_own_pr_retire_ops` keep rule at scripts/unblock_actions.py:990-996 (`keep = owner[\"number\"] if owner and owner.get(\"state\") == \"open\" else None`), the reissue path at scripts/unblock_actions.py:1632-1636 (`- Integration branch: \\`{owner['head_ref']}\\``) and :1679-1683 (source issue closed as `not_planned`), versus the G4 guard selection at scripts/pr_checks_lib.sh:3949-3952 and the tick skips at scripts/review_merge_train.sh:2476-2480 and :2955-2962.\n  PROBLEM: A reissue with an open CI-owner PR routes the replacement onto that PR's head (`ai/issue-<item>`, scripts/unblock_actions.py:1636), and `_own_pr_retire_ops` keeps it (scripts/unblock_actions.py:990) while the source issue is closed as `not_planned` (:1679-1683). The G4 guard then classifies the PR as an orphan (head matches `^ai/issue-[1-9][0-9]{0,8}$` at scripts/pr_checks_lib.sh:3951), so the tick skips and unlabels it and the update-mode gate refuses a lease with \"no grant will come\" (scripts/pr_checks_lib.sh:2622-2625). The PR can never merge.\n  WHY: Reissue of an issue whose `ai/issue-<n>` PR is open but not green (the #9519/#9562 shape, exercised by `test_open_ci_owner_pr_is_never_retired`) \u2192 replacement implements on `ai/issue-<n>` \u2192 PR re-enters the lease queue \u2192 tick reads issue `<n>` as NOT_PLANNED \u2192 `MERGE_LEASE ... outcome=skipped reason=source_issue_not_planned`, wait label removed \u2192 `_pr_base_fresh_for_merge` returns `lease_wait` forever \u2192 the PR stalls at the lease with no re-dispatch path.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7a2c745a848763b0b7ee0eea03ef7e3a4ae720b8ba09df1b15443929ecfd335e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10246,
+    "run_id": "46147370519",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46147370519",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128134309_8db3709517",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10246,
+    "run_id": "46147370519"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T13:43:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
