@@ -431,9 +431,16 @@ def test_wait_steps_fail_fast_on_an_empty_issue_title() -> None:
 
 
 def _phase7_helper() -> str:
-	match = re.search(r"\n(          phase7_list_cancel_runs\(\) \{.*?\n          \})\n", _workflow(), re.S)
+	# Issue #10225: the listing goes through phase7_gh_api_read (gh_api_retry
+	# from scripts/gh_helpers.sh), so take the wrappers along with it and
+	# source the real helper from the checkout (cwd is REPO_ROOT).
+	match = re.search(
+		r"\n(          phase7_rate_limit_max_wait\(\) \{.*?\n          phase7_list_cancel_runs\(\) \{.*?\n          \})\n",
+		_workflow(),
+		re.S,
+	)
 	assert match is not None, "phase7_list_cancel_runs() not found in test-and-mark-stable.yml"
-	return textwrap.dedent(match.group(1))
+	return "source scripts/gh_helpers.sh\n" + textwrap.dedent(match.group(1))
 
 
 def test_phase7_listing_survives_two_transient_failures() -> None:
@@ -458,7 +465,10 @@ def test_phase7_listing_survives_two_transient_failures() -> None:
 	assert 'rc=0 json={"workflow_runs":[{"id":99}]}' in result.stdout
 	assert len(calls) == 3
 	assert all("internal-cancel-on-pr-close.yml/runs?per_page=10" in c for c in calls)
-	assert result.stdout.count("::warning::") == 2
+	# Issue #10225: gh_api_retry logs its retries on stderr; a listing that
+	# succeeds prints no warning on stdout.
+	assert result.stdout.count("::warning::") == 0
+	assert result.stderr.count("GH_API_RETRY outcome=retry kind=transient") == 2, result.stderr
 
 
 def test_phase7_listing_fails_after_three_consecutive_failures() -> None:
@@ -477,6 +487,7 @@ def test_phase7_listing_fails_after_three_consecutive_failures() -> None:
 	result, calls = _invoke({}, body, source_helper=False)
 	assert "rc=1" in result.stdout, result.stdout + result.stderr
 	assert len(calls) == 3
+	assert "::warning::Listing internal-cancel-on-pr-close runs failed (gh_api_retry rc=1)." in result.stdout
 
 
 def test_phase7_run_listings_all_go_through_the_retry_helper() -> None:

@@ -604,6 +604,11 @@ jobs:
       test_passed: ${{ steps.verify.outputs.passed }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
+      # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
+      # further away gives up at once. 600 is the helpers' own default.
+      GH_RETRY_MAX_ATTEMPTS: "3"
+      GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -675,10 +680,18 @@ jobs:
 
     steps:
       - name: Record GH_PAT budget at e2e-smoke-test start
-        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
-        # request; the quota keys read unknown (same pattern as validate).
+        # Issue #9887 / #10225: one /rate_limit read (it does not use up the
+        # core allowance), inline as no checkout exists yet; unknown when the
+        # read fails or looks wrong. Never fails the job.
         run: |
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-smoke-test remaining=unknown reset=unknown used_in_job=unknown"
+          gpb_reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || gpb_reading=""
+          if [[ "${gpb_reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r gpb_remaining gpb_reset <<< "${gpb_reading}"
+            printf '%s %s\n' "${gpb_remaining}" "${gpb_reset}" > "${RUNNER_TEMP}/gh_pat_budget_e2e-smoke-test" || true
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-smoke-test remaining=${gpb_remaining} reset=${gpb_reset} used_in_job=unknown"
+          else
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-smoke-test remaining=unknown reset=unknown used_in_job=unknown"
+          fi
 
       # Checkout repo at the start so `if: always()` steps (per-phase
       # soft-error analyser invocations, Cleanup test artifacts) can find
@@ -772,6 +785,7 @@ jobs:
 
       - name: Validate prerequisites
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           # Phase 4 (#8004) and Phase 4b cap their deadline extensions
           # against the job's start, so the serial budget below still holds.
@@ -852,7 +866,7 @@ jobs:
             exit 1
           fi
           # Verify we can access the repo
-          gh api "repos/${TEST_REPO}" --jq '.full_name' \
+          gh_api_retry "repos/${TEST_REPO}" --jq '.full_name' \
             || { echo "::error::Cannot access ${TEST_REPO}. Check GH_PAT permissions."; exit 1; }
 
       # Fast-fail the hottest orchestrate-poll regression before the
@@ -1265,6 +1279,7 @@ jobs:
           # (tests/test_workflow_file_size_limit.py, #8248).
           IMPL_CREATED_AFTER_INPUT: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
           echo "Inactivity timeout: ${PHASE_TIMEOUT} minutes"
@@ -1668,7 +1683,7 @@ jobs:
                   # Keep the existing PR recheck and confirm the run list again
                   # after it: a newly indexed active run must not be missed.
                   sleep "$POLL_INTERVAL"
-                  PR_RECHECK=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
+                  PR_RECHECK=$(gh_api_retry "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
                     --jq '.[0].number // empty' 2>/dev/null) || PR_RECHECK=""
                   if [ -n "$PR_RECHECK" ]; then
                     continue
@@ -1754,11 +1769,12 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           # Create the label if missing (404 is non-fatal; addLabels below
           # will fail-soft and the gate will skip — verify-bait-removed
           # then surfaces the regression as a hard failure).
-          gh api "repos/${TEST_REPO}/labels/force-review" >/dev/null 2>&1 || \
+          gh_api_retry "repos/${TEST_REPO}/labels/force-review" >/dev/null 2>&1 || \
             gh api "repos/${TEST_REPO}/labels" \
               -f name="force-review" \
               -f color="d93f0b" \
@@ -1775,6 +1791,7 @@ jobs:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           BRANCH="ai/issue-${ISSUE_NUMBER}"
           BAIT_MARKER="E2E_EDITOR_BAIT_${GITHUB_RUN_ID}"
@@ -1789,9 +1806,9 @@ jobs:
           # stale parent SHA, getting a 409 conflict from the contents
           # PUT and skipping the editor exercise.
           for stability_attempt in 1 2 3 4 5; do
-            HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null) || HEAD_A=""
+            HEAD_A=$(gh_api_retry "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null) || HEAD_A=""
             sleep 3
-            HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null) || HEAD_B=""
+            HEAD_B=$(gh_api_retry "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null) || HEAD_B=""
             if [ -n "${HEAD_A}" ] && [ "${HEAD_A}" = "${HEAD_B}" ]; then
               echo "  ✓ PR head SHA stable at ${HEAD_A:0:7} (attempt ${stability_attempt})"
               break
@@ -1818,7 +1835,7 @@ jobs:
           # (b) someone manually merges the PR mid-test, or (c) a
           # future auto-merge path is added that doesn't honor the
           # e2e-smoke-test label.
-          PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null) || PR_META=""
+          PR_META=$(gh_api_retry "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null) || PR_META=""
           PR_STATE=$(printf '%s' "${PR_META}" | jq -r '.state // ""' 2>/dev/null || echo "")
           PR_MERGED=$(printf '%s' "${PR_META}" | jq -r '.merged // false' 2>/dev/null || echo "false")
           if [ "${PR_STATE}" = "closed" ] || [ "${PR_MERGED}" = "true" ]; then
@@ -1851,7 +1868,7 @@ jobs:
           # The implementer should have set the canary to exactly 3 lines.
           # We fetch its SHA so we can PUT a 4-line
           # version that adds one removable bait line at the end.
-          BLOB_JSON=$(gh api "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" 2>/dev/null) || BLOB_JSON=""
+          BLOB_JSON=$(gh_api_retry "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" 2>/dev/null) || BLOB_JSON=""
           if [ -z "${BLOB_JSON}" ] || [ "${BLOB_JSON}" = "null" ]; then
             echo "::warning::Could not fetch ${CANARY_PATH} from branch ${BRANCH} — skipping bait injection (editor exercise not enforced this run)"
             echo "status=skipped" >> "$GITHUB_OUTPUT"
@@ -2369,13 +2386,14 @@ jobs:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           echo "Setting up review-blocked simulation..."
 
           # 6a: Label the test issue as review-blocked (simulating autofix exhaustion)
           echo "Labeling issue #${ISSUE_NUMBER} as ai:review-blocked..."
           # Ensure the label exists before applying it (idempotent: check then create)
-          if ! gh api "repos/${TEST_REPO}/labels/ai:review-blocked" >/dev/null 2>&1; then
+          if ! gh_api_retry "repos/${TEST_REPO}/labels/ai:review-blocked" >/dev/null 2>&1; then
             gh api "repos/${TEST_REPO}/labels" \
               -X POST \
               -f name="ai:review-blocked" \
@@ -2402,7 +2420,7 @@ jobs:
           \`ai:orchestrator-tracking\`"
 
           # Ensure the label exists before creating the issue (idempotent: check then create)
-          if ! gh api "repos/${TEST_REPO}/labels/ai:orchestrator-tracking" >/dev/null 2>&1; then
+          if ! gh_api_retry "repos/${TEST_REPO}/labels/ai:orchestrator-tracking" >/dev/null 2>&1; then
             gh api "repos/${TEST_REPO}/labels" \
               -X POST \
               -f name="ai:orchestrator-tracking" \
@@ -3070,15 +3088,33 @@ jobs:
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
           IMPL_CREATED_AFTER_INPUT: ${{ steps.create-issue.outputs.created_after }}
         run: |
+          # #10225: rate-limit-aware reads. always() cleanup stays best-effort:
+          # without the checkout's helper the reads fall back to plain gh api,
+          # which prints the reply only on success (no error body on stdout).
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry() { local cleanup_fallback_out; cleanup_fallback_out="$(gh api "$@")" || return 1; printf '%s\n' "${cleanup_fallback_out}"; }
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          # #10225 review: this step runs inside the finalization reserve and
+          # makes up to 12 reads. Each read recomputes its rate-limit wait cap
+          # as 1/8 of the job time left (at most 600 s); with 3 attempts it
+          # waits at most twice, so one read takes at most a quarter of what is
+          # left and all of them together never use it up before the writes.
+          cleanup_gh_api_read() {
+            local cleanup_rl_wait="${GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS:-600}"
+            if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]]; then
+              cleanup_rl_wait=$(( (E2E_JOB_STARTED_EPOCH + E2E_JOB_TIMEOUT_MINUTES * 60 - $(date +%s)) / 8 ))
+              [ "${cleanup_rl_wait}" -ge 0 ] || cleanup_rl_wait=0
+              [ "${cleanup_rl_wait}" -le 600 ] || cleanup_rl_wait=600
+            fi
+            GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS="${cleanup_rl_wait}" gh_api_retry "$@"
+          }
           echo "Cleaning up E2E test artifacts..."
 
           # Close PR without merging (idempotent — Phase 7 already closed
           # it for the cancel_on_pr_close test; if Phase 7 was skipped this
           # path closes the PR for the first time).
           if [ -n "${PR_NUMBER}" ]; then
-            EXISTING_PR_BODY="$(_safe_gh_jq "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' || echo "")"
+            EXISTING_PR_BODY="$(cleanup_gh_api_read "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' || echo "")"
             NEW_PR_BODY="${EXISTING_PR_BODY}
 
           ---
@@ -3106,7 +3142,7 @@ jobs:
               # first, up to 10 pages; stop at a short or failed page.
               LATE_IMPL_RUN_IDS=""
               for LATE_IMPL_PAGE in 1 2 3 4 5 6 7 8 9 10; do
-                LATE_IMPL_PAGE_JSON="$(gh api "repos/${TEST_REPO}/actions/runs?per_page=100&page=${LATE_IMPL_PAGE}${LATE_IMPL_CREATED_FILTER}" 2>/dev/null)" \
+                LATE_IMPL_PAGE_JSON="$(cleanup_gh_api_read "repos/${TEST_REPO}/actions/runs?per_page=100&page=${LATE_IMPL_PAGE}${LATE_IMPL_CREATED_FILTER}" 2>/dev/null)" \
                   && printf '%s' "${LATE_IMPL_PAGE_JSON}" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 \
                   || { echo "::warning::Implement run lookup failed for issue #${ISSUE_NUMBER} (page ${LATE_IMPL_PAGE})"; break; }
                 LATE_IMPL_RUN_IDS+=" $(printf '%s' "${LATE_IMPL_PAGE_JSON}" | jq -r '.workflow_runs[] | select((.name // "") | test("Implement"; "i")) | select(.display_title == env.ISSUE_TITLE) | select(.status != "completed") | .id' 2>/dev/null || true)"
@@ -3122,7 +3158,7 @@ jobs:
                 fi
               done
             fi
-            LATE_PR_NUMBERS="$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=100" --jq '.[].number' 2>/dev/null || true)"
+            LATE_PR_NUMBERS="$(cleanup_gh_api_read "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=100" --jq '.[].number' 2>/dev/null || true)"
             for LATE_PR in ${LATE_PR_NUMBERS}; do
               [[ "${LATE_PR}" =~ ^[1-9][0-9]*$ ]] || continue
               # Close only, keeping the PR body as diagnosis evidence; the
@@ -3181,7 +3217,7 @@ jobs:
             # A failed listing must not read as "no active runs": warn and
             # skip the "No active" line so a leaked run stays visible.
             CLEANUP_DISPATCH_LIST_FAILED=0
-            if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&branch=${BRANCH}&per_page=20" \
+            if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(cleanup_gh_api_read "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&branch=${BRANCH}&per_page=20" \
               --jq '.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.id) \(.status) \(.event) \(.head_branch)"')"; then
               echo "Warning: could not list dispatch review runs on ${BRANCH}; an active dispatch review run may be left uncancelled"
               CLEANUP_DISPATCH_REVIEW_RUN_IDS=""
@@ -3225,11 +3261,17 @@ jobs:
 
       - name: Record GH_PAT budget at e2e-smoke-test end
         if: always()
-        # Issue #9887: no rate_limit read (no added GitHub request); only the
-        # job's own gh call count.
+        # Issue #9887 / #10225: gh_pat_budget reads the job's own gh call count,
+        # then makes one /rate_limit read (it does not use up the core
+        # allowance); used_in_job comes from the start snapshot. Without the
+        # helper the line keeps unknown. Never fails the job.
         run: |
-          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-smoke-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh && source scripts/gh_helpers.sh >/dev/null 2>&1 && declare -F gh_pat_budget >/dev/null; then
+            gh_pat_budget end test-and-mark-stable e2e-smoke-test "${RUNNER_TEMP}/gh_pat_budget_e2e-smoke-test" || true
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-smoke-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1b: Script correctness validation — runs parallel with E2E
@@ -3670,15 +3712,29 @@ jobs:
     timeout-minutes: 280
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
+      # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
+      # further away gives up at once. 600 is the helpers' own default. No
+      # step reads through them today; the bound is set for a future one.
+      GH_RETRY_MAX_ATTEMPTS: "3"
+      GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Record GH_PAT budget at workflow-log-analysis-test start
-        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
-        # request; the quota keys read unknown (same pattern as validate).
+        # Issue #9887 / #10225: one /rate_limit read (it does not use up the
+        # core allowance), inline as no checkout exists yet; unknown when the
+        # read fails or looks wrong. Never fails the job.
         run: |
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=unknown reset=unknown used_in_job=unknown"
+          gpb_reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || gpb_reading=""
+          if [[ "${gpb_reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r gpb_remaining gpb_reset <<< "${gpb_reading}"
+            printf '%s %s\n' "${gpb_remaining}" "${gpb_reset}" > "${RUNNER_TEMP}/gh_pat_budget_workflow-log-analysis-test" || true
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=${gpb_remaining} reset=${gpb_reset} used_in_job=unknown"
+          else
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=unknown reset=unknown used_in_job=unknown"
+          fi
 
       - name: Validate prerequisites
         run: |
@@ -3818,11 +3874,17 @@ jobs:
 
       - name: Record GH_PAT budget at workflow-log-analysis-test end
         if: always()
-        # Issue #9887: no rate_limit read (no added GitHub request); only the
-        # job's own gh call count.
+        # Issue #9887 / #10225: gh_pat_budget reads the job's own gh call count,
+        # then makes one /rate_limit read (it does not use up the core
+        # allowance); used_in_job comes from the start snapshot. Without the
+        # helper the line keeps unknown. Never fails the job.
         run: |
-          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh && source scripts/gh_helpers.sh >/dev/null 2>&1 && declare -F gh_pat_budget >/dev/null; then
+            gh_pat_budget end test-and-mark-stable workflow-log-analysis-test "${RUNNER_TEMP}/gh_pat_budget_workflow-log-analysis-test" || true
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
   # ──────────────────────────────────────────────────────────────────
   # Job 1c-2: Orphan workflows live-dispatch test
   # Dispatches each user-facing workflow that the e2e smoke test does
@@ -3838,9 +3900,11 @@ jobs:
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     # Sum of remaining in-step DEADLINEs (validation-refresh 5520s +
-    # update_workflows 600s + memory-maintenance 2400s = 8520s = 142m);
-    # step limits 95 + 18 + 45 = 158m; the analyser steps below have no
-    # step limit, so the DEADLINE sum (142m) is what fits the 165m cap.
+    # update_workflows 600s + memory-maintenance 2400s = 8520s = 142m),
+    # plus three independent 1500s dispatch rate-limit caps (issue #10205)
+    # = 4500s, so 8520s + 4500s = 13020s (217m); step limits
+    # 119 + 37 + 67 = 223m; the analyser steps below have no step limit,
+    # so the DEADLINE-plus-cap sum (217m) is what fits the 240m cap.
     # The validation-refresh watch covers that workflow's whole 60-minute
     # `refresh` job budget (run 39694107256 timed out after 40m on a run
     # that was still in_progress) plus a 1800s runner-queue allowance
@@ -3851,13 +3915,19 @@ jobs:
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
     # call; log1 of run #25200117236 observed ~40s per phase, so 3
     # phases under OpenRouter latency variance can plausibly reach
-    # 6–9m), runner queueing, and step setup. Cap at 165m so a runaway
+    # 6–9m), runner queueing, and step setup. Cap at 240m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
     # still be killed within a sensible budget. Down from 360m before
     # the workflow-log-analysis split-out.
-    timeout-minutes: 165
+    timeout-minutes: 240
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
+      # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
+      # further away gives up at once. 600 is the helpers' own default. No
+      # step reads through them today; the bound is set for a future one.
+      GH_RETRY_MAX_ATTEMPTS: "3"
+      GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -3866,10 +3936,18 @@ jobs:
       DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
       - name: Record GH_PAT budget at orphan-workflows-test start
-        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
-        # request; the quota keys read unknown (same pattern as validate).
+        # Issue #9887 / #10225: one /rate_limit read (it does not use up the
+        # core allowance), inline as no checkout exists yet; unknown when the
+        # read fails or looks wrong. Never fails the job.
         run: |
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orphan-workflows-test remaining=unknown reset=unknown used_in_job=unknown"
+          gpb_reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || gpb_reading=""
+          if [[ "${gpb_reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r gpb_remaining gpb_reset <<< "${gpb_reading}"
+            printf '%s %s\n' "${gpb_remaining}" "${gpb_reset}" > "${RUNNER_TEMP}/gh_pat_budget_orphan-workflows-test" || true
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orphan-workflows-test remaining=${gpb_remaining} reset=${gpb_reset} used_in_job=unknown"
+          else
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orphan-workflows-test remaining=unknown reset=unknown used_in_job=unknown"
+          fi
 
       - name: Validate prerequisites
         run: |
@@ -3935,12 +4013,14 @@ jobs:
       # deterministic ones whose failures still gate the release.
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
-        timeout-minutes: 95
+        timeout-minutes: 119
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: 4s sleep + 5520s completion + 110s + 60s margin = 5694s <= 95 min (5700s).
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "110"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # 4s sleep + 5520s completion + 1500s + 60s margin = 7084s <= 119 min (7140s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           set -euo pipefail
           sleep 4
@@ -4031,12 +4111,15 @@ jobs:
 
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
         id: dispatch_update_workflows
-        timeout-minutes: 18
+        timeout-minutes: 37
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: 4s sleep + 600s completion + 410s + 60s margin = 1074s <= 18 min (1080s).
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "410"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # 4s sleep + 600s completion + 1500s + 60s margin = 2164s <= 37 min (2220s).
+          # Release gate run 45927857867 needed 505s here (the 410s cap failed it).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           set -euo pipefail
           sleep 4
@@ -4116,12 +4199,14 @@ jobs:
 
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
-        timeout-minutes: 45
+        timeout-minutes: 67
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: 4s sleep + 2400s completion + 230s + 60s margin = 2694s <= 45 min (2700s).
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "230"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # 4s sleep + 2400s completion + 1500s + 60s margin = 3964s <= 67 min (4020s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           set -euo pipefail
           sleep 4
@@ -4218,11 +4303,17 @@ jobs:
 
       - name: Record GH_PAT budget at orphan-workflows-test end
         if: always()
-        # Issue #9887: no rate_limit read (no added GitHub request); only the
-        # job's own gh call count.
+        # Issue #9887 / #10225: gh_pat_budget reads the job's own gh call count,
+        # then makes one /rate_limit read (it does not use up the core
+        # allowance); used_in_job comes from the start snapshot. Without the
+        # helper the line keeps unknown. Never fails the job.
         run: |
-          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orphan-workflows-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh && source scripts/gh_helpers.sh >/dev/null 2>&1 && declare -F gh_pat_budget >/dev/null; then
+            gh_pat_budget end test-and-mark-stable orphan-workflows-test "${RUNNER_TEMP}/gh_pat_budget_orphan-workflows-test" || true
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orphan-workflows-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1d: Orchestrate decompose end-to-end test
@@ -4233,9 +4324,18 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The dispatch step has no step limit: its 3000s watch + 1500s
+    # rate-limit cap (issue #10205) + 360s for the other steps = 4860s = 81m.
+    # Issue #10225: + 1200s for one gh_api_retry read that waits out a
+    # rate-limit reset ((3 - 1) x 600 s) = 6060s = 101m.
+    timeout-minutes: 101
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
+      # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
+      # further away gives up at once. 600 is the helpers' own default.
+      GH_RETRY_MAX_ATTEMPTS: "3"
+      GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -4247,10 +4347,18 @@ jobs:
       child_issues: ${{ steps.dispatch.outputs.child_issues }}
     steps:
       - name: Record GH_PAT budget at orchestrate-decompose-test start
-        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
-        # request; the quota keys read unknown (same pattern as validate).
+        # Issue #9887 / #10225: one /rate_limit read (it does not use up the
+        # core allowance), inline as no checkout exists yet; unknown when the
+        # read fails or looks wrong. Never fails the job.
         run: |
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=unknown reset=unknown used_in_job=unknown"
+          gpb_reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || gpb_reading=""
+          if [[ "${gpb_reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r gpb_remaining gpb_reset <<< "${gpb_reading}"
+            printf '%s %s\n' "${gpb_remaining}" "${gpb_reset}" > "${RUNNER_TEMP}/gh_pat_budget_orchestrate-decompose-test" || true
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=${gpb_remaining} reset=${gpb_reset} used_in_job=unknown"
+          else
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=unknown reset=unknown used_in_job=unknown"
+          fi
 
       - name: Validate prerequisites
         run: |
@@ -4298,10 +4406,14 @@ jobs:
         id: dispatch
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: no step limit; 3000s completion + 240s leaves 360s of the 60 min job for its other steps.
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "240"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # no step limit; 3000s completion + 1500s + 1200s for one gh_api_retry reset wait (#10225)
+          # leaves 360s of the 101 min job (6060s) for its other steps.
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           WF_FILE="internal-orchestrate.yml"
           # Two-issue project description with NO dependency between issues so
@@ -4416,7 +4528,7 @@ jobs:
           TRACKING_ERR_FILE=$(mktemp)
           TRACKING_DEADLINE=$(( $(date +%s) + 90 ))
           while [ "$(date +%s)" -lt "${TRACKING_DEADLINE}" ]; do
-            TRACKING_NUMBER=$(gh api \
+            TRACKING_NUMBER=$(gh_api_retry \
               "repos/${TEST_REPO}/issues?state=open&labels=ai:orchestrator-tracking&since=${DISPATCH_START_ISO}&per_page=50" \
               --jq "[.[] | select(.body // \"\" | contains(\"${GITHUB_RUN_ID}\"))] | sort_by(.created_at) | last | .number // empty" \
               2>"${TRACKING_ERR_FILE}") || TRACKING_NUMBER=""
@@ -4435,14 +4547,14 @@ jobs:
             CAP_LOG_FAILS=0
             ORCH_RUN_ID=$(sed -n 's/^run_id=//p' "$GITHUB_OUTPUT" | tail -n 1)
             if [[ "${ORCH_RUN_ID}" =~ ^[0-9]+$ ]]; then
-              if ! CAP_JOB_IDS=$(gh api "repos/${TEST_REPO}/actions/runs/${ORCH_RUN_ID}/jobs?per_page=100" --jq '.jobs[].id' 2>/dev/null); then
+              if ! CAP_JOB_IDS=$(gh_api_retry "repos/${TEST_REPO}/actions/runs/${ORCH_RUN_ID}/jobs?per_page=100" --jq '.jobs[].id' 2>/dev/null); then
                 CAP_JOB_IDS=""
                 echo "::warning::Could not list the jobs of orchestrate run ${ORCH_RUN_ID} while checking for a Claude capacity wait"
               fi
               for JOB_ID in ${CAP_JOB_IDS}; do
                 [[ "${JOB_ID}" =~ ^[0-9]+$ ]] || continue
                 # Job logs carry ANSI codes; gh refuses them without the flag.
-                if ! JOB_LOG=$(gh api --allow-escape-sequences "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null); then
+                if ! JOB_LOG=$(gh_api_retry --allow-escape-sequences "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null); then
                   CAP_LOG_FAILS=$((CAP_LOG_FAILS + 1))
                   continue
                 fi
@@ -4460,7 +4572,7 @@ jobs:
             fi
             # TEST_REPO's own poller files its capacity tracker in TEST_REPO.
             if [ -z "${CAP_EVIDENCE}" ]; then
-              CAP_TRACKERS=$(gh api "repos/${TEST_REPO}/issues?state=open&labels=ai:provider-outage&per_page=20" \
+              CAP_TRACKERS=$(gh_api_retry "repos/${TEST_REPO}/issues?state=open&labels=ai:provider-outage&per_page=20" \
                 --jq '[.[] | select(.pull_request == null) | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR")) | select((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))] | length' 2>/dev/null) || CAP_TRACKERS="0"
               if [[ "${CAP_TRACKERS}" =~ ^[0-9]+$ ]] && [ "${CAP_TRACKERS}" -gt 0 ]; then
                 CAP_EVIDENCE="capacity_tracker"
@@ -4501,7 +4613,7 @@ jobs:
           CHILDREN_ERR_FILE=$(mktemp)
           CHILDREN_DEADLINE=$(( $(date +%s) + 90 ))
           while [ "$(date +%s)" -lt "${CHILDREN_DEADLINE}" ]; do
-            CHILDREN_JSON=$(gh api \
+            CHILDREN_JSON=$(gh_api_retry \
               "repos/${TEST_REPO}/issues?state=all&labels=ai:orchestrator-managed&since=${DISPATCH_START_ISO}&per_page=100" \
               --jq "[.[] | select(.pull_request | not) | select(.body // \"\" | contains(\"Tracking issue: #${TRACKING_NUMBER}\")) | .number]" \
               2>"${CHILDREN_ERR_FILE}") || CHILDREN_JSON="[]"
@@ -4550,6 +4662,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           DISPATCHED_RUN_ID: ${{ steps.dispatch.outputs.dispatched_run_id }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           # Phase 0: a bootstrap still queued when the watcher timed out would
           # create the project after this cleanup (gates 43445515854,
           # 43590943288, 43708007145). Cancel it, then pick up a tracking issue
@@ -4608,7 +4721,7 @@ jobs:
           # call returns 422 "Query must include 'is:issue' or
           # 'is:pull-request'", and the JSON error body would otherwise
           # word-split into bogus issue numbers in the loop below.
-          STRAGGLERS=$(gh api \
+          STRAGGLERS=$(gh_api_retry \
             "search/issues?q=repo:${TEST_REPO}+is:issue+state:open+in:title+${MARKER_Q}" \
             --jq '[.items[].number] | join(" ")' 2>/dev/null) || STRAGGLERS=""
           for n in ${STRAGGLERS}; do
@@ -4624,13 +4737,13 @@ jobs:
             PROJECT_BRANCH="orchestrator/project-${TRACKING_NUMBER}"
             OWNER="${TEST_REPO%%/*}"
             PROJECT_PRS=""
-            PROJECT_PRS_PAGE=$(gh api "repos/${TEST_REPO}/pulls?state=open&base=${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null) || PROJECT_PRS_PAGE=""
+            PROJECT_PRS_PAGE=$(gh_api_retry "repos/${TEST_REPO}/pulls?state=open&base=${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null) || PROJECT_PRS_PAGE=""
             PROJECT_PRS+=" ${PROJECT_PRS_PAGE}"
-            PROJECT_PRS_PAGE=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null) || PROJECT_PRS_PAGE=""
+            PROJECT_PRS_PAGE=$(gh_api_retry "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:${PROJECT_BRANCH}&per_page=100" --jq '.[].number' 2>/dev/null) || PROJECT_PRS_PAGE=""
             PROJECT_PRS+=" ${PROJECT_PRS_PAGE}"
             for m in $(echo "${CHILDREN}" | tr ',' ' ') ${STRAGGLERS}; do
               [[ "${m}" =~ ^[1-9][0-9]*$ ]] || continue
-              PROJECT_PRS_PAGE=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:ai/issue-${m}&per_page=100" --jq '.[].number' 2>/dev/null) || PROJECT_PRS_PAGE=""
+              PROJECT_PRS_PAGE=$(gh_api_retry "repos/${TEST_REPO}/pulls?state=open&head=${OWNER}:ai/issue-${m}&per_page=100" --jq '.[].number' 2>/dev/null) || PROJECT_PRS_PAGE=""
               PROJECT_PRS+=" ${PROJECT_PRS_PAGE}"
             done
             for p in $(printf '%s\n' ${PROJECT_PRS} | grep -E '^[1-9][0-9]*$' | sort -u); do
@@ -4659,11 +4772,17 @@ jobs:
 
       - name: Record GH_PAT budget at orchestrate-decompose-test end
         if: always()
-        # Issue #9887: no rate_limit read (no added GitHub request); only the
-        # job's own gh call count.
+        # Issue #9887 / #10225: gh_pat_budget reads the job's own gh call count,
+        # then makes one /rate_limit read (it does not use up the core
+        # allowance); used_in_job comes from the start snapshot. Without the
+        # helper the line keeps unknown. Never fails the job.
         run: |
-          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh && source scripts/gh_helpers.sh >/dev/null 2>&1 && declare -F gh_pat_budget >/dev/null; then
+            gh_pat_budget end test-and-mark-stable orchestrate-decompose-test "${RUNNER_TEMP}/gh_pat_budget_orchestrate-decompose-test" || true
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1e: Validate (reusable) standalone fixture dispatch
@@ -4676,14 +4795,24 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # The job cap must exceed the dispatch step's 35-minute cap (the
+    # The job cap must exceed the dispatch step's 57-minute cap (the
     # watcher's 1800s registration/completion waits plus poll and retry
     # headroom) and leave time for the always() soft-error analyser.
     # At 30 minutes the job was cancelled before the watcher could
     # report its own timeout (run 37624152181).
-    timeout-minutes: 45
+    # Issue #10225: unchanged, as no step of this job reads through
+    # gh_api_retry / gh_retry (the dispatch uses DISPATCH_RATE_LIMIT_MAX_WAIT_SECS).
+    # The step holds a 1500s dispatch rate-limit cap (issue #10205), so
+    # 35 -> 57 minutes and the job keeps its 10-minute gap: 45 -> 67.
+    timeout-minutes: 67
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
+      # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
+      # further away gives up at once. 600 is the helpers' own default. No
+      # step reads through them today; the bound is set for a future one.
+      GH_RETRY_MAX_ATTEMPTS: "3"
+      GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -4692,10 +4821,18 @@ jobs:
       DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
       - name: Record GH_PAT budget at validate-standalone-test start
-        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
-        # request; the quota keys read unknown (same pattern as validate).
+        # Issue #9887 / #10225: one /rate_limit read (it does not use up the
+        # core allowance), inline as no checkout exists yet; unknown when the
+        # read fails or looks wrong. Never fails the job.
         run: |
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=validate-standalone-test remaining=unknown reset=unknown used_in_job=unknown"
+          gpb_reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || gpb_reading=""
+          if [[ "${gpb_reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r gpb_remaining gpb_reset <<< "${gpb_reading}"
+            printf '%s %s\n' "${gpb_remaining}" "${gpb_reset}" > "${RUNNER_TEMP}/gh_pat_budget_validate-standalone-test" || true
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=validate-standalone-test remaining=${gpb_remaining} reset=${gpb_reset} used_in_job=unknown"
+          else
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=validate-standalone-test remaining=unknown reset=unknown used_in_job=unknown"
+          fi
 
       - name: Validate prerequisites
         run: |
@@ -4739,13 +4876,15 @@ jobs:
 
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
-        # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
-        timeout-minutes: 35
+        # 1800s watcher wait + one 20s poll + 1500s rate-limit cap + gh retry backoff headroom.
+        timeout-minutes: 57
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: 1800s completion + 20s poll + 180s + 64s margin = 2064s <= 35 min (2100s).
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "180"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # 1800s completion + 20s poll + 1500s + 64s margin = 3384s <= 57 min (3420s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           set -euo pipefail
           WF_FILE="internal-validate.yml"
@@ -4843,11 +4982,17 @@ jobs:
 
       - name: Record GH_PAT budget at validate-standalone-test end
         if: always()
-        # Issue #9887: no rate_limit read (no added GitHub request); only the
-        # job's own gh call count.
+        # Issue #9887 / #10225: gh_pat_budget reads the job's own gh call count,
+        # then makes one /rate_limit read (it does not use up the core
+        # allowance); used_in_job comes from the start snapshot. Without the
+        # helper the line keeps unknown. Never fails the job.
         run: |
-          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=validate-standalone-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh && source scripts/gh_helpers.sh >/dev/null 2>&1 && declare -F gh_pat_budget >/dev/null; then
+            gh_pat_budget end test-and-mark-stable validate-standalone-test "${RUNNER_TEMP}/gh_pat_budget_validate-standalone-test" || true
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=validate-standalone-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1f: Clarify-rejects-unsolvable negative test
@@ -4859,18 +5004,33 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Issue #10225: 30 + 20; in-step deadlines are 90 s + 1,500 s and one
+    # read may wait out a rate-limit reset ((3 - 1) x 600 s).
+    timeout-minutes: 50
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
+      # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
+      # further away gives up at once. 600 is the helpers' own default.
+      GH_RETRY_MAX_ATTEMPTS: "3"
+      GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
       - name: Record GH_PAT budget at clarify-rejects-unsolvable-test start
-        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
-        # request; the quota keys read unknown (same pattern as validate).
+        # Issue #9887 / #10225: one /rate_limit read (it does not use up the
+        # core allowance), inline as no checkout exists yet; unknown when the
+        # read fails or looks wrong. Never fails the job.
         run: |
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=unknown reset=unknown used_in_job=unknown"
+          gpb_reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || gpb_reading=""
+          if [[ "${gpb_reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r gpb_remaining gpb_reset <<< "${gpb_reading}"
+            printf '%s %s\n' "${gpb_remaining}" "${gpb_reset}" > "${RUNNER_TEMP}/gh_pat_budget_clarify-rejects-unsolvable-test" || true
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=${gpb_remaining} reset=${gpb_reset} used_in_job=unknown"
+          else
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=unknown reset=unknown used_in_job=unknown"
+          fi
 
       - name: Validate prerequisites
         run: |
@@ -4915,11 +5075,12 @@ jobs:
       - name: Create unsolvable issue
         id: create
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           # Capture the latest clarify.yml run id BEFORE creating the
           # issue so the post-create capture step can find the new
           # run via `id > PRE_CLARIFY_RUN_ID`.
-          PRE_CLARIFY_RUN_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null) || PRE_CLARIFY_RUN_ID=""
+          PRE_CLARIFY_RUN_ID=$(gh_api_retry "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null) || PRE_CLARIFY_RUN_ID=""
           # #9797 (run 44490333814): a failed `gh api` prints its error body
           # to stdout, and a failure with empty stdout would otherwise pass
           # as a real 0, so a nonzero exit clears the value. Write only digits to
@@ -4954,6 +5115,7 @@ jobs:
           PRE: ${{ steps.create.outputs.pre_clarify_run_id }}
           PRE_READ_FAILED: ${{ steps.create.outputs.pre_clarify_run_id_read_failed }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           # Poll up to 90s for clarify.yml to register a new run id
           # past the pre-create snapshot. Fail-open: emits empty
@@ -4970,7 +5132,7 @@ jobs:
           DEADLINE=$(( $(date +%s) + 90 ))
           NEW_ID=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=10" \
+            NEW_ID=$(gh_api_retry "repos/${TEST_REPO}/actions/workflows/clarify.yml/runs?per_page=10" \
               --jq "[.workflow_runs[] | select(.id > ${PRE:-0})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null) || NEW_ID=""
             [[ "${NEW_ID}" =~ ^[0-9]+$ ]] || NEW_ID=""
             [ -n "${NEW_ID}" ] && break
@@ -4988,6 +5150,7 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ steps.create.outputs.issue_number }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           DEADLINE=$(( $(date +%s) + 1500 ))
           OUTCOME=""
@@ -5015,7 +5178,7 @@ jobs:
           CLARIFY_FIRST_SEEN=0
           CLARIFY_PERSIST_REQUIRED_SECS=60
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+            LABELS=$(gh_api_retry "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null) || LABELS=""
             echo "  labels: ${LABELS:-none}"
             # Definitively-terminal rejection labels — single observation
@@ -5028,7 +5191,7 @@ jobs:
             # Bot comment-based rejection signal: clarify posts a comment
             # when it asks for clarification; look for the canonical
             # marker so we still pass even if labels were never applied.
-            BODY=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=20" \
+            BODY=$(gh_api_retry "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=20" \
               --jq '[.[] | select(.user.type == "Bot" or (.user.login | endswith("[bot]"))) | .body] | join("\n")' 2>/dev/null) || BODY=""
             if echo "${BODY}" | grep -qiE 'NEEDS_CLARIFICATION|clarification.*(needed|required)|cannot proceed without'; then
               OUTCOME="rejected"
@@ -5146,11 +5309,17 @@ jobs:
 
       - name: Record GH_PAT budget at clarify-rejects-unsolvable-test end
         if: always()
-        # Issue #9887: no rate_limit read (no added GitHub request); only the
-        # job's own gh call count.
+        # Issue #9887 / #10225: gh_pat_budget reads the job's own gh call count,
+        # then makes one /rate_limit read (it does not use up the core
+        # allowance); used_in_job comes from the start snapshot. Without the
+        # helper the line keeps unknown. Never fails the job.
         run: |
-          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh && source scripts/gh_helpers.sh >/dev/null 2>&1 && declare -F gh_pat_budget >/dev/null; then
+            gh_pat_budget end test-and-mark-stable clarify-rejects-unsolvable-test "${RUNNER_TEMP}/gh_pat_budget_clarify-rejects-unsolvable-test" || true
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1g: Alternate-model happy-path run
@@ -5173,9 +5342,16 @@ jobs:
           && !inputs.dry_run
           && vars.E2E_ALT_MODEL_ENABLED != 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Issue #10225: 90 + 20; the wait budget is 4,500 s and one read may
+    # wait out a rate-limit reset ((3 - 1) x 600 s).
+    timeout-minutes: 110
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
+      # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
+      # further away gives up at once. 600 is the helpers' own default.
+      GH_RETRY_MAX_ATTEMPTS: "3"
+      GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -5213,10 +5389,18 @@ jobs:
       ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-6-sol' }}
     steps:
       - name: Record GH_PAT budget at e2e-alt-model-test start
-        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
-        # request; the quota keys read unknown (same pattern as validate).
+        # Issue #9887 / #10225: one /rate_limit read (it does not use up the
+        # core allowance), inline as no checkout exists yet; unknown when the
+        # read fails or looks wrong. Never fails the job.
         run: |
-          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-alt-model-test remaining=unknown reset=unknown used_in_job=unknown"
+          gpb_reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null)" || gpb_reading=""
+          if [[ "${gpb_reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r gpb_remaining gpb_reset <<< "${gpb_reading}"
+            printf '%s %s\n' "${gpb_remaining}" "${gpb_reset}" > "${RUNNER_TEMP}/gh_pat_budget_e2e-alt-model-test" || true
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-alt-model-test remaining=${gpb_remaining} reset=${gpb_reset} used_in_job=unknown"
+          else
+            echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-alt-model-test remaining=unknown reset=unknown used_in_job=unknown"
+          fi
 
       # Required for the run-soft-error-analyzer composite action below.
       - name: Checkout repository (for soft-error analyser)
@@ -5283,6 +5467,7 @@ jobs:
       - name: Create alt-model smoke issue
         id: create
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           # Capture the latest run id of each phase workflow BEFORE creating
           # the issue. The post-wait capture step uses these as anchors to
@@ -5291,7 +5476,7 @@ jobs:
           # cleanup bounds its late-Implement cancel by this time instead (#8953).
           echo "created_after=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           for WF in clarify plan implement review_autofix; do
-            LATEST=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null) || LATEST=""
+            LATEST=$(gh_api_retry "repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null) || LATEST=""
             # #9797: a failed `gh api` prints its error body (or nothing) to
             # stdout; a nonzero exit clears the value either way. Write
             # digits or an empty value only; never echo the captured text.
@@ -5332,6 +5517,7 @@ jobs:
           ALT_ISSUE_TITLE: ${{ steps.create.outputs.title }}
           ALT_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           DEADLINE=$(( $(date +%s) + 4500 ))
           # Post /approved once per arrival in ai:awaiting-approval, as
@@ -5346,7 +5532,7 @@ jobs:
           ALT_APPROVED_POSTED=0
           ALT_APPROVED_POSTED_AT=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+            LABELS=$(gh_api_retry "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null) || LABELS=""
             echo "  labels: ${LABELS:-none}"
             # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
@@ -5442,6 +5628,7 @@ jobs:
           PRE_IMPLEMENT: ${{ steps.create.outputs.pre_implement_run_id }}
           PRE_REVIEW: ${{ steps.create.outputs.pre_review_autofix_run_id }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           # For each phase, find the most recent workflow run with an id
           # greater than the snapshot taken before the issue was created.
@@ -5469,7 +5656,7 @@ jobs:
             else
               QUERY="repos/${TEST_REPO}/actions/workflows/${WF}.yml/runs?per_page=20"
             fi
-            NEW_ID=$(gh api "${QUERY}" --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null) || NEW_ID=""
+            NEW_ID=$(gh_api_retry "${QUERY}" --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null) || NEW_ID=""
             [[ "${NEW_ID}" =~ ^[0-9]+$ ]] || NEW_ID=""
             if [ -n "${NEW_ID}" ]; then
               echo "${WF}_run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
@@ -5540,6 +5727,10 @@ jobs:
           PRE_IMPLEMENT: ${{ steps.create.outputs.pre_implement_run_id }}
           ALT_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
         run: |
+          # #10225: rate-limit-aware reads. always() cleanup stays best-effort:
+          # without the checkout's helper the reads fall back to plain gh api,
+          # which prints the reply only on success (no error body on stdout).
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry() { local cleanup_fallback_out; cleanup_fallback_out="$(gh api "$@")" || return 1; printf '%s\n' "${cleanup_fallback_out}"; }
           # Defence in depth — never abort on single failure; retry each
           # close 3× with backoff. Same pattern as orchestrate-decompose-test
           # cleanup so all e2e jobs leak resources at the same (low) rate
@@ -5579,7 +5770,7 @@ jobs:
               ALT_IMPL_CREATED_FILTER="&created=>${ALT_CREATED_AFTER}"
             fi
             for ALT_IMPL_PAGE in 1 2 3 4 5; do
-              ALT_IMPL_PAGE_JSON=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=100&page=${ALT_IMPL_PAGE}${ALT_IMPL_CREATED_FILTER}" 2>/dev/null) \
+              ALT_IMPL_PAGE_JSON=$(gh_api_retry "repos/${TEST_REPO}/actions/runs?per_page=100&page=${ALT_IMPL_PAGE}${ALT_IMPL_CREATED_FILTER}" 2>/dev/null) \
                 && printf '%s' "${ALT_IMPL_PAGE_JSON}" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 \
                 || { echo "::warning::Implement run lookup failed for issue #${ISSUE_NUMBER} (page ${ALT_IMPL_PAGE})"; break; }
               ALT_ACTIVE_IMPL_IDS+=" $(printf '%s' "${ALT_IMPL_PAGE_JSON}" | jq -r ".workflow_runs[] | select(.id > ${PRE_IMPLEMENT:-0}) | select((.name // \"\") | test(\"Implement\"; \"i\")) | select(.display_title == env.ALT_ISSUE_TITLE) | select(.status != \"completed\") | .id" 2>/dev/null)"
@@ -5600,7 +5791,7 @@ jobs:
           # an unrelated fix PR that merely says "Refs #<N>" in its body would be
           # force-closed as collateral damage when the implement run failed and
           # no real ai/issue-<N> PR existed to match.
-          PR_NUMBER=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
+          PR_NUMBER=$(gh_api_retry "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
             --jq '.[0].number // empty' 2>/dev/null) || PR_NUMBER=""
           if [ -n "${PR_NUMBER}" ]; then
             close_with_retry "pulls" "${PR_NUMBER}"
@@ -5616,11 +5807,17 @@ jobs:
 
       - name: Record GH_PAT budget at e2e-alt-model-test end
         if: always()
-        # Issue #9887: no rate_limit read (no added GitHub request); only the
-        # job's own gh call count.
+        # Issue #9887 / #10225: gh_pat_budget reads the job's own gh call count,
+        # then makes one /rate_limit read (it does not use up the core
+        # allowance); used_in_job comes from the start snapshot. Without the
+        # helper the line keeps unknown. Never fails the job.
         run: |
-          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
-          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-alt-model-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh && source scripts/gh_helpers.sh >/dev/null 2>&1 && declare -F gh_pat_budget >/dev/null; then
+            gh_pat_budget end test-and-mark-stable e2e-alt-model-test "${RUNNER_TEMP}/gh_pat_budget_e2e-alt-model-test" || true
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-alt-model-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
 
   # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
