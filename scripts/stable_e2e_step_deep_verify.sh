@@ -114,7 +114,10 @@ check_all_steps() {
     dv_last_rc="${dv_read_rc}"
     if [ "${dv_read_rc}" -eq 0 ]; then
       JOBS_JSON="$_JOBS_OUT"
-      dv_listing_read_ok=1
+      # Only a well-formed jobs listing counts as read (review of #10225).
+      if _jobs_json_valid "$JOBS_JSON"; then
+        dv_listing_read_ok=1
+      fi
       break
     fi
     # rc 75: the helper already waited what the job's budget allows and
@@ -160,7 +163,9 @@ check_all_steps() {
       dv_last_rc="${dv_recheck_rc}"
       if [ "${dv_recheck_rc}" -eq 0 ]; then
         JOBS_JSON="$_JOBS_OUT"
-        dv_listing_read_ok=1
+        if _jobs_json_valid "$JOBS_JSON"; then
+          dv_listing_read_ok=1
+        fi
       else
         JOBS_JSON='{"jobs":[]}'
       fi

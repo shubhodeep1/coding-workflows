@@ -45,7 +45,7 @@ sleep() { :; }
 """
 
 
-def _run(rc: int, body: dict | None = None, rc_seq: str = "") -> tuple[subprocess.CompletedProcess, int, str]:
+def _run(rc: int, body: dict | str | None = None, rc_seq: str = "") -> tuple[subprocess.CompletedProcess, int, str]:
 	if shutil.which("jq") is None:
 		import pytest
 
@@ -64,7 +64,7 @@ def _run(rc: int, body: dict | None = None, rc_seq: str = "") -> tuple[subproces
 			CALLS=str(calls),
 			STUB_RC=str(rc),
 			STUB_RC_SEQ=rc_seq,
-			STUB_BODY=json.dumps(body if body is not None else {"jobs": []}),
+			STUB_BODY=body if isinstance(body, str) else json.dumps(body if body is not None else {"jobs": []}),
 			GITHUB_OUTPUT=str(out),
 			TEST_REPO="o/r",
 			CLARIFY_RUN_ID="11",
@@ -130,6 +130,17 @@ def test_empty_listing_then_failed_recheck_stays_spurious() -> None:
 	assert calls == PHASES * 2
 	assert "Jobs listing unavailable" not in proc.stdout
 	assert "Run has no jobs after retries (spurious re-trigger) — OK" in proc.stdout
+
+
+def test_malformed_listing_then_failed_recheck_fails_closed() -> None:
+	# An rc-0 reply that is not a jobs object is not a listing read: a recheck
+	# that then hits a rate limit (rc 75) must fail closed, not pass as spurious.
+	proc, calls, output = _run(0, "<html>not json</html>", rc_seq="0 75")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "deep_passed=false" in output
+	assert calls == PHASES * 2
+	assert "Jobs listing unavailable (gh_api_retry rc=75)" in proc.stdout
+	assert "spurious re-trigger" not in proc.stdout
 
 
 def test_successful_steps_pass() -> None:
