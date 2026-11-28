@@ -666,7 +666,9 @@ def test_security_hold_withdraws_existing_auto_merge() -> None:
 	gate = text.index("if review_unreachable_security_hold_active; then")
 	branch = text[gate:text.index("\nfi\n", gate)]
 	assert 'review_head_gate_withdraw_auto_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" ""' in branch
-	assert "--disable-auto" in branch
+	# No inline `gh pr merge` in the hold branch: every merge call in the
+	# script stays bound to the reviewed head (contract tests).
+	assert "gh pr merge" not in branch
 	assert branch.rstrip().endswith("exit 0")
 
 

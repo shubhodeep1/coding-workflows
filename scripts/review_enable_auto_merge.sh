@@ -157,8 +157,11 @@ if review_unreachable_security_hold_active; then
 	if type review_head_gate_withdraw_auto_merge >/dev/null 2>&1; then
 		review_head_gate_withdraw_auto_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "" \
 			|| echo "::warning::Could not withdraw an existing auto-merge on PR #${PR_NUMBER} during the unreachable security hold."
-	elif ! gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --disable-auto >/dev/null 2>&1; then
-		echo "::warning::Could not withdraw an existing auto-merge on PR #${PR_NUMBER} (it may not be armed)."
+	else
+		# No inline fallback merge call: every merge call in this script is
+		# bound to the reviewed head (--match-head-commit), and the contract
+		# tests pin that the first one runs after the head-gate checks.
+		echo "::warning::review_head_gate.sh unavailable; could not check for or withdraw an existing auto-merge on PR #${PR_NUMBER} during the unreachable security hold."
 	fi
 	exit 0
 fi
