@@ -1,0 +1,6 @@
+<!-- changelog: changed -->
+- **The job that updates a lease holder's branch now merges the update itself.** When a review job finds that the base moved under an approved PR's files and updates the branch, it no longer stops at "updated, waiting" for the next review run (Refs #10097, Phase 4 of `docs/plans/merge-lease-short-critical-section-plan.md`).
+
+When a quick final-CI run was started for the update head, the same job checks that the head is exactly GitHub's merge of the approved head with the base, posts the `ai-review/head-gate` success, runs the single-issue security pass when it applies, waits for the required checks and merges with the usual head match. The review run that the push starts sees the job named in the branch-update comment (`inline_run=<run id>`) and exits while that job is still running. If any step fails, the job hands the PR to a review run, as before.
+
+What this means for operators: fewer review runs per branch update, and `MERGE_BASE_FRESHNESS ... outcome=inline_merge reason=...` and `AUTOFIX_GATE_DET_SKIP_EVAL ... reason=lease_inline_owner` in the logs. The poller keeps its update-and-return behaviour. Set the repository variable `MERGE_LEASE_INLINE_SYNC_ENABLED=false` to go back to the old behaviour.

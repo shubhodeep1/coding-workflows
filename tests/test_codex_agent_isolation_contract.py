@@ -213,7 +213,7 @@ def test_implement_runs_privileged_helpers_from_the_trusted_copy():
 	assert 'CODEX_ISOLATED_MODE="workspace"' in codex_step
 	repair = step_block(text, "Attempt post-Codex syntax repair")
 	assert 'CODEX_ISOLATED_ROOT="${CODEX_ISOLATED_IMPLEMENT_ROOT:-}"' in repair
-	assert "CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}" in text
+	assert "CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}" in text
 	cleanup = step_block(text, "Cleanup temporary artifacts")
 	assert 'cleanup --root "${CODEX_ISOLATED_IMPLEMENT_ROOT}"' in cleanup
 
@@ -320,7 +320,7 @@ def test_orchestrate_poll_stages_every_claude_isolation_support_file():
 )
 def test_workflows_pin_the_sandbox_codex_version(workflow):
 	text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
-	assert "CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}" in text
+	assert "CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}" in text
 
 
 def test_poller_file_editing_judges_use_worktrees_and_trusted_push():

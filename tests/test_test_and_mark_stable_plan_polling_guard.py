@@ -30,7 +30,10 @@ CREATED_AFTER = "2026-09-28T03:46:08Z"
 # with the real jq; logs every call to STUB_GH_LOG.
 STUB_GH = r'''#!/usr/bin/env python3
 import json, os, re, subprocess, sys
-args = sys.argv[1:]
+# gh_api_retry (scripts/gh_helpers.sh) reads through `gh api -i`; the stub
+# prints the body only, which the helper accepts, so `-i` is dropped here and
+# every path test below keeps reading args[1].
+args = [arg for arg in sys.argv[1:] if arg != "-i"]
 with open(os.environ["STUB_GH_LOG"], "a", encoding="utf-8") as log:
 	log.write(json.dumps(args) + "\n")
 if not args or args[0] != "api":

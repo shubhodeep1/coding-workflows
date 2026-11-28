@@ -9,29 +9,46 @@ is the logic half of ``scripts/stage_switch_watch.sh``, which runs daily in
 
 Commands (stdlib only; values are never printed raw):
 
-``snapshot --registry R``
+``snapshot --registry R [--repo-root ROOT]``
     Reads JSON lines ``{"name", "value", "updated_at"}`` from stdin (the
     wrapper's one paginated ``actions/variables`` listing), keeps only the
-    names listed in the registry and prints a sanitized snapshot JSON
-    ``{name: {"value_class", "display_value", "updated_at"}}``. Values of
-    variables not in the registry are dropped before anything is written.
+    names in the merged registry (see below) and prints a sanitized snapshot
+    JSON ``{name: {"value_class", "display_value", "updated_at"}}``. Values of
+    other variables are dropped before anything is written.
 
-``evaluate --registry R --snapshot S [--now ISO] [--wait-hours H]``
+``evaluate --registry R --snapshot S [--repo-root ROOT] [--now ISO] [--wait-hours H]``
     Prints one ``STAGE_SWITCH_OFF`` line per off switch on stderr and a JSON
     result ``{"off": [...], "alerts": [...], "counts": {...}}`` on stdout.
+
+Discovery (issue #10170): with ``--repo-root`` (default empty: no discovery)
+the switches are found at run time by ``discover_switches``: every
+``vars.<NAME>_ENABLED || 'true'`` expression (also the chained
+``|| (...) || 'true'`` form) and every ``vars.<NAME>_ENABLED != 'false'`` test
+in ``.github/workflows/*.yml`` and ``*.yaml``, and every ``_ENABLED`` row with
+default ``true`` in the README ``#### Variables`` and ``## Required Variables``
+tables. Discovery uses the standard library only, makes no API call and fails
+open (a missing or unreadable file adds nothing). The registry JSON is merged
+in: an entry's ``stage`` and ``on_values`` win; a discovered switch with no
+entry (or an entry without ``stage``) gets a generated ``stage`` text.
 
 Exit codes: 0 ok, 2 invalid registry, 3 unreadable listing or snapshot. The
 wrapper turns every non-zero exit into one warning and exits 0 (fail-open).
 
 Registry (``scripts/stage_switches.json``, schema ``stage_switches.v1``):
-    ``switches``: ``[{"name", "default": "true", "stage"[, "on_values"]}]``
+    ``switches``: ``[{"name"[, "default": "true"][, "stage"][, "on_values"][, "pending"]}]``
+    Only ``name`` is required. ``default`` (when present) must be ``true``;
+    ``stage`` (when present) is a non-empty string. ``pending`` (boolean) marks
+    an entry whose switch is added by a pull request that has not merged yet,
+    so the registry test accepts it while it is not discovered.
     ``on_values`` (optional): extra lowercase values, from ``1``, ``yes`` and
     ``on``, that the switch's consumers also treat as on. Without it only
     ``true`` counts as on. Set it only when every consumer of the switch
     keeps the stage on for those values (for example ``!= 'false'``).
-    ``off_on_purpose``: ``[{"name", "until": "YYYY-MM-DD", "reason"}]`` --
-    a switch listed here does not alert before ``until`` (00:00 UTC); on and
-    after that date it alerts again (``marker=expired``).
+    ``off_on_purpose``: ``[{"name", "until": "YYYY-MM-DD", "reason"[, "pending"]}]``
+    -- a switch listed here does not alert before ``until`` (00:00 UTC); on
+    and after that date it alerts again (``marker=expired``). A marker with
+    ``"pending": true`` for a valid ``_ENABLED`` name that is not a known
+    switch yet is dropped without the daily warning.
 """
 
 from __future__ import annotations
@@ -57,6 +74,30 @@ SECRET_NAME_RE = re.compile(
 BOOLEAN_DISPLAY_VALUES = frozenset({"true", "false", "0", "1", "yes", "no", "on", "off"})
 # Values a registry entry may add to "on" through its optional on_values list.
 ALLOWED_EXTRA_ON_VALUES = frozenset({"1", "yes", "on"})
+SWITCH_SUFFIX = "_ENABLED"
+
+# Discovery (issue #10170; moved here from tests/test_stage_switch_registry.py).
+# workflow-templates/ is left out on purpose: those wrappers run in consumer
+# repositories and read the consumer's variables, while the watch lists only
+# this repository's actions/variables, so a template-only switch is unwatchable.
+#
+# Matched against each workflow's whole text (comment lines removed), with
+# `\s` between tokens, so an expression split across lines is still found.
+SWITCH_DEFAULT_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED)\s*\|\|\s*(?:\([^()]*\)\s*\|\|\s*)*'([^']*)'")
+# `vars.<NAME>_ENABLED != 'false'` keeps a stage on unless the variable is
+# `false`, so it is a default-on switch too.
+SWITCH_NOT_FALSE_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED)\s*!=\s*'false'")
+README_SWITCH_TABLES = ("#### Variables", "## Required Variables")
+# README rows with default `true` that no workflow reads from a repository
+# variable (the watch reads repository variables only). Each needs a reason.
+README_NOT_REPOSITORY_VARIABLES = {
+	"CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED": "scripts/resolve_integration_ref.sh environment only; no workflow forwards a repository variable",
+	# Issue #9920: GitHub rejects configuration variable names starting with
+	# GITHUB_, so the registry lists the repository variable AI_PLAN_GRANT_WRITE_ENABLED.
+	"GITHUB_AI_PLAN_GRANT_WRITE_ENABLED": "job environment only; implement.yml and review_autofix.yml forward it from vars.AI_PLAN_GRANT_WRITE_ENABLED (registered)",
+	"LESSONS_LEARNED_ENABLED": "job environment only (README Memory System); no workflow reads vars.LESSONS_LEARNED_ENABLED",
+	"WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED": "scripts/workflow_failure_heal_intake.sh environment only; not forwarded from a repository variable",
+}
 
 
 class RegistryError(ValueError):
@@ -107,8 +148,116 @@ def _parse_timestamp(text: object) -> _dt.datetime | None:
 	return stamp.astimezone(_dt.timezone.utc)
 
 
-def load_registry(path: str | Path) -> dict:
-	"""Load and validate the registry; raise RegistryError on any problem."""
+def _is_switch_name(name: object) -> bool:
+	"""A valid switch name: SWITCH_NAME_RE and the `_ENABLED` suffix."""
+	return isinstance(name, str) and bool(SWITCH_NAME_RE.fullmatch(name)) and name.endswith(SWITCH_SUFFIX)
+
+
+def _workflow_true_switches(workflows_dir) -> dict[str, set[str]]:
+	"""Map each switch defaulting to 'true' in some workflow to those files."""
+	found, _forms = _scan_workflows(workflows_dir)
+	return found
+
+
+def _scan_workflows(workflows_dir) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+	"""Return ({name: workflow file names}, {name: forms}); fail open."""
+	found: dict[str, set[str]] = {}
+	forms: dict[str, set[str]] = {}
+	workflows_dir = Path(workflows_dir)
+	if not workflows_dir.is_dir():
+		return found, forms
+	# `.yaml` workflows are scanned too, so a switch cannot hide in one.
+	for workflow in sorted([*workflows_dir.glob("*.yml"), *workflows_dir.glob("*.yaml")]):
+		try:
+			raw = workflow.read_text(encoding="utf-8")
+		except (OSError, UnicodeDecodeError):
+			continue
+		text = "\n".join(
+			line for line in raw.splitlines()
+			if not line.strip().startswith("#")
+		)
+		for name, default in SWITCH_DEFAULT_RE.findall(text):
+			if default == "true":
+				found.setdefault(name, set()).add(workflow.name)
+				forms.setdefault(name, set()).add("default_true")
+		for name in SWITCH_NOT_FALSE_RE.findall(text):
+			found.setdefault(name, set()).add(workflow.name)
+			forms.setdefault(name, set()).add("not_false")
+	return found, forms
+
+
+def _readme_variables_rows(readme_path, heading: str = "#### Variables") -> dict[str, list[str]]:
+	"""Map README table rows under `heading` to their Default cells; fail open.
+
+	An unreadable file, a missing heading or a table without a `| Variable `
+	header row gives {}. Only the first matching heading is scanned.
+	"""
+	try:
+		lines = Path(readme_path).read_text(encoding="utf-8").splitlines()
+	except (OSError, UnicodeDecodeError):
+		return {}
+	starts = [i for i, line in enumerate(lines) if line == heading]
+	if not starts:
+		return {}
+	rows: dict[str, list[str]] = {}
+	# The tables differ ("| Variable | Required | Default |" vs
+	# "| Variable | Default |"), so take the Default column from the header.
+	default_col = None
+	for line in lines[starts[0] + 1:]:
+		if re.match(r"^#", line):
+			break
+		cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
+		if line.startswith("| Variable "):
+			default_col = cells.index("Default") if "Default" in cells else None
+			continue
+		if not line.startswith("| `") or default_col is None or len(cells) <= default_col:
+			continue
+		rows.setdefault(cells[0].strip("`"), []).append(cells[default_col].replace("`", "").strip())
+	if default_col is None:
+		return {}
+	return rows
+
+
+def discover_switches(repo_root) -> dict[str, dict]:
+	"""Find the default-on switches in the workflows and README tables.
+
+	Returns {name: {"files": [...], "forms": [...]}}: `files` is the sorted
+	workflow file names, or ["README.md"] when no workflow names the switch;
+	`forms` is a sorted subset of default_true, not_false and readme.
+	Standard library only, no API call, fail-open.
+	"""
+	root = Path(repo_root)
+	found, forms = _scan_workflows(root / ".github" / "workflows")
+	for heading in README_SWITCH_TABLES:
+		for name, defaults in _readme_variables_rows(root / "README.md", heading).items():
+			if not _is_switch_name(name) or name in README_NOT_REPOSITORY_VARIABLES:
+				continue
+			if not any(d.lower().startswith("true") for d in defaults):
+				continue
+			forms.setdefault(name, set()).add("readme")
+	result = {}
+	for name in sorted(forms):
+		if not _is_switch_name(name):
+			continue
+		files = sorted(found.get(name, ())) or ["README.md"]
+		result[name] = {"files": files, "forms": sorted(forms[name])}
+	return result
+
+
+def _generated_stage(name: str, files) -> str:
+	"""Stage text for a switch with no hand-written `stage`."""
+	label = name.removesuffix(SWITCH_SUFFIX).lower().replace("_", " ")
+	files = list(files or [])
+	where = f" ({', '.join(files)})" if files else ""
+	return f"Turns on {label}{where}; false turns that stage off."
+
+
+def load_registry(path: str | Path, repo_root=None) -> dict:
+	"""Load and validate the registry; raise RegistryError on any problem.
+
+	With `repo_root`, the discovered switches are merged in (sorted by name);
+	without it the entries keep their order.
+	"""
 	try:
 		data = json.loads(Path(path).read_text(encoding="utf-8"))
 	except (OSError, ValueError) as exc:
@@ -116,7 +265,7 @@ def load_registry(path: str | Path) -> dict:
 	if not isinstance(data, dict) or data.get("schema") != REGISTRY_SCHEMA:
 		raise RegistryError(f"registry schema is not {REGISTRY_SCHEMA}")
 	switches = data.get("switches")
-	if not isinstance(switches, list) or not switches:
+	if not isinstance(switches, list) or (not switches and not repo_root):
 		raise RegistryError("registry has no switches list")
 	seen = set()
 	for entry in switches:
@@ -128,22 +277,49 @@ def load_registry(path: str | Path) -> dict:
 		if name in seen:
 			raise RegistryError(f"registry lists {name} twice")
 		seen.add(name)
-		if entry.get("default") != "true":
+		if "default" in entry and entry.get("default") != "true":
 			raise RegistryError(f"registry switch {name} default is not 'true'")
-		if not isinstance(entry.get("stage"), str) or not entry["stage"].strip():
+		if "stage" in entry and (not isinstance(entry.get("stage"), str) or not entry["stage"].strip()):
 			raise RegistryError(f"registry switch {name} has no stage text")
 		on_values = entry.get("on_values", [])
 		if not isinstance(on_values, list) or not all(
 			isinstance(value, str) and value in ALLOWED_EXTRA_ON_VALUES for value in on_values
 		):
 			raise RegistryError(f"registry switch {name} on_values must list only 1, yes or on")
+		if "pending" in entry and not isinstance(entry["pending"], bool):
+			raise RegistryError(f"registry switch {name} pending must be true or false")
 	markers = data.get("off_on_purpose", [])
 	if not isinstance(markers, list):
 		raise RegistryError("registry off_on_purpose is not a list")
 	for marker in markers:
 		if not isinstance(marker, dict):
 			raise RegistryError("registry off_on_purpose entry is not an object")
+		if "pending" in marker and not isinstance(marker["pending"], bool):
+			raise RegistryError("registry off_on_purpose marker pending must be true or false")
 	data.setdefault("off_on_purpose", [])
+	if not repo_root:
+		# evaluate reads `default` and `stage`; fill them for name-only
+		# entries. Entries that have both are left as they are.
+		for entry in switches:
+			entry.setdefault("default", "true")
+			if "stage" not in entry:
+				entry["stage"] = _generated_stage(entry["name"], [])
+		return data
+	discovered = discover_switches(repo_root)
+	merged = {}
+	for entry in switches:
+		name = entry["name"]
+		files = discovered.get(name, {}).get("files", [])
+		entry["default"] = "true"
+		if "stage" not in entry:
+			entry["stage"] = _generated_stage(name, files)
+		merged[name] = entry
+	for name, info in discovered.items():
+		if name not in merged:
+			merged[name] = {"name": name, "default": "true", "stage": _generated_stage(name, info["files"])}
+	if not merged:
+		raise RegistryError("registry has no switches after discovery")
+	data["switches"] = [merged[name] for name in sorted(merged)]
 	return data
 
 
@@ -178,6 +354,8 @@ def _valid_markers(registry: dict) -> dict:
 	for marker in registry.get("off_on_purpose", []):
 		name = marker.get("name")
 		if not isinstance(name, str) or name not in names:
+			if marker.get("pending") is True and _is_switch_name(name):
+				continue  # the switch's pull request has not merged yet
 			_warn(f"STAGE_SWITCH_WATCH off_on_purpose marker for unknown switch {str(name)[:80]!r} ignored")
 			continue
 		until = _parse_date(marker.get("until"))
@@ -272,15 +450,17 @@ def main(argv=None) -> int:
 	sub = parser.add_subparsers(dest="command", required=True)
 	snap = sub.add_parser("snapshot")
 	snap.add_argument("--registry", required=True)
+	snap.add_argument("--repo-root", default="")
 	ev = sub.add_parser("evaluate")
 	ev.add_argument("--registry", required=True)
 	ev.add_argument("--snapshot", required=True)
+	ev.add_argument("--repo-root", default="")
 	ev.add_argument("--now", default="")
 	ev.add_argument("--wait-hours", default=None)
 	args = parser.parse_args(argv)
 
 	try:
-		registry = load_registry(args.registry)
+		registry = load_registry(args.registry, args.repo_root or None)
 	except RegistryError as exc:
 		_warn(f"STAGE_SWITCH_WATCH registry invalid: {exc}")
 		return 2

@@ -31,7 +31,7 @@ if [ -n "${isolation_timeout}" ] && { [[ ! "${isolation_timeout}" =~ ^[0-9]+$ ]]
 	echo '::error::Invalid clarify isolation timeout' >&2
 	exit 1
 fi
-version="${CLARIFY_CODEX_VERSION:-v0.114.0}"
+version="${CLARIFY_CODEX_VERSION:-v0.171.0}"
 [[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid Codex version' >&2; exit 1; }
 [[ "${MODEL_EDITOR:-}" =~ ^[a-zA-Z0-9/_.-]+$ ]] || { echo '::error::Invalid model slug' >&2; exit 1; }
 [[ "${MODEL_REASONING_EFFORT:-}" =~ ^(xhigh|high|medium|low|none)$ ]] || { echo '::error::Invalid reasoning level' >&2; exit 1; }

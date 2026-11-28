@@ -2077,7 +2077,18 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 		for key in ('event', 'displayTitle', 'createdAt', 'startedAt', 'databaseId'):
 			if key in run:
 				entry[key] = run[key]
+		# Issue #10149: optional fields the stall judge's branch listing reads;
+		# only a run that sets them carries them.
+		for key in ('name', 'workflowName', 'headSha', 'headBranch'):
+			if key in run:
+				entry[key] = run[key]
 		runs.append(entry)
+	if branch and '--json' in args and 'headSha' in (args[args.index('--json') + 1] if args.index('--json') + 1 < len(args) else ''):
+		store.setdefault('stall_judge_run_listings', []).append(branch)
+		save()
+		if store.get('stall_judge_run_listing_fail'):
+			print('run listing unavailable', file=sys.stderr)
+			sys.exit(1)
 	if jq_query:
 		import subprocess as _sp
 		p = _sp.run(['jq', '-r', jq_query], input=json.dumps(runs), capture_output=True, text=True)
@@ -36129,6 +36140,208 @@ def _check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths
 	assert res.returncode == 0, res.stdout + res.stderr
 	assert res.stdout.strip().splitlines()[-1] == "after=unset"
 	assert log.read_text(encoding="utf-8").splitlines() == ["fresh wf=ci.yml", "wait wf=ci.yml", "merge wf="]
+
+
+# Issue #10149 (re-implementation of #9546): the stall judge lists the linked
+# PR's review runs once, flags a review of the current head that waits for a
+# runner, and holds escalate_human / close_and_reissue while it does.
+_SJ_LIVE_PR = {
+	"number": 77,
+	"body": "Closes #10",
+	"state": "open",
+	"title": "AI implementation for issue #10",
+	"mergeable": True,
+	"mergeable_state": "clean",
+	"headRefName": "feature/stall-judge",
+	"headRefFromApi": "feature/stall-judge",
+	"headSha": "deadbeef",
+	"baseRefName": "main",
+}
+
+
+def _sj_live_review_run(**changes) -> dict:
+	run = {
+		"branch": "feature/stall-judge",
+		"name": "AI Review",
+		"workflowName": "AI Review",
+		"status": "queued",
+		"conclusion": "",
+		"headSha": "deadbeef",
+		"headBranch": "feature/stall-judge",
+		"databaseId": 555,
+		"createdAt": "2999-01-01T00:00:00Z",
+	}
+	run.update(changes)
+	return run
+
+
+def _run_stall_judge_live_review_poller(action: str = "escalate_human", **overrides):
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	kwargs = {
+		"state": state,
+		"enable_validation": "false",
+		"max_validate_cycles": "3",
+		"issue_labels": {10: ["ai:implementing"]},
+		"issue_linked_prs": {10: 77},
+		"prs": [dict(_SJ_LIVE_PR)],
+		"enable_stall_human_terminalization": "true",
+		"mock_stall_judge_json": {"action": action, "justification": "stuck", "target_pr": None, "head_ref": None},
+	}
+	kwargs.update(overrides)
+	return _run_poller(**kwargs)
+
+
+def _sj_judge_comment_bodies(result: dict) -> list[str]:
+	bodies = []
+	for issue in result["issues"].values():
+		for comment in issue.get("comments", []):
+			body = comment.get("body", "") if isinstance(comment, dict) else str(comment)
+			if body.startswith("## 🧑‍⚖️ Stall Judge"):
+				bodies.append(body)
+	return bodies
+
+
+def test_stall_judge_live_review_runs_holds_escalate_when_review_queued():
+	result = _run_stall_judge_live_review_poller(active_autofix_runs=[_sj_live_review_run()])
+	out = result["stdout"]
+	assert result["stall_judge_run_listings"] == ["feature/stall-judge"], out[-4000:]
+	assert "STALL_JUDGE_LIVE_REVIEW_RUNS issue=10 pr=77 outcome=ok runs=1 waiting=true" in out, out[-4000:]
+	assert "STALL_RECOVERY issue=10 reason=review_waiting_for_runner held=escalate_human pr=77 run=555 phase=ai:implementing" in out, out[-4000:]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+	bodies = _sj_judge_comment_bodies(result)
+	assert bodies, "the judge comment still posts"
+	assert "**Decision (effective):** escalate_human (held: review_waiting_for_runner)" in bodies[-1]
+	assert '"review_waiting_for_runner":true' in bodies[-1]
+	assert '"head_sha":"deadbeef"' in bodies[-1]
+
+
+def test_stall_judge_live_review_runs_holds_normalized_escalate_with_terminalization_off():
+	# Default config: the judge's escalate_human is normalized to the ladder
+	# action, which must be held too while the review waits for a runner.
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		enable_stall_human_terminalization="false",
+	)
+	out = result["stdout"]
+	assert "outcome=ok runs=1 waiting=true" in out, out[-4000:]
+	assert "STALL_RECOVERY issue=10 reason=review_waiting_for_runner held=" in out, out[-4000:]
+	assert "held=escalate_human" not in out, out[-4000:]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+	bodies = _sj_judge_comment_bodies(result)
+	assert bodies and "**Decision (judge):** escalate_human" in bodies[-1]
+	assert "(held: review_waiting_for_runner)" in bodies[-1]
+
+
+def test_stall_judge_live_review_runs_holds_close_and_reissue_when_review_queued():
+	result = _run_stall_judge_live_review_poller(action="close_and_reissue", active_autofix_runs=[_sj_live_review_run()])
+	out = result["stdout"]
+	assert "reason=review_waiting_for_runner held=close_and_reissue pr=77" in out, out[-4000:]
+	# Held, not mapped to skip: the linked PR is never closed.
+	assert not any("pulls/77" in json.dumps(call) and "state=closed" in json.dumps(call) for call in result["api_calls"])
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+
+
+def test_stall_judge_live_review_runs_switch_off_keeps_cached_outcomes():
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		env_overrides={"STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED": "false"},
+	)
+	out = result["stdout"]
+	assert result.get("stall_judge_run_listings", []) == []
+	assert "STALL_JUDGE_LIVE_REVIEW_RUNS issue=10 pr=77 outcome=disabled runs=0 waiting=false" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner" not in out
+	bodies = _sj_judge_comment_bodies(result)
+	assert bodies
+	assert "review_waiting_for_runner" not in bodies[-1]
+	assert '"head_sha"' not in bodies[-1]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_listing_failure_fails_open():
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		mock_store_extra={"stall_judge_run_listing_fail": True},
+	)
+	out = result["stdout"]
+	assert "STALL_JUDGE_LIVE_REVIEW_RUNS issue=10 pr=77 outcome=listing_unavailable runs=0 waiting=false" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner" not in out
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_completed_runs_listed_and_capped():
+	runs = [
+		_sj_live_review_run(databaseId=600 + idx, status="completed", conclusion="failure", createdAt=f"2026-11-2{idx}T00:00:00Z")
+		for idx in range(7)
+	]
+	result = _run_stall_judge_live_review_poller(active_autofix_runs=runs)
+	out = result["stdout"]
+	assert "outcome=ok runs=7 waiting=false" in out, out[-4000:]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	body = _sj_judge_comment_bodies(result)[-1]
+	diag = json.loads(body.split("```json", 1)[1].split("```", 1)[0])
+	outcomes = diag["recent_review_workflow_outcomes"]
+	assert [entry["id"] for entry in outcomes] == [606, 605, 604, 603, 602]
+	assert all(entry["head_sha"] == "deadbeef" for entry in outcomes)
+	assert diag["review_waiting_for_runner"] is False
+
+
+def test_stall_judge_live_review_runs_wedged_queued_run_does_not_hold():
+	result = _run_stall_judge_live_review_poller(active_autofix_runs=[_sj_live_review_run(createdAt="2000-01-01T00:00:00Z")])
+	out = result["stdout"]
+	assert "outcome=ok runs=1 waiting=false" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner" not in out
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_old_waiting_run_does_not_hold():
+	# The wedged-queued cutoff bounds every unstarted status, not only `queued`.
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run(status="waiting", createdAt="2000-01-01T00:00:00Z")]
+	)
+	out = result["stdout"]
+	assert "outcome=ok runs=1 waiting=false" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner" not in out
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_held_cache_replay_keeps_replay_count():
+	# A held tick that replays the cached verdict must not use up the replay
+	# budget, or MAX_JUDGE_REPLAY forces escalate_human once the review starts.
+	first = _run_stall_judge_live_review_poller(active_autofix_runs=[_sj_live_review_run()])
+	cache = first["latest_state"].get("judge_decision_cache") or {}
+	assert cache and all(entry.get("replay_count", 0) == 0 for entry in cache.values()), cache
+	second = _run_stall_judge_live_review_poller(
+		state=json.loads(json.dumps(first["latest_state"])),
+		active_autofix_runs=[_sj_live_review_run()],
+	)
+	out = second["stdout"]
+	assert "replaying cached decision 'escalate_human'" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner held=escalate_human" in out, out[-4000:]
+	replayed = second["latest_state"].get("judge_decision_cache") or {}
+	assert replayed and all(entry.get("replay_count", 0) == 0 for entry in replayed.values()), replayed
+	assert "ai:needs-human" not in second["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_holds_unparseable_judge_fallback_escalate():
+	# With terminalization on, the ai:implementing ladder's fallback at
+	# recovery count 2 is escalate_human; an unparseable judge reply must not
+	# escalate while a review of the PR's head waits for a runner.
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		env_overrides={"MOCK_STALL_JUDGE_JSON": "no verdict here"},
+	)
+	out = result["stdout"]
+	assert "Could not parse stall judge output for #10; falling back to escalate_human" in out, out[-4000:]
+	assert "STALL_RECOVERY issue=10 reason=review_waiting_for_runner held=escalate_human pr=77 run=555 phase=ai:implementing" in out, out[-4000:]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
 
 
 # ---------------------------------------------------------------------------

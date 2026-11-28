@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -1115,6 +1116,142 @@ def test_refused_dispatch_marker_numbers_the_update_after_earlier_syncs(fake_gh)
 	assert f"from={SHA} sync=3 base={REFUSED_BASE_TIP} merge={UPDATE_SHA} -->" in body
 	assert "predates its `workflow_dispatch` trigger" in body
 
+
+
+# ---------------------------------------------------------------------------
+# Sweep: priority lane (issue #10048)
+
+
+def _lane_snapshot(updated_at: str = "") -> list:
+	if not updated_at:
+		updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+	return [
+		{"number": n, "head_ref": f"ai/issue-{n}", "head_sha": f"{n:040x}", "head_gate_state": "success",
+			"priority_lane": n == 3, "updated_at": updated_at}
+		for n in (1, 2, 3)
+	]
+
+
+LANE_FIXTURES = {
+	f"repos/{REPO}/actions/workflows/ci.yml/runs?per_page=100": {"body": {"workflow_runs": []}},
+	"runs?head_sha=": {"body": {"workflow_runs": []}},
+}
+
+
+def _dispatched_prs(calls: list[list[str]]) -> list[str]:
+	return [arg.split("=", 1)[1] for call in _dispatches(calls) for arg in call if arg.startswith("pr_number=")]
+
+
+def test_sweep_checks_priority_heads_first_under_the_cap(fake_gh, tmp_path: Path) -> None:
+	result, calls = _sweep(fake_gh, tmp_path, _lane_snapshot(), LANE_FIXTURES, {"FINAL_CI_SWEEP_MAX_PER_TICK": "1"})
+	assert _dispatched_prs(calls) == ["3"], result.stdout + result.stderr
+	assert "PRIORITY_LANE pr=3 outcome=first reason=verified_label surface=final_ci" in result.stdout
+
+
+def test_sweep_order_is_unchanged_with_the_lane_off(fake_gh, tmp_path: Path) -> None:
+	result, calls = _sweep(fake_gh, tmp_path, _lane_snapshot(), LANE_FIXTURES,
+		{"FINAL_CI_SWEEP_MAX_PER_TICK": "1", "PRIORITY_LANE_ENABLED": "false"})
+	assert _dispatched_prs(calls) == ["1"], result.stdout + result.stderr
+	assert "PRIORITY_LANE" not in result.stdout
+
+
+def test_sweep_hold_file_defers_other_heads_until_the_cap(fake_gh, tmp_path: Path) -> None:
+	hold = tmp_path / "hold.txt"
+	hold.write_text("hold=true\npriority=3\n", encoding="utf-8")
+	result, calls = _sweep(fake_gh, tmp_path, _lane_snapshot(), LANE_FIXTURES, {"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold)})
+	assert _dispatched_prs(calls) == ["3"], result.stdout + result.stderr
+	assert "PRIORITY_LANE pr=1 outcome=deferred reason=priority_run_queued surface=final_ci" in result.stdout
+	assert "deferred_priority_lane=2" in result.stdout
+	# Past PRIORITY_LANE_MAX_DEFER_MINUTES the other heads go ahead as before.
+	result, calls = _sweep(fake_gh, tmp_path, _lane_snapshot("2020-01-01T00:00:00Z"), LANE_FIXTURES,
+		{"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold)})
+	assert sorted(_dispatched_prs(calls)) == ["1", "2", "3"], result.stdout + result.stderr
+	assert "PRIORITY_LANE pr=1 outcome=released reason=max_defer surface=final_ci" in result.stdout
+	# With the hold start in the file, the cap counts from it, not updated_at.
+	hold.write_text(f"hold=true\npriority=3\nsince={int(time.time()) - 60}\n", encoding="utf-8")
+	result, calls = _sweep(fake_gh, tmp_path, _lane_snapshot("2020-01-01T00:00:00Z"), LANE_FIXTURES,
+		{"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold)})
+	assert _dispatched_prs(calls) == ["3"], result.stdout + result.stderr
+	hold.write_text(f"hold=true\npriority=3\nsince={int(time.time()) - 3 * 3600}\n", encoding="utf-8")
+	result, calls = _sweep(fake_gh, tmp_path, _lane_snapshot(), LANE_FIXTURES, {"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold)})
+	assert sorted(_dispatched_prs(calls)) == ["1", "2", "3"], result.stdout + result.stderr
+
+
+def test_sweep_deferred_heads_spend_no_per_tick_slot(fake_gh, tmp_path: Path) -> None:
+	# PRs 1 and 2 are held; PR 4 is past the cap (stale updated_at, no since=)
+	# and must still be reached under a cap of 2 after priority PR 3.
+	hold = tmp_path / "hold.txt"
+	hold.write_text("hold=true\npriority=3\n", encoding="utf-8")
+	snapshot = _lane_snapshot() + [{"number": 4, "head_ref": "ai/issue-4", "head_sha": f"{4:040x}",
+		"head_gate_state": "success", "priority_lane": False, "updated_at": "2020-01-01T00:00:00Z"}]
+	result, calls = _sweep(fake_gh, tmp_path, snapshot, LANE_FIXTURES,
+		{"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold), "FINAL_CI_SWEEP_MAX_PER_TICK": "2"})
+	assert sorted(_dispatched_prs(calls)) == ["3", "4"], result.stdout + result.stderr
+	assert "PRIORITY_LANE pr=4 outcome=released reason=max_defer surface=final_ci" in result.stdout
+
+
+def test_sweep_missing_or_malformed_hold_file_holds_nothing(fake_gh, tmp_path: Path) -> None:
+	bad = tmp_path / "bad.txt"
+	bad.write_text("hold=true\npriority=3\nhold=$(id)\n", encoding="utf-8")
+	for path in (str(tmp_path / "missing.txt"), str(bad)):
+		result, calls = _sweep(fake_gh, tmp_path, _lane_snapshot(), LANE_FIXTURES, {"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": path})
+		assert sorted(_dispatched_prs(calls)) == ["1", "2", "3"], result.stdout + result.stderr
+		assert "outcome=deferred" not in result.stdout
+
+
+def test_sweep_workflow_passes_the_priority_lane_settings() -> None:
+	text = (REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml").read_text(encoding="utf-8")
+	step = text[text.index("- name: Ensure the final CI run on reviewed PR heads"):]
+	step = step[:step.index("\n      - name:")]
+	assert "FINAL_CI_SWEEP_PRIORITY_LANE_FILE: ${{ runner.temp }}/priority-lane-hold.txt" in step
+	assert "PRIORITY_LANE_ENABLED: ${{ vars.PRIORITY_LANE_ENABLED || 'true' }}" in step
+
+
+def test_sweep_released_line_only_when_a_slot_is_left(fake_gh, tmp_path: Path) -> None:
+	# Cap 1: priority PR 3 takes the only slot. PR 4 is past the defer cap but
+	# gets no check this tick, so no `released` line is logged for it.
+	hold = tmp_path / "hold.txt"
+	hold.write_text("hold=true\npriority=3\n", encoding="utf-8")
+	snapshot = _lane_snapshot() + [{"number": 4, "head_ref": "ai/issue-4", "head_sha": f"{4:040x}",
+		"head_gate_state": "success", "priority_lane": False, "updated_at": "2020-01-01T00:00:00Z"}]
+	result, calls = _sweep(fake_gh, tmp_path, snapshot, LANE_FIXTURES,
+		{"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold), "FINAL_CI_SWEEP_MAX_PER_TICK": "1"})
+	assert _dispatched_prs(calls) == ["3"], result.stdout + result.stderr
+	assert "PRIORITY_LANE pr=4 outcome=released" not in result.stdout
+
+
+def test_sweep_checks_unread_priority_heads_before_other_heads(fake_gh, tmp_path: Path) -> None:
+	# Cap 1, no hold: the priority PR whose gate still needs a read comes
+	# before a non-priority head already known as success.
+	snapshot = [
+		{"number": 1, "head_ref": "ai/issue-1", "head_sha": f"{1:040x}", "head_gate_state": "success", "priority_lane": False},
+		{"number": 2, "head_ref": "ai/issue-2", "head_sha": f"{2:040x}", "priority_lane": True},
+	]
+	fixtures = {**LANE_FIXTURES,
+		f"repos/{REPO}/commits/{2:040x}/status": {"body": {"statuses": [{"context": "ai-review/head-gate", "state": "success"}]}}}
+	result, calls = _sweep(fake_gh, tmp_path, snapshot, fixtures, {"FINAL_CI_SWEEP_MAX_PER_TICK": "1"})
+	assert _dispatched_prs(calls) == ["2"], result.stdout + result.stderr
+	assert "PRIORITY_LANE pr=2 outcome=first reason=verified_label surface=final_ci" in result.stdout
+
+
+def test_sweep_defers_unread_heads_before_the_status_read(fake_gh, tmp_path: Path) -> None:
+	# PR 1's gate is unknown: under the hold it is deferred without a status
+	# read and without spending a slot.
+	hold = tmp_path / "hold.txt"
+	hold.write_text("hold=true\npriority=3\n", encoding="utf-8")
+	now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+	snapshot = [
+		{"number": 1, "head_ref": "ai/issue-1", "head_sha": f"{1:040x}", "priority_lane": False, "updated_at": now},
+		{"number": 3, "head_ref": "ai/issue-3", "head_sha": f"{3:040x}", "head_gate_state": "success", "priority_lane": True, "updated_at": now},
+	]
+	fixtures = {**LANE_FIXTURES,
+		f"repos/{REPO}/commits/{1:040x}/status": {"body": {"statuses": [{"context": "ai-review/head-gate", "state": "success"}]}}}
+	result, calls = _sweep(fake_gh, tmp_path, snapshot, fixtures,
+		{"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold), "FINAL_CI_SWEEP_MAX_PER_TICK": "2"})
+	assert _dispatched_prs(calls) == ["3"], result.stdout + result.stderr
+	assert "PRIORITY_LANE pr=1 outcome=deferred reason=priority_run_queued surface=final_ci" in result.stdout
+	assert not any(f"commits/{1:040x}/status" in " ".join(call) for call in calls)
+	assert "checked=1 " in result.stdout
 
 
 # ---------------------------------------------------------------------------

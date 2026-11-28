@@ -432,9 +432,9 @@ def test_no_codex_exec_site_uses_deprecated_full_auto_flag() -> None:
 
 
 def test_no_codex_exec_site_places_ask_for_approval_after_exec() -> None:
-	"""Guard against re-introduction of the v0.114.0 flag-position regression.
+	"""Guard against re-introduction of the Codex CLI v0.114 flag-position regression.
 
-	Codex CLI v0.114.0 enforces flag positioning strictly: `--ask-for-approval`
+	Codex CLI v0.114 and later enforce flag positioning strictly: `--ask-for-approval`
 	is a TOP-LEVEL flag (must precede the `exec` subcommand). PR #2205 placed
 	`--ask-for-approval never --sandbox danger-full-access` AFTER `exec` across
 	24 codex invocation sites, which the parser rejects with:
@@ -517,11 +517,69 @@ def test_no_codex_exec_site_places_ask_for_approval_after_exec() -> None:
 				offenders.append(f"{rel}:{phys_line}: {snippet}")
 	assert not offenders, (
 		"`--ask-for-approval` is a TOP-LEVEL Codex flag and must precede "
-		"the `exec` subcommand on Codex CLI v0.114.0+, otherwise the "
+		"the `exec` subcommand on Codex CLI v0.114 and later, otherwise the "
 		"parser rejects the invocation with `unexpected argument "
 		"'--ask-for-approval' found`. Use the layout `codex "
 		"--ask-for-approval never exec --model X --sandbox Y`. "
 		"Offending sites:\n  " + "\n  ".join(offenders)
+	)
+
+
+# Enum values Codex CLI v0.171.0 accepts in model_catalog_json entries.
+# Upstream openai/codex#21651 deleted function-style apply_patch, so
+# ApplyPatchToolType only has `freeform` (null omits the tool); a catalog
+# entry carrying `function` fails to parse with `unknown variant function`
+# and every OpenRouter-backed role loses its catalog (issue #10129).
+CODEX_V0171_APPLY_PATCH_TOOL_TYPES = {"freeform", None}
+CODEX_V0171_VISIBILITY_VALUES = {"list", "hide", "none"}
+CODEX_V0171_SHELL_TYPES = {"default", "local", "unified_exec", "disabled", "shell_command"}
+
+
+def _check_codex_v0171_catalog_fields(label: str, fields: dict, offenders: list[str]) -> None:
+	if "apply_patch_tool_type" in fields and fields["apply_patch_tool_type"] not in CODEX_V0171_APPLY_PATCH_TOOL_TYPES:
+		offenders.append(f"{label}: apply_patch_tool_type={fields['apply_patch_tool_type']!r}")
+	if "visibility" in fields and fields["visibility"] not in CODEX_V0171_VISIBILITY_VALUES:
+		offenders.append(f"{label}: visibility={fields['visibility']!r}")
+	if "shell_type" in fields and fields["shell_type"] not in CODEX_V0171_SHELL_TYPES:
+		offenders.append(f"{label}: shell_type={fields['shell_type']!r}")
+
+
+def test_catalog_entries_parse_on_codex_v0171() -> None:
+	"""Every catalog entry and override uses enum values Codex CLI v0.171.0 accepts."""
+	import json
+
+	catalog = json.loads((REPO_ROOT / "scripts" / "codex_model_catalog.json").read_text(encoding="utf-8"))
+	models = catalog.get("models")
+	assert isinstance(models, list) and models, "codex_model_catalog.json has no models list"
+	offenders: list[str] = []
+	for entry in models:
+		assert isinstance(entry, dict), f"catalog entry is not an object: {entry!r}"
+		assert "apply_patch_tool_type" in entry, f"{entry.get('slug')}: apply_patch_tool_type missing"
+		_check_codex_v0171_catalog_fields(f"catalog {entry.get('slug')}", entry, offenders)
+	overrides_text = (REPO_ROOT / "scripts" / "codex_model_catalog_overrides.yaml").read_text(encoding="utf-8")
+	try:
+		import yaml
+	except ImportError:
+		# No PyYAML: scan `key: value` lines for the three enum fields (the
+		# overrides file keeps one scalar per line).
+		for line_number, line in enumerate(overrides_text.splitlines(), 1):
+			field_match = re.match(r"^\s+(apply_patch_tool_type|visibility|shell_type):\s*(\S*)\s*$", line)
+			if field_match:
+				raw_value = field_match.group(2).strip("\"'")
+				_check_codex_v0171_catalog_fields(
+					f"overrides line {line_number}",
+					{field_match.group(1): None if raw_value in ("", "null", "~") else raw_value},
+					offenders,
+				)
+	else:
+		overrides = yaml.safe_load(overrides_text) or {}
+		for override in overrides.get("models") or []:
+			fields = override.get("overrides") or {}
+			assert isinstance(fields, dict), f"override for {override.get('slug')} is not a mapping"
+			_check_codex_v0171_catalog_fields(f"override {override.get('slug')}", fields, offenders)
+	assert not offenders, (
+		"Codex CLI v0.171.0 rejects these catalog values (apply_patch_tool_type "
+		"must be freeform or null):\n  " + "\n  ".join(offenders)
 	)
 
 

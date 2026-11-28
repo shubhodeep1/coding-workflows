@@ -469,6 +469,12 @@ elif [ "${sandbox_excluded_nothing_committed}" != "1" ] || [ "${DID_COMMIT:-}" =
   clean_marker_reason="committed"
 elif [ -n "${sandbox_excluded_marker_suffix}" ] || [ "${sandbox_excluded_findings:-0}" != "0" ]; then
   clean_marker_reason="sandbox_excluded"
+elif [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/review_unreachable_all.tsv" ] \
+  && awk -F '\t' '$5 == "true" { found = 1 } END { exit !found }' "${RUNTIME_DIR}/review_unreachable_all.tsv" 2>/dev/null; then
+  # Issue #10057: an unreachable security finding (ledger UNREACHABLE_SECURITY
+  # true, kept across rounds even when no reviewer re-raises it) keeps the PR
+  # blocked, so the head is never marked clean while it stands.
+  clean_marker_reason="unreachable_security_hold"
 elif ! [[ "${clean_marker_head}" =~ ^[0-9a-f]{40}$ ]]; then
   clean_marker_reason="head_unavailable"
 elif ! [[ "${clean_marker_base}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -682,7 +688,15 @@ review_blocked_stale_clear_after_clean()
   return 0
 }
 
-if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${sandbox_excluded_marker_suffix}${clean_marker_suffix}" >/dev/null; then
+# Issue #10057: list findings on paths the editor cannot change (written by
+# review_apply_fixes.sh) under their own heading. Same comment, no extra API
+# call; it goes before the trailing markers so the clean marker stays last.
+unreachable_summary_section=""
+if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/review_unreachable_summary.md" ]; then
+  unreachable_summary_section=$'\n\n'"$(head -c 20000 "${RUNTIME_DIR}/review_unreachable_summary.md")"
+fi
+
+if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${unreachable_summary_section}${sandbox_excluded_marker_suffix}${clean_marker_suffix}" >/dev/null; then
   echo "Posted editor summary comment."
   # Signal to the failure-comment step (line ~3269) that the
   # editor summary already landed on the PR thread. The generic

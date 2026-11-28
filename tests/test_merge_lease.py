@@ -1275,7 +1275,11 @@ class JudgeDecisionLeaseGrant(unittest.TestCase):
 		h1, _ = _p2_tick(with_judge)
 		h2, _ = _p2_tick(with_gate)
 		def reads(h: _Harness) -> list[str]:
-			return [c for c in _stable_calls(h.calls) if not c.startswith("gh workflow run")]
+			# Issue #10098: a confirmed head-gate waiter also gets the ready-
+			# first mergeability read (pulls/<n>); a judge-decision waiter is
+			# granted without it. Every other read must stay the same.
+			return [c for c in _stable_calls(h.calls) if not c.startswith("gh workflow run")
+				and c != "gh api repos/owner/repo/pulls/5"]
 		self.assertEqual(reads(h1), reads(h2))
 		self.assertEqual(sum("/statuses" in c for c in h1.calls), 1, h1.calls)
 
@@ -1652,9 +1656,11 @@ class Wiring(unittest.TestCase):
 				kind, value = match.group(1), match.group(2)
 				self.assertEqual(value, expected[kind], f"{path.relative_to(REPO_ROOT)}: MERGE_LEASE_{kind}_MINUTES default {value}")
 				counts[(path.name, kind)] = counts.get((path.name, kind), 0) + 1
+		# Issue #10078: the three poller steps and the two sweep steps that can
+		# grant or renew a lease now pass the full lease set, TTL included.
 		self.assertEqual(counts, {
-			(REVIEW.name, "TTL"): 3, (POLL.name, "TTL"): 1, (CLOSE.name, "TTL"): 1,
-			(REVIEW.name, "IDLE"): 3, (POLL.name, "IDLE"): 4, (CLOSE.name, "IDLE"): 1,
+			(REVIEW.name, "TTL"): 3, (POLL.name, "TTL"): 4, (CLOSE.name, "TTL"): 1, (SWEEP.name, "TTL"): 2,
+			(REVIEW.name, "IDLE"): 3, (POLL.name, "IDLE"): 4, (CLOSE.name, "IDLE"): 1, (SWEEP.name, "IDLE"): 2,
 		})
 		lib = LIB.read_text()
 		for needle in ("${MERGE_LEASE_TTL_MINUTES:-480}", "lease_ttl_minutes=480",
@@ -1739,8 +1745,9 @@ class Wiring(unittest.TestCase):
 		for expansion in ("${MERGE_LEASE_REVOKE_ENABLED:-true}", "${MERGE_LEASE_IDLE_MINUTES:-180}",
 				"${MERGE_LEASE_PRIORITY_HEAD_PREFIXES-auto/forward-merge-stable-}"):
 			self.assertIn(expansion, lib)
-		# The sweep reads only MERGE_LEASE_ENABLED / MERGE_LEASE_WAIT_LABEL; if it
-		# ever calls the gate or tick, it needs the three lines above too.
+		# The sweep's lease-writing steps pass the full lease set (issue #10078,
+		# enforced by tests/test_merge_lease_env_contract.py), but it still
+		# never calls the gate or tick itself.
 		sweep = SWEEP.read_text()
 		for fn in ("_merge_lease_gate", "_merge_lease_queue_first", "_mt_merge_lease_tick"):
 			self.assertNotIn(fn, sweep)
@@ -1750,11 +1757,12 @@ class Wiring(unittest.TestCase):
 		that runs the freshness gate or the lease, with the helper's default."""
 		line = ("MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || "
 			"'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}")
-		for wf, expected in ((REVIEW, 3), (POLL, 4), (CLOSE, 1), (SWEEP, 0)):
+		for wf, expected in ((REVIEW, 3), (POLL, 4), (CLOSE, 1), (SWEEP, 1)):
 			text = wf.read_text()
 			self.assertEqual(text.count(line), expected, wf.name)
 			if wf is SWEEP:
-				# The sweep's base sync treats clean and overlap alike, so its
+				# The enumerate step carries the vars expression (issue #10078);
+				# the sweep's base sync treats clean and overlap alike, so its
 				# final-CI step pins the class off (no probe it cannot use).
 				step = text.split("- name: Ensure the final CI run on reviewed PR heads", 1)[1].split("\n      - name: ", 1)[0]
 				self.assertIn("          MERGE_LEASE_SOFT_PATHS: none\n", step)
@@ -2414,7 +2422,10 @@ class MultiHolderWiring(unittest.TestCase):
 		# soft-path list; they follow MERGE_LEASE_ENABLED, and only those two may.
 		gate_before = "MERGE_LEASE_ENABLED: ${{ vars."
 		for wf, expected, before in ((REVIEW, 5, ("MERGE_LEASE_SOFT_PATHS: ${{ vars.", gate_before)), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
-				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 1, "MERGE_LEASE_WAIT_LABEL: ${{ vars.")):
+				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 2, ("MERGE_LEASE_SOFT_PATHS: ${{ vars.", "MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars."))):
+			# The sweep has two lease steps (issue #10078): the enumerate step
+			# ends with SOFT_PATHS, the final-CI step pins SOFT_PATHS: none after
+			# MAX_HOLDERS, so its MAX_HOLDERS follows PRIORITY_HEAD_PREFIXES.
 			lines = wf.read_text().splitlines()
 			hits = [i for i, ln in enumerate(lines) if ln.strip() == line]
 			self.assertEqual(len(hits), expected, wf.name)

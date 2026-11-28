@@ -57,7 +57,7 @@ env:
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'high' }}
   # Codex version baked into the isolated agent image
   # (scripts/codex_isolated_exec.sh); matches the host install below.
-  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
   # Opt-in Solidity compilers for the isolated implement sandbox image
   # (scripts/codex_isolated_exec.sh validates it; empty = off, image unchanged).
   # Set at workflow level, not only on the prepare steps, because `run`,
@@ -329,7 +329,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       - name: Create runtime workspace
         if: env.SKIP_IMPLEMENT != 'true'
