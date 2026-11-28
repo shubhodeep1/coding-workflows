@@ -947,7 +947,8 @@ jobs:
             # Any other approved head gets the one runs read first, so a failed
             # final CI keeps its own skip and token (or, with
             # SWEEP_SKIP_APPROVED_FINAL_CI_FAILED=false, its re-review) and is
-            # never logged as a verdict wait. Each skip follows its own switch.
+            # never logged as a verdict wait, and a read_failed answer dispatches.
+            # Each skip follows its own switch.
             verdict_wait_reason=""
             if [ "${verdict_wait_on}" = "true" ] && type review_sweep_verdict_wait_reason >/dev/null 2>&1; then
               verdict_wait_reason="$(review_sweep_verdict_wait_reason "${row}")"
@@ -956,6 +957,10 @@ jobs:
             # and merges the head; with the train off the sweep is the fallback.
             if [ "${verdict_wait_reason}" = "final_ci_merge_pending" ] && [ "${merge_train_skip_active}" != "true" ]; then
               verdict_wait_reason=""
+              # The label is checked before auto-merge; keep the auto-merge wait.
+              if printf '%s' "${row}" | jq -e '.mergeable == "MERGEABLE" and (.auto_merge_enabled_at | type) == "string"' >/dev/null 2>&1; then
+                verdict_wait_reason="auto_merge_waiting"
+              fi
             fi
             approved_final_ci=""
             if [ "${verdict_wait_reason}" != "final_ci_merge_pending" ] \
@@ -971,6 +976,11 @@ jobs:
               fi
             fi
             if [ "${verdict_wait_on}" = "true" ] && [ "${approved_final_ci}" != "failure" ]; then
+              # Fail-open: a failed runs read dispatches as before, even when
+              # the snapshot names a wait (review_sweep_final_ci_state header).
+              if [ "${approved_final_ci}" = "read_failed" ]; then
+                verdict_wait_reason=""
+              fi
               # A final CI run queued or running on the approved head decides
               # the merge; a review run would not (issue #9991).
               # Only a MERGEABLE head: a conflicted or not yet computed head is

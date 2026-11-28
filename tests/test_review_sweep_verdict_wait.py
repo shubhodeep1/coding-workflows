@@ -283,6 +283,23 @@ def test_final_ci_merge_pending_label_is_swept_with_the_train_off(tmp_path: Path
 	assert "VERDICT_WAIT_SKIP" not in result.stdout
 
 
+def test_final_ci_merge_pending_label_with_auto_merge_keeps_the_skip_with_the_train_off(tmp_path: Path) -> None:
+	"""The label is checked before auto-merge; with the train off the auto-merge wait still holds."""
+	result = _run(tmp_path, [_pr(1, ("ai:final-ci-merge-pending",))], {1: {"gate": "SUCCESS", "auto_at": _iso(1)}},
+		env={"MERGE_TRAIN_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == []
+	assert f"VERDICT_WAIT_SKIP source=sweep pr=1 head={_sha(1)} reason=auto_merge_waiting" in result.stdout
+
+
+def test_failed_final_ci_read_dispatches_the_auto_merge_head(tmp_path: Path) -> None:
+	"""Fail-open: a runs read that cannot be decided dispatches, even when the snapshot names a wait."""
+	result = _run(tmp_path, [_pr(1)], {1: {"gate": "SUCCESS", "auto_at": _iso(1)}}, final_ci={_sha(1): "not json"})
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == ["1"]
+	assert "VERDICT_WAIT_SKIP" not in result.stdout
+
+
 def test_lease_waiter_is_skipped_and_logged(tmp_path: Path) -> None:
 	result = _run(tmp_path, [_pr(1, ("ai:merge-lease-wait",))], {1: {"gate": "SUCCESS"}})
 	assert result.returncode == 0, result.stderr
@@ -367,8 +384,14 @@ def test_failed_marker_post_is_logged_and_retried_next_tick(tmp_path: Path) -> N
 	assert "outcome=marker_failed" in result.stdout
 	assert _sends(tmp_path) == 1
 	# gh_retry is loaded here (GH_RETRY_MAX_ATTEMPTS=1), so one POST attempt.
-	assert len(_lines(tmp_path, "statuses.log")) >= 1
+	assert len(_lines(tmp_path, "statuses.log")) == 1
 	assert _dispatched(tmp_path) == []
+	# Next tick: the marker is still missing, so the alert is sent again.
+	_reset_logs(tmp_path)
+	result = _run(tmp_path, [_pr(1)], meta, env=TG)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=sent" in result.stdout
+	assert _sends(tmp_path) == 1
 
 
 def test_unconfigured_telegram_posts_no_marker(tmp_path: Path) -> None:
