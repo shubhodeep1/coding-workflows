@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_sweep_head_gate.sh:430-495 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: `review_sweep_verdict_wait_alert` ignores the `final_ci_in_flight` reason that .github/workflows/review_autofix_sweep.yml:996-999 passes as the fourth argument, so an approved, MERGEABLE head with a final CI in flight but no `ai:final-ci-merge-pending` label gets `vwa_label=checks` and the ruleset path instead of `final_ci`.\n  WHY: The single alert per head (guarded by the `ai-review/verdict-wait-alert` marker) then reports `blocker=ci/final (missing)` from `_pr_ruleset_required_check_blockers` (scripts/pr_checks_lib.sh:753/806) instead of \"final CI queued or running\", which contradicts the call-site comment. anthropic and openai rated this NIT (mapped to low) and gemini gave no severity. minimax_minimax-m3 and z-ai_glm-5_3-flash disputed it as a defect: they say the spec ties the static text to the label and that pr_checks_lib.sh:797-812 reports a running check as `ci/final (pending)`.\n- scripts/review_sweep_head_gate.sh:451-495 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When the final CI is known to be in flight (`final_ci_in_flight`), `review_sweep_verdict_wait_alert` still makes unnecessary API calls through `_pr_ruleset_required_check_blockers`.\n  WHY: Each such head costs up to 3 extra GET calls for ruleset blockers that do not matter, because the running CI is already known. gemini stated no severity, so low is assumed; anthropic noted the same cost inside its correctness finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_sweep_head_gate.sh: review_sweep_verdict_wait_alert, lines 430 and 451-454 (`if [ \"${vwa_reason}\" = \"auto_merge_waiting\" ] && [ \"${vwa_label}\" = \"final_ci\" ]; then vwa_label=checks; fi`) and line 486 (`final_ci) vwa_blocker=\"final CI queued or running\" ;;`). Caller: .github/workflows/review_autofix_sweep.yml lines 996-999 (`[ \"${approved_final_ci}\" = \"in_flight\" ] && vw_alert_reason=\"final_ci_in_flight\"`). | severity=NIT | confidence=4\n  PROBLEM: The helper acts on the fourth argument only when it equals `auto_merge_waiting`, so `final_ci_in_flight` is ignored. An unlabelled MERGEABLE head with a final CI in flight gets `vwa_label=checks` and calls `_pr_ruleset_required_check_blockers` (scripts/pr_checks_lib.sh:753), which names a required context not yet posted as `\"<ctx> (missing)\"` (pr_checks_lib.sh:806).\n  WHY: The one alert per head says `blocker=ci/final (missing)` instead of \"final CI queued or running\", so the operator never sees the correct blocker. This contradicts the call-site comment and the README row for VERDICT_WAIT_ALERT_HOURS, and costs up to 3 extra GET calls. Suggested fix after line 454: `[ \"${vwa_reason}\" = \"final_ci_in_flight\" ] && [ \"${vwa_label}\" != \"lease\" ] && vwa_label=final_ci`. The same fix is repeated as a hardening suggestion (HARDENING_RISK_SCORE: 1).\n- TASK COMPLETENESS / INTENT GAPS: NONE. G1-G6 verified as covered. The unbatched stall-side per-PR GraphQL read was accepted as remaining risk in earlier rounds and was not reported again.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_sweep_head_gate.sh: review_sweep_verdict_wait_alert (lines 451-495) | confidence=4\n  PROBLEM: The function does not handle the final_ci_in_flight reason. An approved, MERGEABLE head with a final CI in flight but no ai:final-ci-merge-pending label is classified as checks instead of final_ci.\n  WHY: The alert calls _pr_ruleset_required_check_blockers and reports a ruleset blocker (e.g., ci/final (missing)) instead of reporting that the final CI is running.\n- scripts/review_sweep_head_gate.sh: review_sweep_verdict_wait_alert (lines 451-495) | confidence=4\n  PROBLEM: Unnecessary API calls to _pr_ruleset_required_check_blockers are made when a final CI is already known to be in flight.\n  WHY: For final_ci_in_flight heads, the function makes up to 3 extra GET calls for ruleset blockers that do not matter while the CI is known to be running.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- Note: minimax explicitly declined to re-flag the `final_ci_in_flight` fourth-argument issue. It says the agents.d fragment ties the \"final CI queued or running\" text to `FINAL_CI_MERGE_PENDING_LABEL`, and that an unlabelled head goes through `_pr_ruleset_required_check_blockers`, which reports a running check as `<ctx> (pending)`. It also says backward compatibility is preserved at the lease-wait call site (workflow line 841-843).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_sweep_head_gate.sh; .github/workflows/review_autofix_sweep.yml: scripts/review_sweep_head_gate.sh:451-454, 470-495; review_autofix_sweep.yml:997-999 | severity=NIT | confidence=4\n  PROBLEM: The sweep passes `final_ci_in_flight` to the alert helper, but the helper does not use it when choosing the blocker, so an unlabelled head takes the `checks` path and reports the ruleset summary.\n  WHY: If the queued or running `ci.yml` run has not yet emitted its required check, `_pr_ruleset_required_check_blockers` reports it as missing, so the alert names a missing ruleset check instead of the running final CI.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not reported as a defect; HARDENING_RISK_SCORE: 1): scripts/review_sweep_head_gate.sh, `review_sweep_verdict_wait_alert`, in the stale-label override block before `case \"${vwa_label}\"`. The function ignores `vwa_reason=final_ci_in_flight`, so an unlabelled in-flight head is classified `vwa_label=checks` and pays for the `_pr_ruleset_required_check_blockers` reads. z-ai says the alert text stays accurate because `scripts/pr_checks_lib.sh:797-812` reports `ci/final (pending)`. Suggested fix: `[ \"${vwa_reason}\" = \"final_ci_in_flight\" ] && [ \"${vwa_label}\" != \"lease\" ] && vwa_label=final_ci`, about 1-3 lines changed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "deac9c4059ec14f7fb121c7757440cc49d338bc34a2fe1f6e69cb996a75e960b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10247,
+    "run_id": "46129727547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46129727547",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128094417_f2e00a3bcf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10247,
+    "run_id": "46129727547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T09:44:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
