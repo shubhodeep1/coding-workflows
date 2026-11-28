@@ -21,7 +21,7 @@ TAG_OBJECT = "2" * 40
 RUN_ID = "4242"
 
 MOCK_GH = r'''#!/usr/bin/env python3
-import json, os, sys
+import base64, json, os, sys
 from pathlib import Path
 state_path = Path(os.environ["MOCK_GH_STATE"])
 state = json.loads(state_path.read_text())
@@ -47,6 +47,17 @@ if args[:1] == ["api"]:
         rest = rest[2:]
     path = rest[0]
     fields = dict(f.split("=", 1) for f in rest[1:] if "=" in f and not f.startswith("-"))
+    if "/contents/stable-hold.json" in path:
+        # Stable rollback hold (#9342); default: no hold branch (inactive).
+        hold = state.get("stable_hold", "inactive")
+        if hold == "inactive":
+            save(); sys.stderr.write("gh: Not Found (HTTP 404)\n"); sys.exit(1)
+        if hold == "unknown":
+            save(); sys.stderr.write("HTTP 503: Service Unavailable\n"); sys.exit(1)
+        doc = {"schema": "stable_hold.v1", "active": True, "to_version": "v1.45.0", "from_version": "v1.46.0"}
+        if hold == "malformed":
+            doc["schema"] = "other"
+        respond({"sha": "a" * 40, "encoding": "base64", "content": base64.b64encode(json.dumps(doc).encode()).decode()})
     if path == "user":
         if state.get("user_error"):
             save(); sys.stderr.write("HTTP 403\n"); sys.exit(1)
@@ -402,6 +413,37 @@ def test_compare_identical_counts_as_up_to_date() -> None:
 		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, compare_status="identical"))
 	assert "AUTO_RELEASE_SKIPPED reason=up_to_date" in proc.stdout
 	assert not state.get("dispatches")
+
+
+def test_stable_hold_active_skips_release() -> None:
+	# rollback-stable.yml moved the tag back (#9342): the branch is ahead of
+	# the tag by design, and releasing it would re-ship the regression.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, stable_hold="active"))
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_SKIPPED reason=stable_hold_active to=v1.45.0" in proc.stdout
+	assert not state.get("dispatches")
+	assert len(state["calls"]) == 1 and "/contents/stable-hold.json?ref=ai%2Fstable-hold" in state["calls"][0][1]
+	assert "dispatched=false" in state["github_output"]
+
+
+def test_stable_hold_unknown_skips_release() -> None:
+	for hold in ("unknown", "malformed"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, stable_hold=hold), env={"GH_RETRY_MAX_ATTEMPTS": "1"})
+		assert proc.returncode == 0, proc.stderr
+		assert "AUTO_RELEASE_SKIPPED reason=stable_hold_unknown" in proc.stdout, hold
+		assert not state.get("dispatches"), hold
+
+
+def test_stable_hold_inactive_keeps_existing_behaviour() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40))
+	assert proc.returncode == 0, proc.stderr
+	assert "stable_hold" not in proc.stdout
+	assert f"AUTO_RELEASE_DISPATCHED sha={TIP}" in proc.stdout
+	assert "/contents/stable-hold.json" in state["calls"][0][1]
+	assert state["dispatches"] == [["test-and-mark-stable.yml", "--repo", "owner/repo", "--ref", "refs/heads/stable"]]
 
 
 def _hours_ago(hours: int) -> str:

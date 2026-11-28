@@ -380,6 +380,10 @@ if runtime_dir is not None:
         "ledger_status.txt",
         "editor_summary.txt",
         "committed_files.txt",
+        # Issue #10057: reviewer text of findings stubbed as unreachable, so
+        # a same-head resume (which skips the ledger stage) can still put it
+        # in the follow-up issue. Copied only when the ledger stage wrote it.
+        "review_issues.pre_unreachable.txt",
     ):
         runtime_artifacts.append(runtime_dir / file_name)
 copy_artifacts(runtime_artifacts, partial_marker_dir / "runtime")

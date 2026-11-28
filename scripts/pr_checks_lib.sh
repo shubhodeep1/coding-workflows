@@ -2830,7 +2830,7 @@ _pr_base_sync_inline_merge()
 		return 1
 	fi
 	if ! gh_retry _safe_gh_jq --paginate --slurp "repos/${inline_repo}/issues/${inline_pr}/comments?per_page=100" 2>/dev/null \
-		| jq -c '[ .[]? | if type == "array" then .[] else . end | select(type == "object") | {author_login: (.user.login // ""), body: (.body // "")} ]' \
+		| jq -c '[ .[]? | if type == "array" then .[] else . end | select(type == "object") | {author_login: (.user.login // ""), author_type: (.user.type // ""), body: (.body // "")} ]' \
 			> "${inline_comments}" 2>/dev/null \
 		|| ! jq -e 'type == "array"' "${inline_comments}" >/dev/null 2>&1 \
 		|| ! bash "${inline_lib}/review_head_gate.sh" freshness-sync "${inline_repo}" "${inline_pr}" "${inline_update}" \
@@ -3822,8 +3822,10 @@ _merge_lease_split_soft()
 # auto/forward-merge-stable-; comma-separated literal prefixes; empty, none
 # or off turns it off). The head ref comes from the listing already read.
 # Several holders per base (merge-lease-parallel Phase 5, Refs #9781):
-# MERGE_LEASE_MAX_HOLDERS (default 1, 1-5; not a whole number gives 1 with a
-# warning, out of range is clamped) PRs whose paths are pairwise disjoint
+# MERGE_LEASE_MAX_HOLDERS (default 2 since #10124, 1-5; set 1 for the
+# single-holder lease; empty or whitespace-only gives 2 without a warning,
+# any other value that is not a whole number of at most three digits gives 2
+# with a warning, 0 gives 1 and 6-999 give 5) PRs whose paths are pairwise disjoint
 # (Phase 4 soft class included) may hold one base's lease at once. With 2+
 # live holders the record keeps pr=/head=/acquired=/updated= for the primary,
 # expires= is the latest holder expiry (an old v1 reader then sees the primary
@@ -3832,8 +3834,8 @@ _merge_lease_split_soft()
 #   holder=<pr> head=<sha|> expires=<epoch> acquired=<epoch> updated=<epoch>
 #   holder_path=<pr> <path>   (one per path; `*` for a holder over the cap)
 # `paths:` holds the union, or `*`. One holder is written in the v1 shape, so
-# with the default of 1 the code path, record bytes, log lines and API calls
-# are those of Phases 1-4. _merge_lease_read sets MERGE_LEASE_HOLDER_ROWS
+# with MERGE_LEASE_MAX_HOLDERS=1 the code path, record bytes, log lines and API
+# calls are those of Phases 1-4. _merge_lease_read sets MERGE_LEASE_HOLDER_ROWS
 # (live rows `pr head expires acquired updated`, head `-` when unknown,
 # primary first), MERGE_LEASE_HOLDER_ALL_ROWS (expired rows too),
 # MERGE_LEASE_HOLDER_PATHS (`pr<TAB>path` lines) and MERGE_LEASE_HOLDER_COUNT;
@@ -3905,19 +3907,21 @@ _merge_lease_idle_seconds()
 }
 
 # Phase 5 (Refs #9781): holders allowed per base. MERGE_LEASE_MAX_HOLDERS
-# (default 1, range 1-5). A value that is not a whole number of at most three
-# digits uses 1 and prints one ::warning:: to stderr (the value shown is cut
-# to [0-9A-Za-z_-] and 32 characters); 0 gives 1, above 5 gives 5.
+# (default 2 since #10124, range 1-5; 1 restores the single-holder lease). An
+# empty or whitespace-only value uses 2 without a warning. A value that is not
+# a whole number of at most three digits uses 2 and prints one ::warning:: to
+# stderr (the value shown is cut to [0-9A-Za-z_-] and 32 characters); 0 gives
+# 1, above 5 gives 5.
 _merge_lease_max_holders()
 {
-	local lease_mh_raw="${MERGE_LEASE_MAX_HOLDERS:-1}" lease_mh_shown
+	local lease_mh_raw="${MERGE_LEASE_MAX_HOLDERS:-2}" lease_mh_shown
 	lease_mh_raw="${lease_mh_raw#"${lease_mh_raw%%[![:space:]]*}"}"
 	lease_mh_raw="${lease_mh_raw%"${lease_mh_raw##*[![:space:]]}"}"
-	[ -n "${lease_mh_raw}" ] || lease_mh_raw=1
+	[ -n "${lease_mh_raw}" ] || lease_mh_raw=2
 	if ! [[ "${lease_mh_raw}" =~ ^[0-9]{1,3}$ ]]; then
 		lease_mh_shown="$(printf '%s' "${lease_mh_raw}" | tr -cd '0-9A-Za-z_-' | cut -c1-32)"
-		echo "::warning::MERGE_LEASE_MAX_HOLDERS=${lease_mh_shown} is not an integer; using 1" >&2
-		echo 1
+		echo "::warning::MERGE_LEASE_MAX_HOLDERS=${lease_mh_shown} is not an integer; using 2" >&2
+		echo 2
 		return 0
 	fi
 	lease_mh_raw=$((10#${lease_mh_raw}))

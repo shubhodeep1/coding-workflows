@@ -1256,7 +1256,7 @@ def test_review_wiring() -> None:
 	assert gate["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
 	# Issue #10017: the merge-lease holder exception to the audit throttle.
 	assert gate["env"]["MERGE_LEASE_ENABLED"] == "${{ vars.MERGE_LEASE_ENABLED || 'true' }}"
-	assert gate["env"]["MERGE_LEASE_MAX_HOLDERS"] == "${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}"
+	assert gate["env"]["MERGE_LEASE_MAX_HOLDERS"] == "${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}"
 	assert gate["if"] == steps["Enable auto-merge on PR"]["if"].replace(" && steps.single_issue_security_pass.outputs.hold != 'true'", "")
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
 		assert steps[name]["if"].endswith("&& steps.single_issue_security_pass.outputs.hold != 'true'")
