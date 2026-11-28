@@ -157,6 +157,13 @@ TRACEBACK_MARKER_RE = re.compile(r"^<!-- ai:check-triage-traceback:v1 issue=([1-
 INTEGRATION_BASE_RE = re.compile(r"^orchestrator/project-([1-9][0-9]{0,9})$")
 TRACEBACK_START_RE = re.compile(r"Traceback \(most recent call last\)|\bFAILED\b|\bFAIL:|\bERROR:")
 FAILED_JOB_CONCLUSIONS = ("failure", "timed_out")
+# Issue #10156: the default branch's ci.yml result comes from push (delta)
+# and schedule (full suite) runs.
+CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+CI_BASE_RUN_EVENTS = ("push", "schedule")
+# Conclusions that do not make the default branch red (a run that reports no
+# result, or a missing conclusion, never clears or sets a red base).
+CI_NON_RED_CONCLUSIONS = ("success", "cancelled", "skipped", "neutral", None, "")
 MAX_TRACEBACK_JOBS = 3
 MAX_EXCERPT_LINES = 120
 MAX_EXCERPT_BYTES = 12_000
@@ -433,6 +440,7 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 	base_repo = (base.get("repo") or {}).get("full_name") if isinstance(base.get("repo"), dict) else None
 
 	workflow_id = None
+	workflow_is_ci = False
 	if triage.get("check_run_id") is None:
 		# Workflow-run triage: the check name is the workflow name.
 		run_id = triage.get("run_id")
@@ -485,6 +493,11 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		):
 			return _fail("run_identity_mismatch")
 		workflow_id = run["workflow_id"]
+		# Issue #10156: ci.yml's push runs on the default branch are a delta
+		# suite and its full suite runs on a schedule, so the default-branch
+		# evidence for ci.yml also takes scheduled runs. Other workflows keep
+		# the push-only read.
+		workflow_is_ci = str(run.get("path") or "").split("@", 1)[0] == CI_WORKFLOW_PATH
 		try:
 			pr_jobs = _jobs_of(_gh_api([f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"]))
 		except GhApiError:
@@ -542,14 +555,52 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		if not verdict["failed_jobs"]:
 			_fail("no_failed_jobs")
 			return None
+		branch_query = quote(default_branch, safe='')
+		if workflow_is_ci:
+			runs_path = f"repos/{repo}/actions/workflows/{workflow_id}/runs?branch={branch_query}&status=completed&per_page=20"
+			allowed_events: tuple[str, ...] = CI_BASE_RUN_EVENTS
+		else:
+			runs_path = f"repos/{repo}/actions/workflows/{workflow_id}/runs?branch={branch_query}&event=push&status=completed&per_page=1"
+			allowed_events = ("push",)
 		try:
-			runs = _gh_api([
-				f"repos/{repo}/actions/workflows/{workflow_id}/runs?branch={quote(default_branch, safe='')}&event=push&status=completed&per_page=1",
-			])
+			runs = _gh_api([runs_path])
 		except GhApiError:
 			_fail("default_run_unreadable")
 			return None
 		base_runs = runs.get("workflow_runs") if isinstance(runs, dict) else None
+		if workflow_is_ci and isinstance(base_runs, list):
+			# Newest first, as the API lists them; other events (dispatch final
+			# runs on main) are not the branch's own result.
+			base_runs = [item for item in base_runs if not isinstance(item, dict) or item.get("event") in allowed_events]
+			# Push and scheduled runs overlap (separate concurrency groups): the
+			# branch's result is the run that finished last (`updated_at`, else
+			# `created_at`), so a later-created delta push that finished first
+			# cannot hide a red scheduled full run. The sort is stable, so ties
+			# keep the API's newest-created order. A malformed entry keeps the
+			# listing as it is (the check below fails closed on it).
+			if all(isinstance(item, dict) for item in base_runs):
+				base_runs = sorted(base_runs, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+				# A red run stays the branch's result until a green run started
+				# after it finished (`run_started_at`, else `created_at`; a re-run
+				# counts from `created_at`, see _run_start): a delta
+				# push that chose its base before the red run finished cannot
+				# vouch for the tree it found broken, while a push queued behind
+				# the red run in `ci-push-<ref>` starts only after it.
+				red_run = next((item for item in base_runs if item.get("conclusion") not in CI_NON_RED_CONCLUSIONS), None)
+
+				def _run_start(item: dict[str, Any]) -> str:
+					# A re-run (run_attempt > 1) gets a new run_started_at but can
+					# reuse the first attempt's delta selection, so only the first
+					# attempt counts from its start; a re-run counts from creation.
+					attempt = item.get("run_attempt")
+					first_attempt = attempt is None or (type(attempt) is int and attempt <= 1)
+					started = item.get("run_started_at") if first_attempt else None
+					return str(started or item.get("created_at") or "")
+
+				if red_run is not None:
+					red_finished = str(red_run.get("updated_at") or red_run.get("created_at") or "")
+					if not any(item.get("conclusion") == "success" and _run_start(item) >= red_finished for item in base_runs):
+						base_runs = [red_run] + [item for item in base_runs if item is not red_run]
 		if not isinstance(base_runs, list) or not base_runs or not isinstance(base_runs[0], dict):
 			_fail("no_completed_default_run")
 			return None
@@ -557,7 +608,7 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		evidence = base_run.get("head_sha")
 		if (
 			base_run.get("status") != "completed" or base_run.get("conclusion") != "success"
-			or base_run.get("head_branch") != default_branch or base_run.get("event") != "push"
+			or base_run.get("head_branch") != default_branch or base_run.get("event") not in allowed_events
 			or not isinstance(base_run.get("id"), int)
 			or not isinstance(evidence, str) or not SHA_RE.match(evidence)
 		):
@@ -569,6 +620,26 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			_fail("default_run_jobs_unreadable")
 			return None
 		names = [job["name"] for job in verdict["failed_jobs"]]
+		if not shard_jobs_resolved(names, base_jobs) and workflow_is_ci and base_run.get("event") == "push":
+			# A delta push run skips the gated test jobs, so it cannot resolve
+			# them; the newest scheduled full run in the same listing can, with
+			# one more jobs read. It must itself be green.
+			scheduled = next((item for item in base_runs[1:] if isinstance(item, dict) and item.get("event") == "schedule"), None)
+			scheduled_sha = scheduled.get("head_sha") if isinstance(scheduled, dict) else None
+			if (
+				isinstance(scheduled, dict) and scheduled.get("status") == "completed" and scheduled.get("conclusion") == "success"
+				and scheduled.get("head_branch") == default_branch and isinstance(scheduled.get("id"), int)
+				and isinstance(scheduled_sha, str) and SHA_RE.match(scheduled_sha)
+			):
+				try:
+					scheduled_jobs = _jobs_of(_gh_api([f"repos/{repo}/actions/runs/{scheduled['id']}/jobs?filter=latest&per_page=100"]))
+				except GhApiError:
+					_fail("default_run_jobs_unreadable")
+					return None
+				if shard_jobs_resolved(names, scheduled_jobs):
+					base_run = scheduled
+					evidence = scheduled_sha
+					base_jobs = scheduled_jobs
 		if not shard_jobs_resolved(names, base_jobs):
 			_fail("failed_jobs_not_resolved")
 			return None

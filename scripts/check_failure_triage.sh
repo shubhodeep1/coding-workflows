@@ -1918,9 +1918,33 @@ triage_base_gate_check()
 				base_gate_workflow_path=""
 			fi
 		fi
-		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
+		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]] && [ "${base_gate_workflow_path}" = ".github/workflows/ci.yml" ]; then
+			# Issue #10156: main's push runs are a delta suite and its full suite
+			# runs from ci.yml's `schedule` trigger, so the base result is the
+			# newest push or scheduled run. Same single read, a wider page,
+			# filtered on the client. Push and scheduled runs overlap (separate
+			# concurrency groups), so when the newest-created run is completed
+			# the result is the completed run that finished last (`updated_at`,
+			# ties to the API's newest-created order): a later-created delta push
+			# that finished green first must not hide a red scheduled full run.
+			# A red run (failure, timed_out, ...) stays the result until a green
+			# run started after it finished (`run_started_at`, else `created_at`;
+			# a re-run, `run_attempt` > 1, counts from `created_at`, since a
+			# partial re-run reuses its first attempt's delta selection):
+			# a delta push that chose its base before the red run finished cannot
+			# vouch for the tree it broke on, while a push queued behind the red
+			# run in `ci-push-<ref>` starts, and reads its base, only after it.
+			# A scheduled full run still in progress anywhere on the page also
+			# reads as pending: it sits in `ci-schedule-<ref>`, so a later-created
+			# delta push can finish first and sit above it at index 0. Push runs
+			# share one serial group, so only index 0 can be an in-flight push.
+			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&per_page=10" \
+				--jq '[.workflow_runs[]? | select(type == "object") | select((.event // "") == "push" or (.event // "") == "schedule")] as $base_runs | if ($base_runs | length) == 0 then "" elif $base_runs[0].status != "completed" or any($base_runs[]; (.event // "") == "schedule" and (.status // "") != "completed") then "pending" else ([$base_runs | to_entries[] | select(.value.status == "completed")] | sort_by([(.value.updated_at // .value.created_at // ""), (0 - .key)]) | map(.value)) as $done | ([$done[] | select((.conclusion // "") | IN("success", "cancelled", "skipped", "neutral", "") | not)] | last) as $red | (if $red != null and ([$done[] | select((.conclusion // "") == "success" and ((if ((.run_attempt // 1) | type == "number" and . <= 1) then (.run_started_at // .created_at // "") else (.created_at // "") end) >= ($red.updated_at // $red.created_at // "")))] | length) == 0 then $red else ($done | last) end) | ((.conclusion // "") + " " + (.id // "" | tostring)) end' 2>/dev/null || true)"
+		elif [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
 				--jq '.workflow_runs[0] | if . == null then "" elif .status == "completed" then ((.conclusion // "") + " " + (.id // "" | tostring)) else "pending" end' 2>/dev/null || true)"
+		fi
+		if [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
 			# A completed run also names its id ("<conclusion> <id>"); the
 			# tracked-failure skip below reads that run's failed jobs.
 			if [[ "${base_gate_conclusion}" == *" "* ]]; then

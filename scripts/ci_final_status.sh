@@ -24,6 +24,12 @@
 #                                        cancelled / skipped / empty).
 #   CI_FINAL_STATUS_DOCS_ONLY_REQUESTED  "true" in a docs-only final CI.
 #   CI_FINAL_STATUS_DOCS_ONLY_OUTCOME    outcome of the docs-only verify step.
+#   CI_FINAL_STATUS_RUN_KIND             "delta" or "full" on main push and
+#                                        scheduled runs (issue #10156); adds
+#                                        " (delta suite)" / " (full suite)" to
+#                                        the description. Any other value,
+#                                        including empty (every other run),
+#                                        leaves the description unchanged.
 #   GITHUB_SERVER_URL, GITHUB_RUN_ID     build the status target_url.
 #   CI_FINAL_STATUS_NEEDS_JSON           `toJSON(needs)` of `lint` (default
 #                                        empty; only `.result` is read).
@@ -136,6 +142,7 @@ ci_final_status_main()
 	local aggregate="${CI_FINAL_STATUS_AGGREGATE_OUTCOME:-}"
 	local docs_only_requested="${CI_FINAL_STATUS_DOCS_ONLY_REQUESTED:-false}"
 	local docs_only_outcome="${CI_FINAL_STATUS_DOCS_ONLY_OUTCOME:-}"
+	local run_kind="${CI_FINAL_STATUS_RUN_KIND:-}"
 	local server="${GITHUB_SERVER_URL:-https://github.com}"
 	local run_id="${GITHUB_RUN_ID:-}"
 	local state="" description="" target_url=""
@@ -167,6 +174,10 @@ ci_final_status_main()
 			return 0
 		fi
 	fi
+	case "${run_kind}" in
+		delta) description="${description} (delta suite)" ;;
+		full) description="${description} (full suite)" ;;
+	esac
 
 	[[ "${server}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || server="https://github.com"
 	if [[ "${run_id}" =~ ^[0-9]+$ ]]; then

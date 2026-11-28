@@ -1278,3 +1278,115 @@ def test_no_traceback_flag_skips_job_log_reads_and_traceback_comment(tmp_path, m
 	assert rc == 0 and result["status"] == "unverified" and result["traceback_posted"] == []
 	assert not result["writes"]
 	assert not any(call[-1].endswith("/logs") for call in fake.calls)
+
+
+# --- issue #10156: ci.yml default-branch evidence from push and schedule runs ---
+
+CI_RUNS_KEY = rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&status=completed&per_page=20"
+SCHEDULE_SHA = "e" * 40
+
+
+def _ci_routes(base_runs, **overrides):
+	routes = _routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": _run(path=".github/workflows/ci.yml@refs/heads/ai/issue-1")})
+	del routes[rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1"]
+	routes[CI_RUNS_KEY] = {"workflow_runs": base_runs}
+	routes[rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{SCHEDULE_SHA}"] = {"status": "ahead"}
+	routes.update(overrides)
+	return routes
+
+
+def test_ci_scheduled_run_counts_as_default_branch_evidence(tmp_path, monkeypatch):
+	runs = [_base_run(event="workflow_dispatch", id=37000001001), _base_run(event="schedule")]
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_ci_routes(runs))
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["evidence_sha"] == EVIDENCE_SHA
+	assert not any("event=push" in call[-1] for call in fake.calls)
+
+
+def test_ci_red_scheduled_run_newer_than_green_push_is_not_success(tmp_path, monkeypatch):
+	runs = [_base_run(event="schedule", conclusion="failure", id=37000001002), _base_run()]
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_ci_routes(runs))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "default_run_not_success"
+
+
+def test_ci_red_scheduled_run_that_finished_last_is_not_success(tmp_path, monkeypatch):
+	# The delta push was created later but finished first; the scheduled full
+	# run that finished red after it is the branch's result.
+	runs = [
+		_base_run(id=37000001007, created_at="2026-11-26T22:35:00Z", updated_at="2026-11-26T22:45:00Z"),
+		_base_run(event="schedule", conclusion="failure", id=37000001008, created_at="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:55:00Z"),
+	]
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_ci_routes(runs))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "default_run_not_success"
+
+
+def test_ci_green_push_that_chose_its_base_before_a_red_run_finished_is_not_success(tmp_path, monkeypatch):
+	# The delta push was created while the scheduled full run was still
+	# running and finished green after that run failed: it cannot clear it.
+	runs = [
+		_base_run(id=37000001009, created_at="2026-11-26T22:35:00Z", updated_at="2026-11-26T22:45:00Z"),
+		_base_run(event="schedule", conclusion="failure", id=37000001010, created_at="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:40:00Z"),
+	]
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_ci_routes(runs))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "default_run_not_success"
+
+
+def test_ci_green_run_created_after_the_red_run_finished_clears_it(tmp_path, monkeypatch):
+	runs = [
+		_base_run(event="schedule", id=37000001011, created_at="2026-11-26T22:41:00Z", updated_at="2026-11-26T23:10:00Z"),
+		_base_run(event="schedule", conclusion="failure", id=37000001012, created_at="2026-11-26T22:00:00Z", updated_at="2026-11-26T22:40:00Z"),
+	]
+	routes = _ci_routes(runs, **{
+		rf"repos/{REPO}/actions/runs/37000001011/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved", result
+
+
+def test_ci_green_push_queued_behind_the_red_run_clears_it(tmp_path, monkeypatch):
+	# Created before the red push finished, but queued in ci-push-main and
+	# started only after it: run_started_at, not created_at, decides.
+	runs = [
+		_base_run(id=37000001013, created_at="2026-11-26T10:15:00Z", run_started_at="2026-11-26T10:30:05Z", updated_at="2026-11-26T11:00:00Z"),
+		_base_run(conclusion="failure", id=37000001014, created_at="2026-11-26T10:00:00Z", run_started_at="2026-11-26T10:00:05Z", updated_at="2026-11-26T10:30:00Z"),
+	]
+	routes = _ci_routes(runs, **{
+		rf"repos/{REPO}/actions/runs/37000001013/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved", result
+
+
+def test_ci_partial_rerun_of_a_delta_push_does_not_clear_a_red_run(tmp_path, monkeypatch):
+	# A re-run (run_attempt 2) starts after the red run finished but reuses
+	# the first attempt's delta selection: it counts from created_at.
+	runs = [
+		_base_run(id=37000001015, created_at="2026-11-26T22:35:00Z", run_started_at="2026-11-26T23:00:00Z", run_attempt=2, updated_at="2026-11-26T23:10:00Z"),
+		_base_run(event="schedule", conclusion="failure", id=37000001016, created_at="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:40:00Z"),
+	]
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_ci_routes(runs))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "default_run_not_success"
+
+
+def test_ci_delta_push_falls_back_to_the_newest_green_scheduled_run(tmp_path, monkeypatch):
+	delta = _base_run(id=37000001003)
+	scheduled = _base_run(event="schedule", id=37000001004, head_sha=SCHEDULE_SHA)
+	routes = _ci_routes([delta, scheduled], **{
+		rf"repos/{REPO}/actions/runs/37000001003/jobs\?filter=latest&per_page=100": _jobs({"static-checks": "success", "tests-main-delta": "success"}, id_base=1),
+		rf"repos/{REPO}/actions/runs/37000001004/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["evidence_sha"] == SCHEDULE_SHA
+
+
+def test_ci_delta_push_with_red_scheduled_run_stays_unresolved(tmp_path, monkeypatch):
+	delta = _base_run(id=37000001005)
+	scheduled = _base_run(event="schedule", id=37000001006, head_sha=SCHEDULE_SHA, conclusion="failure")
+	routes = _ci_routes([delta, scheduled], **{
+		rf"repos/{REPO}/actions/runs/37000001005/jobs\?filter=latest&per_page=100": _jobs({"static-checks": "success"}, id_base=1),
+		rf"repos/{REPO}/actions/runs/37000001006/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+	})
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "failed_jobs_not_resolved"
+	assert not any("runs/37000001006/jobs" in call[-1] for call in fake.calls)

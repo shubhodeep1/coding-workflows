@@ -466,7 +466,8 @@ def test_every_final_ci_checkout_is_followed_by_the_check() -> None:
 			assert check["env"]["CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED"] == (
 				"${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}"
 			), name
-	assert seen == 10
+	# Issue #10156 added tests-main-delta (push-only; its check never runs).
+	assert seen == 11
 
 
 def test_steps_that_fetch_the_merge_commit_fetch_a_local_merges_parents() -> None:

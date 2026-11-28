@@ -34819,6 +34819,12 @@ def test_heal_stale_close_wiring() -> None:
 	body = poller.split("_heal_stale_close_check()\n{", 1)[1].split("\n}\n", 1)[0]
 	assert "-f state=closed -f state_reason=completed" in body
 	assert "-f branch=" in body and "-f event=push" in body and "-f status=completed" in body
+	# Issue #10156: only ci.yml drops the push filter (its full suite on main
+	# runs on a schedule); every other workflow keeps the push-only read.
+	assert "stale_event_args=(-f event=push)" in body
+	assert '[ "${workflow_base}" = "ci.yml" ] && stale_event_args=()' in body
+	assert '-f branch="${stale_branch}" "${stale_event_args[@]}" -f status=completed' in body
+	assert "local -a stale_event_args=()" in body
 	assert "STALL_MANAGED_LINKED_PR_CACHE" in body
 	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	for line in ("HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}",

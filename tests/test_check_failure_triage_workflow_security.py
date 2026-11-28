@@ -1347,6 +1347,17 @@ case "$*" in
   "api repos/owner/repo/actions/workflows/"*"/runs?branch="*"&event=push&per_page=1 --jq "*)
     [ -n "${MOCK_BASE_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CONCLUSION}${MOCK_BASE_RUN_ID:+ ${MOCK_BASE_RUN_ID}}" ;;
+  "api repos/owner/repo/actions/workflows/"*"/runs?branch="*"&per_page=10 --jq "*)
+    # ci.yml base gate (issue #10156): push and scheduled runs, filtered by
+    # the script's own --jq when a runs page is given.
+    if [ -n "${MOCK_BASE_RUNS_PAGE:-}" ]; then
+      base_jq=""; base_prev=""
+      for base_arg in "$@"; do [ "${base_prev}" = "--jq" ] && base_jq="${base_arg}"; base_prev="${base_arg}"; done
+      printf '%s' "${MOCK_BASE_RUNS_PAGE}" | jq -r "${base_jq}" || exit 1
+      exit 0
+    fi
+    [ -n "${MOCK_BASE_CONCLUSION+set}" ] || exit 1
+    printf '%s\\n' "${MOCK_BASE_CONCLUSION}${MOCK_BASE_RUN_ID:+ ${MOCK_BASE_RUN_ID}}" ;;
   "api -X GET repos/owner/repo/commits/"*"/check-runs -f check_name="*)
     [ -n "${MOCK_BASE_CHECK_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
@@ -1942,6 +1953,142 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | if . == null then \"\" elif .status == \"completed\" then ((.conclusion // \"\") + \" \" + (.id // \"\" | tostring)) else \"pending\" end",
 			calls,
 		)
+
+	def test_ci_base_gate_reads_push_and_scheduled_runs(self) -> None:
+		"""Issue #10156: for ci.yml, a red scheduled full run newer than a green
+		push (delta) run reads as a red base; other workflows keep the push read."""
+		page = json.dumps({"workflow_runs": [
+			{"id": 31, "event": "schedule", "status": "completed", "conclusion": "failure"},
+			{"id": 30, "event": "workflow_dispatch", "status": "completed", "conclusion": "success"},
+			{"id": 29, "event": "push", "status": "completed", "conclusion": "success"},
+		]})
+		calls: list[str] = []
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": page}, calls_path=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure pr=17", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertTrue(any("/runs?branch=main&per_page=10 --jq " in call for call in calls), calls)
+		self.assertFalse(any("&event=push&per_page=1" in call for call in calls), calls)
+
+		green = json.dumps({"workflow_runs": [
+			{"id": 41, "event": "workflow_dispatch", "status": "completed", "conclusion": "failure"},
+			{"id": 40, "event": "push", "status": "completed", "conclusion": "success"},
+		]})
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": green},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
+
+	def test_ci_base_gate_orders_completed_runs_by_completion(self) -> None:
+		"""A delta push created after a scheduled full run but finishing green
+		first does not hide the red scheduled run; an in-progress newest run
+		still reads as pending."""
+		page = json.dumps({"workflow_runs": [
+			{"id": 51, "event": "push", "status": "completed", "conclusion": "success",
+				"created_at": "2026-11-26T22:35:00Z", "updated_at": "2026-11-26T22:45:00Z"},
+			{"id": 50, "event": "schedule", "status": "completed", "conclusion": "failure",
+				"created_at": "2026-11-26T22:30:00Z", "updated_at": "2026-11-26T22:55:00Z"},
+		]})
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": page},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure pr=17", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+
+	def test_ci_base_gate_green_push_created_before_the_red_run_finished_stays_red(self) -> None:
+		"""A delta push created while the scheduled full run was running, and
+		finishing green after it failed, does not clear the red base; a green
+		run created after the red run finished does."""
+		red = {"id": 60, "event": "schedule", "status": "completed", "conclusion": "failure",
+			"created_at": "2026-11-26T22:30:00Z", "updated_at": "2026-11-26T22:40:00Z"}
+		early = {"id": 61, "event": "push", "status": "completed", "conclusion": "success",
+			"created_at": "2026-11-26T22:35:00Z", "updated_at": "2026-11-26T22:45:00Z"}
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": json.dumps({"workflow_runs": [early, red]})},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure pr=17", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+
+		late = {"id": 62, "event": "push", "status": "completed", "conclusion": "success",
+			"created_at": "2026-11-26T22:41:00Z", "updated_at": "2026-11-26T22:50:00Z"}
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": json.dumps({"workflow_runs": [late, early, red]})},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
+
+	def test_ci_base_gate_green_push_queued_behind_the_red_run_clears_it(self) -> None:
+		"""A push created before the red run finished but queued behind it in
+		ci-push-<ref> (run_started_at after the red run's updated_at) clears it."""
+		red = {"id": 70, "event": "push", "status": "completed", "conclusion": "failure",
+			"created_at": "2026-11-26T10:00:00Z", "run_started_at": "2026-11-26T10:00:05Z", "updated_at": "2026-11-26T10:30:00Z"}
+		queued = {"id": 71, "event": "push", "status": "completed", "conclusion": "success",
+			"created_at": "2026-11-26T10:15:00Z", "run_started_at": "2026-11-26T10:30:05Z", "updated_at": "2026-11-26T11:00:00Z"}
+		proc, _outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": json.dumps({"workflow_runs": [queued, red]})},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
+
+	def test_ci_base_gate_partial_rerun_of_a_delta_push_stays_red(self) -> None:
+		"""A re-run (run_attempt 2) starting after the red run finished counts
+		from created_at: it reuses the first attempt's delta selection."""
+		red = {"id": 72, "event": "schedule", "status": "completed", "conclusion": "failure",
+			"created_at": "2026-11-26T22:30:00Z", "updated_at": "2026-11-26T22:40:00Z"}
+		rerun = {"id": 73, "event": "push", "status": "completed", "conclusion": "success", "run_attempt": 2,
+			"created_at": "2026-11-26T22:35:00Z", "run_started_at": "2026-11-26T23:00:00Z", "updated_at": "2026-11-26T23:10:00Z"}
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": json.dumps({"workflow_runs": [rerun, red]})},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure pr=17", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+
+	def test_ci_base_gate_in_flight_scheduled_run_below_a_green_push_is_pending(self) -> None:
+		"""A scheduled full run still in progress (ci-schedule-<ref>) below a
+		later-created delta push that already finished green holds the gate."""
+		push = {"id": 81, "event": "push", "status": "completed", "conclusion": "success",
+			"created_at": "2026-11-26T22:35:00Z", "updated_at": "2026-11-26T22:45:00Z"}
+		scheduled = {"id": 80, "event": "schedule", "status": "in_progress", "conclusion": None,
+			"created_at": "2026-11-26T22:30:00Z", "updated_at": "2026-11-26T22:46:00Z"}
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": json.dumps({"workflow_runs": [push, scheduled]})},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=base_pending base=main pr=17", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+
+	def test_non_ci_base_gate_keeps_the_push_read(self) -> None:
+		calls: list[str] = []
+		proc, _outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/other.yml", "conclusion": "success"},
+			calls_path=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertTrue(any("/runs?branch=main&event=push&per_page=1 --jq " in call for call in calls), calls)
 
 	def test_failing_or_unknown_base_still_files(self) -> None:
 		for base, expected in (

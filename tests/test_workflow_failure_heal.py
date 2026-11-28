@@ -7152,6 +7152,10 @@ def test_verify_run_provenance_accepts_ci_push_on_default_branch() -> None:
 	ci_push = _provenance_run(repo=SELF_REPO, path="ci.yml", event="push", head_branch="main")
 	verdict = check(ci_push)
 	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["500"]
+	# Issue #10156: the scheduled full run on the default branch is accepted too.
+	verdict = check({**ci_push, "event": "schedule"})
+	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["500"]
+	assert check({**ci_push, "event": "schedule", "head_branch": "feature/x"})["reason"] == "current_run_rejected:ci_not_default_branch_push"
 	for run, default_branch in (
 		({**ci_push, "event": "pull_request"}, "main"),
 		({**ci_push, "event": "workflow_dispatch"}, "main"),
@@ -11977,6 +11981,32 @@ def test_heal_stale_closes_with_enough_green_runs_after_the_anchor() -> None:
 	assert "https://github.com/owner/repo/actions/runs/4000" in body and f"{1:040x}" in body
 	assert "HEAL_STALE_AUTO_CLOSE_ENABLED" in body
 	assert not AUTO_CLOSE_RE.search(body) and "#" not in body.replace("<!--", "")
+
+
+def test_heal_stale_counts_scheduled_ci_runs_and_requires_a_full_run() -> None:
+	# Issue #10156: ci.yml's push runs on main are a delta suite; its full
+	# suite runs on a schedule. Scheduled runs count toward the window.
+	runs = _stale_runs(5)
+	runs["workflow_runs"][4]["event"] = "schedule"
+	result = _stale_decide(runs=runs)
+	assert result["decision"] == "close" and result["green_runs"] == 5
+	# A failed scheduled run keeps the issue.
+	runs["workflow_runs"][4]["conclusion"] = "failure"
+	assert _stale_decide(runs=runs)["reason"] == "run_not_green"
+	# A page that holds a scheduled run (here before the anchor) needs a green
+	# scheduled run after the anchor: green delta pushes alone are not enough.
+	runs = _stale_runs(6)
+	runs["workflow_runs"][0]["event"] = "schedule"
+	runs["workflow_runs"][0]["created_at"] = "2025-12-31T00:00:00Z"
+	result = _stale_decide(runs=runs)
+	assert result["decision"] == "keep" and result["reason"] == "no_full_run_in_window"
+	# Pages without any scheduled run (no scheduled CI) keep the push-only rule.
+	assert _stale_decide(runs=_stale_runs(5))["reason"] == "workflow_green"
+	# Other workflows do not count scheduled runs.
+	runs = _stale_runs(5)
+	runs["workflow_runs"][4]["event"] = "schedule"
+	result = _stale_decide(runs=runs, workflow="release.yml")
+	assert result["reason"] == "too_few_green_runs" and result["green_runs"] == 4
 
 
 def test_heal_stale_keeps_with_too_few_or_failed_runs() -> None:

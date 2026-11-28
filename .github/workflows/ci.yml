@@ -19,6 +19,15 @@ name: CI
   # its autofix). Heal intake and budget-watch act on main pushes only.
   push:
     branches: [main, stable, "orchestrator/project-*"]
+  # Full suite on main every 6 hours (issue #10156). With
+  # MAIN_PUSH_DELTA_CI_ENABLED on (the default), a push to main runs only
+  # static-checks and tests-main-delta (the tests selected for the changes
+  # since main's last green CI run), so these runs are what tests the whole
+  # combined tree. The 22:30 UTC run finishes before the 00:00 UTC nightly
+  # promotion. A schedule cannot read a repository variable, so the times
+  # live here; scheduled runs execute every job, like a push to stable.
+  schedule:
+    - cron: "30 4,10,16,22 * * *"
   # Final CI at the end of review. `_pr_ensure_final_ci`
   # (scripts/pr_checks_lib.sh) dispatches this workflow on a PR's head branch
   # once review has finished with that head (internal-review.yml passes
@@ -91,8 +100,10 @@ run-name: "${{ github.event_name == 'workflow_dispatch' && format('CI [pr:{0}]{1
 # cancels the PR's older final run; a quick run called with mode `quick`
 # (its event is the caller's pull_request) gets a group of its own here,
 # because its caller workflow cancels replaced quick runs itself.
+# A scheduled full run on main (issue #10156) shares `ci-schedule-<ref>`
+# without cancel-in-progress: a late timer run waits for the running one.
 concurrency:
-  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('ci-push-{0}', github.ref) || format('ci-{0}', github.run_id) }}
+  group: ${{ inputs.mode == 'quick' && format('ci-quick-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number) || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('ci-push-{0}', github.ref) || github.event_name == 'schedule' && format('ci-schedule-{0}', github.ref) || format('ci-{0}', github.run_id) }}
   cancel-in-progress: ${{ inputs.mode != 'quick' && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') }}
 
 env:
@@ -909,7 +920,10 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
+    # Push to main (issue #10156): skipped while tests-main-delta's selection
+    # holds; runs when that job asks for the full suite (full_required).
+    needs: tests-main-delta
+    if: "!cancelled() && inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true' && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.MAIN_PUSH_DELTA_CI_ENABLED == 'false' || (needs.tests-main-delta.result == 'success' && needs.tests-main-delta.outputs.full_required == 'true'))"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1761,7 +1775,10 @@ jobs:
     # left is the sharded heal step. If budget-watch flags this job again,
     # moving the remaining small steps will not help: read the step timings
     # first.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
+    # Push to main (issue #10156): skipped while tests-main-delta's selection
+    # holds; runs when that job asks for the full suite (full_required).
+    needs: tests-main-delta
+    if: "!cancelled() && inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true' && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.MAIN_PUSH_DELTA_CI_ENABLED == 'false' || (needs.tests-main-delta.result == 'success' && needs.tests-main-delta.outputs.full_required == 'true'))"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -2037,7 +2054,10 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
+    # Push to main (issue #10156): skipped while tests-main-delta's selection
+    # holds; runs when that job asks for the full suite (full_required).
+    needs: tests-main-delta
+    if: "!cancelled() && inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true' && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.MAIN_PUSH_DELTA_CI_ENABLED == 'false' || (needs.tests-main-delta.result == 'success' && needs.tests-main-delta.outputs.full_required == 'true'))"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -2453,7 +2473,10 @@ jobs:
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
     # room for a cold runner.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
+    # Push to main (issue #10156): skipped while tests-main-delta's selection
+    # holds; runs when that job asks for the full suite (full_required).
+    needs: tests-main-delta
+    if: "!cancelled() && inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true' && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.MAIN_PUSH_DELTA_CI_ENABLED == 'false' || (needs.tests-main-delta.result == 'success' && needs.tests-main-delta.outputs.full_required == 'true'))"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -3217,7 +3240,10 @@ jobs:
     # log analysis steps, and group 3 the three review conflict-resolve /
     # review-blocked judge steps (moved from tests-heal-plan-and-validation).
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
+    # Push to main (issue #10156): skipped while tests-main-delta's selection
+    # holds; runs when that job asks for the full suite (full_required).
+    needs: tests-main-delta
+    if: "!cancelled() && inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true' && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.MAIN_PUSH_DELTA_CI_ENABLED == 'false' || (needs.tests-main-delta.result == 'success' && needs.tests-main-delta.outputs.full_required == 'true'))"
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -4628,7 +4654,10 @@ jobs:
     # runs the functions with NR % total == index; raise the shard count by
     # editing the matrix list alone (job-index / job-total feed the step).
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
+    # Push to main (issue #10156): skipped while tests-main-delta's selection
+    # holds; runs when that job asks for the full suite (full_required).
+    needs: tests-main-delta
+    if: "!cancelled() && inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true' && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.MAIN_PUSH_DELTA_CI_ENABLED == 'false' || (needs.tests-main-delta.result == 'success' && needs.tests-main-delta.outputs.full_required == 'true'))"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -4954,7 +4983,10 @@ jobs:
     # gains an entry point it does not list. The test container gets no
     # network, no credential and no root.
     # Skipped in quick mode (Phase 4): only static-checks runs there.
-    if: inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'
+    # Push to main (issue #10156): skipped while tests-main-delta's selection
+    # holds; runs when that job asks for the full suite (full_required).
+    needs: tests-main-delta
+    if: "!cancelled() && inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true' && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.MAIN_PUSH_DELTA_CI_ENABLED == 'false' || (needs.tests-main-delta.result == 'success' && needs.tests-main-delta.outputs.full_required == 'true'))"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -5235,13 +5267,90 @@ jobs:
           MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES: ${{ vars.MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES || '60' }}
         run: bash scripts/ci_sync_quick.sh run-tests
 
+  tests-main-delta:
+    # Delta suite on a push to main (issue #10156). Replaces the seven gated
+    # test jobs there: scripts/ci_main_delta.sh `select` reads main's ci.yml
+    # runs once, takes the head of the push or scheduled run that finished
+    # last as the base when it is green (a red run stays the result until a
+    # green run started after it finished; a re-run counts from its creation),
+    # and selects the tests the changes since then affect
+    # (workflow-templates/.claude/hooks/prepush_affected_tests.py select);
+    # `run-tests` runs them plus the CI-structure tests. When the selection
+    # cannot be trusted (read failure, red base, selector error, over
+    # MAIN_PUSH_DELTA_MAX_TEST_FILES, a sharded test, a timeout) the job sets
+    # full_required=true and the seven jobs run in this same run. A job of its
+    # own, not steps in static-checks: static-checks has hit its 15-minute
+    # limit on main (14m21s, 15m18s), and this work needs `actions: read` and
+    # the full history. Skipped in every other run (`lint` accepts that skip),
+    # and with MAIN_PUSH_DELTA_CI_ENABLED=false.
+    if: inputs.mode != 'quick' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MAIN_PUSH_DELTA_CI_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # select reads main's ci.yml runs to find the last green base.
+      actions: read
+    outputs:
+      full_required: ${{ steps.main_delta_select.outputs.full_required == 'true' || steps.main_delta_run.outputs.full_required == 'true' }}
+    steps:
+      # Full history: the range runs from the last green base to this push.
+      # The ref expression is empty here (push only); every worker job carries it.
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: "${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr_number) || '' }}"
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Never runs here (push only); listed so every worker job keeps the
+      # same setup steps (tests/test_ci_job_split_contract.py). `--depth`
+      # matches the checkout's fetch-depth as tests/test_ci_final_merge_ref_fresh.py
+      # requires; the script reads 0 (full history) as its default of 1, which
+      # does not matter while the step cannot run in this push-only job.
+      - name: Verify the final-CI merge ref is current
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+          GH_TOKEN: ${{ github.token }}
+          CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python CI dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
+
+      - name: Select the delta tests
+        id: main_delta_select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_MAIN_DELTA_REPOSITORY: ${{ github.repository }}
+          CI_MAIN_DELTA_HEAD_SHA: ${{ github.sha }}
+          CI_MAIN_DELTA_BRANCH: main
+          MAIN_PUSH_DELTA_MAX_TEST_FILES: ${{ vars.MAIN_PUSH_DELTA_MAX_TEST_FILES || '60' }}
+        run: bash scripts/ci_main_delta.sh select
+
+      - name: Run the delta tests
+        id: main_delta_run
+        if: steps.main_delta_select.outputs.full_required == 'false'
+        env:
+          CI_MAIN_DELTA_HEAD_SHA: ${{ github.sha }}
+        run: bash scripts/ci_main_delta.sh run-tests
+
   budget-watch:
     # Early warning for the two budgets CI has hit without notice (workflow
     # file size near the §27 guard, a CI job near its timeout-minutes). Runs
-    # only on pushes to main, after the test jobs, and opens one deduplicated
+    # only on pushes to main and scheduled full runs on main (issue #10156),
+    # after the test jobs, and opens one deduplicated
     # `ai:ci-budget` issue per finding so the pipeline fixes it in time.
     # Never fails, and is not part of the `lint` aggregate.
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && (github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'
     needs:
       - static-checks
       - tests-hooks-and-orchestrator
@@ -5252,6 +5361,7 @@ jobs:
       - tests-system-python
       - tests-sandbox-python
       - tests-sync-quick
+      - tests-main-delta
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -5294,6 +5404,7 @@ jobs:
       - tests-system-python
       - tests-sandbox-python
       - tests-sync-quick
+      - tests-main-delta
     # Skipped in quick mode (Phase 4): its needed test jobs are skipped there,
     # and the quick caller's checks are named `<caller job> / ...`, never
     # `lint`.
@@ -5362,6 +5473,12 @@ jobs:
           # is accepted instead.
           CI_SYNC_QUICK_REQUESTED: ${{ inputs.sync_quick == 'true' }}
           CI_SYNC_QUICK_JOB: tests-sync-quick
+          # "true" only in a push run on main with the delta suite on (issue
+          # #10156). Then the gated jobs' `skipped` counts like `success` only
+          # when tests-main-delta succeeded with full_required exactly "false";
+          # in every other run tests-main-delta's `skipped` is accepted instead.
+          CI_MAIN_DELTA_REQUESTED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MAIN_PUSH_DELTA_CI_ENABLED != 'false' }}
+          CI_MAIN_DELTA_JOB: tests-main-delta
         run: |
           set -euo pipefail
           ci_needs_count="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r 'length')"
@@ -5384,6 +5501,19 @@ jobs:
             fi
           else
             ci_skip_allowed_jobs="$(jq -cn --argjson have "${ci_skip_allowed_jobs}" --arg job "${ci_sync_quick_job}" '$have + [$job] | unique')"
+          fi
+          ci_main_delta_job="${CI_MAIN_DELTA_JOB:-tests-main-delta}"
+          if [ "${CI_MAIN_DELTA_REQUESTED:-false}" = "true" ]; then
+            ci_main_delta_result="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r --arg job "${ci_main_delta_job}" '.[$job].result // "missing"')"
+            ci_main_delta_full="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r --arg job "${ci_main_delta_job}" '.[$job].outputs.full_required // "missing" | tostring')"
+            if [ "${ci_main_delta_result}" = "success" ] && [ "${ci_main_delta_full}" = "false" ]; then
+              ci_skip_allowed_jobs="$(jq -cn --argjson have "${ci_skip_allowed_jobs}" --arg names "${CI_DOCS_ONLY_GATED_JOBS:-}" '$have + ($names | split(" ") | map(select(length > 0))) | unique')"
+              echo "Delta run on main: ${ci_main_delta_job} passed its selection; skipped is accepted for ${CI_DOCS_ONLY_GATED_JOBS:-}."
+            elif [ "${ci_main_delta_result}" = "success" ]; then
+              echo "Delta run on main: ${ci_main_delta_job} asked for the full suite (full_required=${ci_main_delta_full}); every gated job must succeed."
+            fi
+          else
+            ci_skip_allowed_jobs="$(jq -cn --argjson have "${ci_skip_allowed_jobs}" --arg job "${ci_main_delta_job}" '$have + [$job] | unique')"
           fi
           ci_unsuccessful_jobs="$(printf '%s' "${CI_NEEDS_JSON}" | jq -r --argjson skip_ok "${ci_skip_allowed_jobs}" '[to_entries[] | select(.value.result != "success") | select((.value.result == "skipped" and (.key as $k | $skip_ok | index($k))) | not) | .key] | join(", ")')"
           if [ -n "${ci_unsuccessful_jobs}" ]; then
@@ -5428,6 +5558,10 @@ jobs:
           CI_FINAL_STATUS_AGGREGATE_OUTCOME: ${{ steps.ci_require_all_jobs.outcome }}
           CI_FINAL_STATUS_DOCS_ONLY_REQUESTED: ${{ inputs.docs_only == 'true' }}
           CI_FINAL_STATUS_DOCS_ONLY_OUTCOME: ${{ steps.docs_only_verify.outcome }}
+          # Run kind on main (issue #10156): `delta` for a push run whose
+          # tests-main-delta selection held, `full` for a scheduled run or a
+          # push run that ran the full suite; empty everywhere else.
+          CI_FINAL_STATUS_RUN_KIND: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') && (needs.tests-main-delta.result != 'skipped' && needs.tests-main-delta.outputs.full_required != 'true' && 'delta' || 'full') || '' }}
           CI_FINAL_STATUS_NEEDS_JSON: ${{ toJSON(needs) }}
           CI_FINAL_STATUS_RUN_CANCELLED_SKIP_ENABLED: ${{ vars.CI_FINAL_STATUS_RUN_CANCELLED_SKIP_ENABLED || 'true' }}
         run: bash .ci-final-status/scripts/ci_final_status.sh

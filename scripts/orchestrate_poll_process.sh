@@ -22915,6 +22915,7 @@ _heal_stale_close_check()
   # $5 (<phase>) is accepted for the caller's context; the log line omits it.
   local flag_norm="" heal_py="" outcome="kept" reason="" green_runs="0"
   local stale_issue_file="" stale_comments_file="" stale_runs_file="" stale_linked_file="" stale_run_file=""
+  local -a stale_event_args=()
   local target_json="" src_repo="" workflow_base="" stale_branch="" fb_repo="" fb_run=""
   local lookup_key="" lookup_json="" runs_key="" runs_json="" decide_json="" decision="" per_page=""
   local comment_body="" anchor="" linked_args=()
@@ -23013,8 +23014,14 @@ _heal_stale_close_check()
       [ "${per_page}" -le 100 ] || per_page=100
       # A non-object run entry fails the projection, so the runs read as
       # unavailable (fail open) instead of being dropped.
+      # Issue #10156: ci.yml's full suite on main runs on a schedule (its push
+      # runs are a delta suite), so ci.yml reads every event and
+      # heal-stale-decision keeps push and schedule runs; every other
+      # workflow keeps the push-only read.
+      stale_event_args=(-f event=push)
+      [ "${workflow_base}" = "ci.yml" ] && stale_event_args=()
       runs_json="$(gh_retry gh api -X GET "repos/${src_repo}/actions/workflows/${workflow_base}/runs" \
-        -f branch="${stale_branch}" -f event=push -f status=completed -F per_page="${per_page}" 2>/dev/null \
+        -f branch="${stale_branch}" "${stale_event_args[@]}" -f status=completed -F per_page="${per_page}" 2>/dev/null \
         | jq -c 'select(type == "object" and ((.workflow_runs | type) == "array"))
           | {total_count: (.total_count // null), workflow_runs: [.workflow_runs[]
               | {id, html_url, head_sha, head_branch, event, status, conclusion, created_at}]}' 2>/dev/null)" || runs_json=""
