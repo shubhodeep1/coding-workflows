@@ -155,7 +155,67 @@ fi
 # empty delta) leaves LAST_RUN_DIFF as above.
 # Log: REVIEW_DIFF_CONTEXT range=delta base=<sha> | range=merge_base [reason=<token>].
 review_diff_context_range="merge_base"
-if [ -n "${REVIEW_DIFF_BASE_SHA:-}" ]; then
+# Resolution-only review (docs/plans/merge-lease-short-critical-section-plan.md
+# Phase 3, D4): when the gate verified this head as an [ai-merge-resolve]
+# commit on an approved head (REVIEW_REMERGE_HEAD, the gate output
+# review_remerge_head), LAST_RUN_DIFF and its file list and stat come from
+# `git show --remerge-diff` of the head: only what the resolution changed
+# against git's own automatic merge of its two parents. PR_DIFF_FILE and
+# PR_CHANGED_FILES_FILE keep the whole PR. A head that is not HEAD, git older
+# than 2.36 (no --remerge-diff), parents other than exactly two, missing
+# parent objects or merge base, a git failure or an empty remerge diff keep
+# LAST_RUN_DIFF as above.
+# Log: REVIEW_DIFF_CONTEXT range=remerge base=<from> | range=merge_base reason=remerge_failed.
+if [ -n "${REVIEW_REMERGE_HEAD:-}" ]; then
+  review_remerge_ok="false"
+  review_remerge_from=""
+  review_remerge_base=""
+  review_remerge_git_major=0
+  review_remerge_git_minor=0
+  read -r review_remerge_git_major review_remerge_git_minor <<< "$(git version 2>/dev/null | sed -n 's/^git version \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p')" || true
+  [[ "${review_remerge_git_major:-}" =~ ^[0-9]+$ ]] || review_remerge_git_major=0
+  [[ "${review_remerge_git_minor:-}" =~ ^[0-9]+$ ]] || review_remerge_git_minor=0
+  if [[ "${REVIEW_REMERGE_HEAD}" =~ ^[0-9a-f]{40}$ ]] \
+    && [ "$(git rev-parse HEAD 2>/dev/null || true)" = "${REVIEW_REMERGE_HEAD}" ] \
+    && { [ "${review_remerge_git_major}" -gt 2 ] || { [ "${review_remerge_git_major}" -eq 2 ] && [ "${review_remerge_git_minor}" -ge 36 ]; }; }; then
+    review_remerge_from="$(git rev-parse --verify -q "${REVIEW_REMERGE_HEAD}^1" 2>/dev/null || true)"
+    review_remerge_base="$(git rev-parse --verify -q "${REVIEW_REMERGE_HEAD}^2" 2>/dev/null || true)"
+    if [[ "${review_remerge_from}" =~ ^[0-9a-f]{40}$ ]] && [[ "${review_remerge_base}" =~ ^[0-9a-f]{40}$ ]] \
+      && ! git rev-parse --verify -q "${REVIEW_REMERGE_HEAD}^3" >/dev/null 2>&1; then
+      # Fetch the two parents (a no-op when present), then deepen until their
+      # merge base is reachable, as _ensure_merge_base_reachable does.
+      git fetch --no-tags origin "${review_remerge_from}" "${review_remerge_base}" >/dev/null 2>&1 || true
+      if git cat-file -e "${review_remerge_from}^{commit}" 2>/dev/null && git cat-file -e "${review_remerge_base}^{commit}" 2>/dev/null; then
+        review_remerge_iter=0
+        while [ "${review_remerge_iter}" -lt 4 ] && ! git merge-base "${review_remerge_from}" "${review_remerge_base}" >/dev/null 2>&1 \
+          && [ -f "$(git rev-parse --git-dir)/shallow" ]; do
+          review_remerge_iter=$((review_remerge_iter + 1))
+          git fetch --no-tags --deepen=200 origin "${review_remerge_from}" "${review_remerge_base}" >/dev/null 2>&1 || break
+        done
+        if ! git merge-base "${review_remerge_from}" "${review_remerge_base}" >/dev/null 2>&1 \
+          && [ -f "$(git rev-parse --git-dir)/shallow" ]; then
+          git fetch --no-tags --unshallow origin "${review_remerge_from}" "${review_remerge_base}" >/dev/null 2>&1 || true
+        fi
+        if git merge-base "${review_remerge_from}" "${review_remerge_base}" >/dev/null 2>&1 \
+          && git show --remerge-diff --no-ext-diff --format= "${REVIEW_REMERGE_HEAD}" > "${LAST_RUN_DIFF_FILE}.remerge" 2>/dev/null \
+          && grep -q '[^[:space:]]' "${LAST_RUN_DIFF_FILE}.remerge" \
+          && git show --remerge-diff --no-ext-diff --format= --name-only "${REVIEW_REMERGE_HEAD}" > "${LAST_RUN_CHANGED_FILES_FILE}.remerge" 2>/dev/null \
+          && git show --remerge-diff --no-ext-diff --format= --stat "${REVIEW_REMERGE_HEAD}" > "${LAST_RUN_DIFF_STAT_FILE}.remerge" 2>/dev/null; then
+          mv -f "${LAST_RUN_DIFF_FILE}.remerge" "${LAST_RUN_DIFF_FILE}"
+          mv -f "${LAST_RUN_CHANGED_FILES_FILE}.remerge" "${LAST_RUN_CHANGED_FILES_FILE}"
+          mv -f "${LAST_RUN_DIFF_STAT_FILE}.remerge" "${LAST_RUN_DIFF_STAT_FILE}"
+          review_remerge_ok="true"
+        fi
+      fi
+    fi
+  fi
+  rm -f "${LAST_RUN_DIFF_FILE}.remerge" "${LAST_RUN_CHANGED_FILES_FILE}.remerge" "${LAST_RUN_DIFF_STAT_FILE}.remerge"
+  if [ "${review_remerge_ok}" = "true" ]; then
+    echo "REVIEW_DIFF_CONTEXT range=remerge base=${review_remerge_from}"
+  else
+    echo "REVIEW_DIFF_CONTEXT range=merge_base reason=remerge_failed"
+  fi
+elif [ -n "${REVIEW_DIFF_BASE_SHA:-}" ]; then
   review_diff_context_reason=""
   if ! [[ "${REVIEW_DIFF_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
     review_diff_context_reason="invalid_base"
