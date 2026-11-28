@@ -217,6 +217,9 @@ if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; the
 			base: {ref: $base_ref}
 		}' > "${PR_PAYLOAD_FILE}"
 	printf '[]\n' > "${PR_ISSUE_COMMENTS_FILE}"
+	# Issue #10176: record where the comments snapshot came from and when, for
+	# the security-pass gate's markers_read log line (fail-open).
+	printf '%s %s\n' "synthesized" "$(date +%s)" > "${PR_ISSUE_COMMENTS_FILE}.source" 2>/dev/null || true
 	printf '[]\n' > "${PR_REVIEWS_FILE}"
 	printf '[]\n' > "${PR_REVIEW_COMMENTS_FILE}"
 	jq -n \
@@ -233,15 +236,42 @@ else
 	# Issue #9928: read through the run-local PR read cache when the staged
 	# gh_helpers.sh provides it (fail-open: the helper makes a live call on
 	# any cache error); an older staged helper keeps the direct reads.
+	issue_comments_source="direct"
+	issue_comments_provenance="${TMP_RUNTIME_DIR}/gh_issue_comments_provenance.txt"
+	rm -f "${issue_comments_provenance}" 2>/dev/null || true
 	if type gh_pr_cached_read >/dev/null 2>&1; then
+		issue_comments_source="cache"
 		gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" > "${PR_PAYLOAD_FILE}"
 		pr_cache_head_sha="$(jq -r '.head.sha // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || true)"
-		gh_pr_cached_read issue_comments "${REPOSITORY}" "${PR_NUMBER}" "${pr_cache_head_sha}" > "${issue_comments_raw}"
+		# Issue #10176: the helper records which path served this read
+		# (cache_hit with the entry's fetch epoch, cache_miss or fallback); an
+		# older staged helper writes nothing and the sidecar says `cache`.
+		GH_PR_CACHED_READ_SOURCE_FILE="${issue_comments_provenance}" \
+			gh_pr_cached_read issue_comments "${REPOSITORY}" "${PR_NUMBER}" "${pr_cache_head_sha}" > "${issue_comments_raw}"
 	else
 		gh_retry_to_file "${PR_PAYLOAD_FILE}" gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
 		gh_retry_to_file "${issue_comments_raw}" gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
 	fi
 	jq -s 'add // []' "${issue_comments_raw}" > "${PR_ISSUE_COMMENTS_FILE}"
+	# Issue #10176: `<token> <epoch>` sidecar for the security-pass gate's
+	# markers_read log line (fail-open). token: cache_hit (epoch = when the
+	# cached entry was fetched), cache_miss, fallback (live read, cache
+	# unavailable), cache (older helper: hit or miss unknown) or direct.
+	issue_comments_epoch="$(date +%s)"
+	if [ "${issue_comments_source}" = "cache" ] && [ -s "${issue_comments_provenance}" ]; then
+		issue_comments_note_token="" issue_comments_note_epoch=""
+		{ read -r issue_comments_note_token issue_comments_note_epoch _ || true; } < "${issue_comments_provenance}" 2>/dev/null
+		case "${issue_comments_note_token}" in
+			cache_hit|cache_miss|fallback)
+				issue_comments_source="${issue_comments_note_token}"
+				if [[ "${issue_comments_note_epoch}" =~ ^[0-9]{1,12}$ ]]; then
+					issue_comments_epoch="${issue_comments_note_epoch}"
+				fi
+				;;
+		esac
+	fi
+	rm -f "${issue_comments_provenance}" 2>/dev/null || true
+	printf '%s %s\n' "${issue_comments_source}" "${issue_comments_epoch}" > "${PR_ISSUE_COMMENTS_FILE}.source" 2>/dev/null || true
 	printf '[]\n' > "${PR_REVIEWS_FILE}"
 	case "$(printf '%s' "${REVIEW_BREAK_GLASS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on)

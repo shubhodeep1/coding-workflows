@@ -402,7 +402,7 @@ jobs:
         if: steps.refctx.outputs.label_missing_hold != 'true'
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       - name: Resolve workflow support ref
         if: steps.refctx.outputs.label_missing_hold != 'true'
@@ -1632,7 +1632,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
-          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
           CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED: ${{ vars.CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED || 'true' }}
           # Stuck-states P9b: retry once when BLOCKED: cites a tracked path.
           CLARIFY_BLOCKED_VERIFY_ENABLED: ${{ vars.CLARIFY_BLOCKED_VERIFY_ENABLED || 'true' }}

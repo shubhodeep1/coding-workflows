@@ -41,7 +41,7 @@ POOL_CONFIG = REPO_ROOT / ".github" / "ai" / "chatgpt_pool.json"
 # The shipped switch value. The tests use this literal instead of reading the
 # file at import time, so a checkout without the file still collects; a missing
 # file resolves to config_missing, which keeps the slot off (fail closed).
-SHIPPED_CONFIG = '{"reviewer_slot_enabled": false, "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}'
+SHIPPED_CONFIG = '{"reviewer_slot_enabled": false, "model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}'
 
 
 def _shipped_config_text() -> str:
@@ -113,9 +113,9 @@ def _slot(tmp_path: Path, content: str | None, *args: str) -> dict[str, str]:
 def test_shipped_config_keeps_the_slot_off(tmp_path: Path) -> None:
 	shipped = json.loads(_shipped_config_text())
 	assert shipped["reviewer_slot_enabled"] is False
-	assert shipped == {"reviewer_slot_enabled": False, "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
+	assert shipped == {"reviewer_slot_enabled": False, "model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
 	result = _slot(tmp_path, _shipped_config_text())
-	assert result == {"enabled": "false", "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
+	assert result == {"enabled": "false", "model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
 
 
 def test_shipped_pool_config_file_is_committed_and_switched_off() -> None:
@@ -137,7 +137,7 @@ def test_shipped_pool_config_file_is_committed_and_switched_off() -> None:
 		results[args] = dict(part.split("=", 1) for part in lines[0].split())
 	default = results[()]
 	assert default["reason"] != "config_missing"
-	assert default == {"enabled": "false", "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
+	assert default == {"enabled": "false", "model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
 	override = results[("--override", "true")]
 	assert (override["enabled"], override["reason"], override["source"]) == ("true", "ok", "var")
 
