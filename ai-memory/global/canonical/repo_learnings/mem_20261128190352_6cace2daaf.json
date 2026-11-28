@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.79,
+  "details": "Several merged changes span workflow definitions, `scripts/` helpers, and tests that exercise their contracts. When planning release or orchestration changes, trace the behavior across all three layers and keep their interfaces consistent.",
+  "fingerprint": "f0fdddd715235d1b11e24ea4e5c8cb93a84efbb5c987f9e7cb15af8ce45bb006",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46177848082",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46177848082",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10124",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10229",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10240",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10270",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9342",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10126",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10237",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10244",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10271",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9359"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261128190352_6cace2daaf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Release and orchestration behavior is implemented across workflows, shell scripts, and focused tests.",
+  "timestamps": {
+    "created_at": "2026-11-28T19:03:52Z",
+    "promoted_at": "2026-11-28T19:04:36Z",
+    "superseded_at": null
+  }
+}
