@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from tests-promote-stall-and-review and their destination group in orchestrate-poll\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: .github/workflows/ci.yml:4402-4414 says the run's step timings could not be read and the pick is an estimate from test and subprocess counts, tests/test_ci_poll_test_sharding.py:2718-2726 repeats this, group 3's headroom is unmeasured, and the diff has no timing data showing the moved steps are the slowest or that orchestrate-poll group 3 has the most headroom (severity disagreement: NIT from anthropic_claude-sonnet-5_5 and google_gemini-3_1-flash-lite, MAJOR from minimax_minimax-m3 and openai_gpt-6-luna; highest used = MAJOR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, the choice of steps leaving `tests-promote-stall-and-review` and the group they land in within `orchestrate-poll`.\n  Evidence of absence: The PR comment at `.github/workflows/ci.yml:4402-4414` says the step timings could not be read. The three steps were chosen from test and subprocess counts, and group 3's headroom is unmeasured. The diff has no timing data. This was raised and deferred in earlier rounds. The deliverable itself (steps moved unchanged, names and timeouts kept, no new required jobs) is implemented and covered by `MovedPromote10248StepsContractTest`. Rated NIT.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- All other checklist categories: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: .github/workflows/ci.yml, selection of steps from tests-promote-stall-and-review and their destination in orchestrate-poll\n  Evidence of absence: The PR states that the run's step timings for run 46098026068 were not readable, so the steps were chosen by test and subprocess counts. The requirement remains unmet but is deferred as the evidence is unavailable in this environment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: Step selection logic in `.github/workflows/ci.yml` for the three steps moved from `tests-promote-stall-and-review` and their destination group in `orchestrate-poll`.\n  Evidence of absence: `.github/workflows/ci.yml:4402-4414` and `tests/test_ci_poll_test_sharding.py:2718-2726` state the step timings could not be read, the pick is an estimate, and group 3's headroom is unmeasured. No diff hunk contains the timings from run 46098026068 or per-job headroom measurements; the only timing fact is the source job's 15m57s/20-minute budget-watch alarm. The moved steps are not provably the slowest, and `orchestrate-poll (3)` is not provably the job with the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-promote-stall-and-review` and their destination job.\n  Evidence of absence: The workflow diff moves three steps to `orchestrate-poll` group 3, but its comment says the step timings could not be read and the selection is an estimate; the destination group's headroom is unmeasured. The diff does not establish that these are the slowest steps or that the destination has the most headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- All other checklist categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "6f498f05a83269b72fc433519b576667940eb462ea60a41883cade47353a160b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10250,
+    "run_id": "46129410968",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46129410968",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128093722_565538ed8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10250,
+    "run_id": "46129410968"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T09:37:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
