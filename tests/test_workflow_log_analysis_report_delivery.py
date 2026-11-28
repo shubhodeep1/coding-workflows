@@ -874,3 +874,118 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+# --- other report streams (issue/PR audit, #10153) ----------------------------
+
+AUDIT_BRANCH = "auto/issue-pr-audit-report-100-1"
+AUDIT_REPORT = "analysis/issue-pr-audit-2026-11-27.md"
+AUDIT_STATE = "analysis/issue_pr_audit_state.json"
+AUDIT_PATTERN = r"^analysis/issue-pr-audit-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\.md$"
+
+
+def _audit_env(tmp: Path, main_files: dict[str, str] | None = None, files: dict[str, str] | None = None, **extra: str) -> dict[str, str]:
+	branch_files = files if files is not None else {AUDIT_REPORT: "# audit\n", AUDIT_STATE: "{\"version\": 1}\n"}
+	env = _delivery_sandbox(tmp, main_files or {}, others={AUDIT_BRANCH: branch_files})
+	env.update({
+		"REPORT_BRANCH": AUDIT_BRANCH,
+		"REPORT_FILE": AUDIT_REPORT,
+		"PURGED_DOCS": "analysis/issue-pr-audit-2026-09-01.md analysis/workflow-optimization-2026-09-01.md",
+		"WLA_DELIVER_BRANCH_PREFIX": "auto/issue-pr-audit-report",
+		"WLA_DELIVER_DOC_PATTERN": AUDIT_PATTERN,
+		"WLA_DELIVER_EXTRA_FILES": AUDIT_STATE,
+	})
+	env.update(extra)
+	return env
+
+
+def test_delivery_defaults_keep_the_workflow_log_analysis_constants() -> None:
+	text = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert 'WLA_DELIVER_DEFAULT_BRANCH_PREFIX="auto/workflow-log-analysis-report"' in text
+	assert "WLA_DELIVER_DEFAULT_DOC_RE='^analysis/workflow-optimization-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\\.md$'" in text
+	assert 'WLA_DELIVER_EXTRA_FILES="${WLA_DELIVER_EXTRA_FILES:-}"' in text
+	assert "reason=delivery_config_invalid" in text or "delivery_config_invalid" in text
+
+
+def test_delivery_opens_an_audit_report_pr_with_the_state_file() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env = _audit_env(tmp)
+		proc = _deliver(tmp, env)
+		out = _out(proc)
+		assert proc.returncode == 0, out
+		assert f"WORKFLOW_LOG_ANALYSIS_REPORT_DELIVERY outcome=pr_opened branch={AUDIT_BRANCH} pr=123 file={AUDIT_REPORT}" in out
+		calls = (tmp / "gh.log").read_text(encoding="utf-8")
+		assert "--title chore: add issue/PR audit report (issue-pr-audit-2026-11-27.md)" in calls
+		body = (tmp / "body.md").read_text(encoding="utf-8")
+		assert "Issue/PR audit report from run" in body
+		assert f"`{AUDIT_STATE}`" in body
+		assert "`analysis/issue-pr-audit-2026-09-01.md`" in body
+		# Purged-doc names outside the stream's pattern are never listed.
+		assert "workflow-optimization-2026-09-01" not in body
+		assert "Deep audit section" not in body
+		assert SENTINEL_TOKEN not in out
+
+
+def test_audit_delivery_renames_on_collision() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env = _audit_env(tmp, main_files={AUDIT_REPORT: "earlier\n"})
+		proc = _deliver(tmp, env)
+		out = _out(proc)
+		assert proc.returncode == 0, out
+		renamed = "analysis/issue-pr-audit-2026-11-27-2.md"
+		assert f"file={renamed}" in out
+		assert _ls_remote_file(tmp, env, AUDIT_BRANCH, renamed)
+
+
+def test_audit_delivery_rejects_a_foreign_file_or_a_state_deletion() -> None:
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env = _audit_env(tmp, files={AUDIT_REPORT: "# audit\n", "scripts/evil.sh": "x\n"})
+		proc = _deliver(tmp, env)
+		assert proc.returncode != 0
+		assert "reason=unexpected_paths" in _out(proc)
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		env = _audit_env(tmp, main_files={AUDIT_STATE: "{}\n"}, files={AUDIT_REPORT: "# audit\n"})
+		# Delete the state file on the run branch.
+		seed = tmp / "seed"
+		_git(seed, env, "checkout", "-q", AUDIT_BRANCH)
+		_git(seed, env, "rm", "-q", AUDIT_STATE)
+		_git(seed, env, "commit", "-q", "-m", "drop state")
+		_git(seed, env, "push", "-q", "-f", "origin", f"HEAD:refs/heads/{AUDIT_BRANCH}")
+		proc = _deliver(tmp, env)
+		assert proc.returncode != 0
+		assert "reason=unexpected_paths" in _out(proc)
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		# The state file is not an extra file of the default stream.
+		env = _delivery_sandbox(tmp, {})
+		seed = tmp / "seed"
+		_git(seed, env, "checkout", "-q", RUN_BRANCH)
+		_write(seed, AUDIT_STATE, "{}\n")
+		_git(seed, env, "add", "-A")
+		_git(seed, env, "commit", "-q", "-m", "state")
+		_git(seed, env, "push", "-q", "origin", f"HEAD:refs/heads/{RUN_BRANCH}")
+		proc = _deliver(tmp, env)
+		assert proc.returncode != 0 and "reason=unexpected_paths" in _out(proc)
+
+
+def test_delivery_config_is_validated_fail_closed() -> None:
+	bad = (
+		{"WLA_DELIVER_BRANCH_PREFIX": "refs/heads/main"},
+		{"WLA_DELIVER_BRANCH_PREFIX": "auto/x.*"},
+		{"WLA_DELIVER_DOC_PATTERN": "^scripts/.*\\.md$"},
+		{"WLA_DELIVER_DOC_PATTERN": "^analysis/.*"},
+		{"WLA_DELIVER_EXTRA_FILES": "scripts/x.json"},
+		{"WLA_DELIVER_EXTRA_FILES": "analysis/../x.json"},
+	)
+	for override in bad:
+		with tempfile.TemporaryDirectory() as raw:
+			tmp = Path(raw)
+			env = _audit_env(tmp, **override)
+			proc = _deliver(tmp, env)
+			assert proc.returncode != 0, override
+			assert "reason=delivery_config_invalid" in _out(proc), override
+			assert "pr create" not in (tmp / "gh.log").read_text(encoding="utf-8"), override

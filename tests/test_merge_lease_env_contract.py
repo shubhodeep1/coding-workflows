@@ -28,8 +28,9 @@ Rules enforced here, for every workflow-level, job-level and step-level
    defaults and are not repository variables (Q1=A on issue #10078). Wiring
    one is a separate, deliberate change.
 5. Optional settings. OPTIONAL_KEYS are read only by the steps that need
-   them (MERGE_LEASE_HOLD_LABELS: the merge-train release steps), so they
-   are not part of the full set. Where one is passed it uses the rule 2 form,
+   them (MERGE_LEASE_HOLD_LABELS: the merge-train release steps; the
+   ready-first grant, conflict-release and inline-sync switches: the tick and
+   inline-merge steps), so they are not part of the full set. Where one is passed it uses the rule 2 form,
    and its default equals the scripts/pr_checks_lib.sh default when the
    script carries exactly one; otherwise every workflow site agrees.
 6. Unknown settings. Any other MERGE_LEASE_* env key must first be
@@ -77,8 +78,18 @@ UNWIRED_KEYS = (
 # Per-step settings outside the full set (rule 5). MERGE_LEASE_HOLD_LABELS is
 # passed by the merge-train release steps of cancel_on_pr_close.yml and
 # orchestrate_poll.yml on main (CI run 45608850132, shard 31).
+# MERGE_LEASE_READY_GRANT_ENABLED, MERGE_LEASE_CONFLICT_RELEASE_ENABLED and
+# MERGE_LEASE_CONFLICT_RELEASED_LABEL (issue #10098) are passed by the steps
+# that run the merge-lease tick (cancel_on_pr_close.yml, orchestrate_poll.yml,
+# review_autofix.yml); MERGE_LEASE_INLINE_SYNC_ENABLED (issue #10198) by the
+# review_autofix.yml gate and inline update-and-merge sites. Each defaults in
+# scripts/pr_checks_lib.sh, so rule 5 compares the workflow default with it.
 OPTIONAL_KEYS = (
 	"MERGE_LEASE_HOLD_LABELS",
+	"MERGE_LEASE_READY_GRANT_ENABLED",
+	"MERGE_LEASE_CONFLICT_RELEASE_ENABLED",
+	"MERGE_LEASE_CONFLICT_RELEASED_LABEL",
+	"MERGE_LEASE_INLINE_SYNC_ENABLED",
 )
 
 # (workflow file name, step name, key) -> the only literal value accepted.
@@ -236,7 +247,7 @@ def violations(files: dict[str, str], defaults: dict[str, str], optional_default
 			):
 				# A reader is held to its listed keys: dropping one (for example
 				# MERGE_LEASE_MAX_HOLDERS, which falls back to the script default
-				# of 1) is still reported as missing.
+				# of 2) is still reported as missing.
 				missing = [k for k in REQUIRED_KEYS if k in read_only_keys and k not in effective]
 			if missing:
 				if lease_keys:
@@ -343,10 +354,10 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 		self.assertIn("missing MERGE_LEASE_TTL_MINUTES", found[0])
 
 	def test_fixture_different_default_fails(self) -> None:
-		text = _fixture(self._full(override={"MERGE_LEASE_MAX_HOLDERS": "${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}"}))
+		text = _fixture(self._full(override={"MERGE_LEASE_MAX_HOLDERS": "${{ vars.MERGE_LEASE_MAX_HOLDERS || '3' }}"}))
 		found = violations({"f.yml": text}, self.defaults)
 		self.assertEqual(len(found), 1, found)
-		self.assertIn("MERGE_LEASE_MAX_HOLDERS default '2' differs", found[0])
+		self.assertIn("MERGE_LEASE_MAX_HOLDERS default '3' differs", found[0])
 
 	def test_fixture_wrong_variable_fails(self) -> None:
 		text = _fixture(self._full(override={"MERGE_LEASE_TTL_MINUTES": f"${{{{ vars.OTHER || '{self.defaults['MERGE_LEASE_TTL_MINUTES']}' }}}}"}))
@@ -488,12 +499,12 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 	def test_fixture_read_only_step_wrong_default_fails(self) -> None:
 		text = _fixture(
 			"          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}\n"
-			"          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}",
+			"          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '3' }}",
 			step_name="Single-issue security pass",
 		)
 		found = violations({"review_autofix.yml": text}, self.defaults)
 		self.assertEqual(len(found), 1, found)
-		self.assertIn("MERGE_LEASE_MAX_HOLDERS default '2' differs", found[0])
+		self.assertIn("MERGE_LEASE_MAX_HOLDERS default '3' differs", found[0])
 
 	def test_fixture_partial_job_env_fails(self) -> None:
 		job_env = "    env:\n" + self._full(drop=("MERGE_LEASE_ENABLED",)).replace("          ", "      ") + "\n"

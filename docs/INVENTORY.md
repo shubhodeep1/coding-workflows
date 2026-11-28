@@ -17,6 +17,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-implement-repair.txt` — Role: post-Codex syntax repairer. Goal: fix syntax/parse failures captured after the main implementation pass using the captured diagnostics as source of truth.
 - `prompts/mode-implement-repair-tests.txt` — Role: pre-push test repairer. Goal: in one repair turn, fix the test failures this change caused, using the captured failures as evidence.
 - `prompts/mode-implement.txt` — Role: implementation-phase coder. Goal: implement the approved plan; modify only the files the plan requires; keep changes minimal and safe.
+- `prompts/mode-issue-pr-audit.txt` — Role: issue and pull request auditor for the daily issue/PR audit (#10153): classify flagged and newly blocked items and plan one `AUD-###` root-cause fix per distinct cause.
 - `prompts/mode-judge-interim.txt` — Role: judge. Goal: evaluate whether the latest autofix round still leaves actionable issues.
 - `prompts/mode-judge-security-pass-exhaustion.txt` — Role: security-pass exhaustion judge. Goal: decide whether each remaining finding is accepted with follow-up, gets another fix cycle, or fails the project.
 - `prompts/mode-judge-review-blocked.txt` — Role: review-blocked judge. Goal: a PR linked to an orchestrator-managed issue has been labeled `ai:review-blocked` (the autofix cycle could not resolve all issues after exhausting its retry budget, or the editor/workflow failed entirely).
@@ -138,6 +139,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_agents_md_direct_edits.py` — CI check that fails a pull request adding documentation to agents.md / AGENTS.md directly instead of an agents.d fragment (CLAUDE.md §30).
 - `scripts/check_external_branch_advance.sh` — branch has advanced past a pinned local SHA due to a non-autofix push.
 - `scripts/check_failure_triage.sh` — Diagnose a failing pull-request check, enforce triage dedup/lineage rules, and open the follow-up triage issue.
+- `scripts/check_issue_pr_audit_report.py` — Structure check of the daily issue/PR audit report (#10153): trusted marker, the nine headings in order, every flagged and new blocked item mentioned, no dangling `AUD-###`, minimum size.
 - `scripts/check_triage_resolution.py` — Close an ai:check-triage issue once its linked PR merged and the failure is verified fixed on the default branch; otherwise post the failing job's traceback (issue #7095).
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
@@ -196,6 +198,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
 - `scripts/evidence_pack.py` — Build the fenced, scrubbed evidence pack (trusted open pull requests touching the paths in play, default-branch history, recent default-branch runs) for clarify, plan and implement prompts (issue #8427, default off).
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
+- `scripts/issue_pr_audit.py` — Daily issue/PR audit logic (#10153): repository discovery, batched issue/PR reads with per-repository cursors, tier-1 rules, blocked detection, model input, state file, purge and the Telegram blocked-items report.
+- `scripts/issue_pr_audit_run.sh` — Step wrapper of the daily issue/PR audit in the `collect-logs` job of `workflow-log-analysis.yml` (#10153): collect, credential scrub, model pass with report check, report-PR delivery and the daily Telegram report.
 - `scripts/plan_superseded_merged_pr.py` — Plan-phase check that closes a CI-repair issue (or a re-issue of one) whose pull request already merged with the failing check passing on its final head (issue #7216; log prefix `PLAN_SUPERSEDED_MERGED_PR`).
 - `scripts/plan_scope_block_route.sh` — Plan-phase router run by the "Route planning scope block" step of `plan.yml`: validates the planner's `SCOPE_MISSING:` paths for a block caused only by missing `files_touched` scope and writes the trusted guard-rejection marker the unblock judge turns into an `override_guard` offer (issue #9534; log prefix `PLAN_SCOPE_BLOCK`).
 - `scripts/plan_split_dispatch.sh` — Plan-phase hand-off that starts an orchestrator project (Claude engine) for a pipeline-authored plan listing more than 50 files, instead of holding it for `/approved` (Q151; log prefix `PLAN_SPLIT`).
@@ -317,6 +321,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_mark_ready_to_merge.sh` — body of the review_autofix.yml "Mark linked issues ready to merge" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_prepush_test_gate.sh` — body of the review_autofix.yml "Pre-push affected-test gate" step (one repair turn through `review_apply_fixes.sh --repair-turn`), and the shared `gate` / `repair-prompt` / `allow-list` entry point the conflict resolver and the heal editor call (issue #8201).
 - `scripts/review_autofix_step_checkout_pr_head_branch.sh` — body of the review_autofix.yml "Checkout PR head branch" step (sourced by the step; the step passes the repository as `REVIEW_HEAD_CHECKOUT_REPOSITORY`; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_push_pending_commits.sh` — body of the review_autofix.yml "Push all pending commits" step (sourced by the step; moved out to keep the workflow under the 430,000-byte contract guard, issue #10169).
 - `scripts/review_autofix_sweep_reaper.sh` — sourced by the review_autofix_sweep.yml enumerate step from the trusted default-branch checkout: cancels, then force-cancels on 409, up to 10 review runs per sweep queued longer than `ZOMBIE_RUN_MAX_QUEUED_HOURS`, from the listing the sweep already fetched (P11b; log prefix `ZOMBIE_RUN_REAPED`).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.

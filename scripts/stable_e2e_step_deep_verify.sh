@@ -9,6 +9,45 @@
 # of this file from RUNNER_TEMP, so exit/GITHUB_OUTPUT act on the step.
 set -euo pipefail
 
+# Issue #10225: the jobs reads below go through gh_api_retry
+# (scripts/gh_helpers.sh), which waits for a rate-limit reset instead of
+# failing. A missing helper fails the step (fail closed).
+if ! declare -F gh_api_retry >/dev/null 2>&1; then
+  source scripts/gh_helpers.sh
+fi
+
+# deep_verify_rate_limit_max_wait: the longest single rate-limit wait a
+# deep-verify read may take (review of #10225). Same formula as
+# phase7_rate_limit_max_wait in stable_e2e_step_verify_cancel_on_close.sh:
+# the smaller of 600 s and half the time left before the finalization
+# reserve (E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES -
+# E2E_FINALIZATION_RESERVE_MINUTES) * 60), floored at 0. It is computed per
+# call, so repeated reads can never wait past that cap together. Without a
+# recorded job start the cap is 600.
+deep_verify_rate_limit_max_wait() {
+  local now job_cap left
+  if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]]; then
+    now=$(date +%s)
+    job_cap=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - ${E2E_FINALIZATION_RESERVE_MINUTES:-20}) * 60 ))
+    left=$(( (job_cap - now) / 2 ))
+    if [ "${left}" -lt 0 ]; then
+      left=0
+    fi
+    if [ "${left}" -lt 600 ]; then
+      echo "${left}"
+      return 0
+    fi
+  fi
+  echo 600
+}
+
+# deep_verify_gh_api_read ARGS...: gh_api_retry with the bounded wait above.
+deep_verify_gh_api_read() {
+  local dv_max_wait
+  dv_max_wait=$(deep_verify_rate_limit_max_wait)
+  GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS="${dv_max_wait}" gh_api_retry "$@"
+}
+
 DEEP_PASS=true
 FAILED_STEPS=""
 SKIPPED_STEPS=""
@@ -63,9 +102,33 @@ check_all_steps() {
   }
 
   JOBS_JSON='{"jobs":[]}'
+  # rc of the latest jobs listing read: a failed read is "listing
+  # unavailable", never "no jobs" (review of #10225).
+  local dv_last_rc=0
+  # 1 once any listing read of this run succeeded (even with zero jobs): a
+  # later failed recheck then leaves the "no jobs" verdict, not "unavailable".
+  local dv_listing_read_ok=0
   for _attempt in 1 2 3; do
-    if _JOBS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
+    local dv_read_rc=0
+    _JOBS_OUT=$(deep_verify_gh_api_read "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null) || dv_read_rc=$?
+    dv_last_rc="${dv_read_rc}"
+    if [ "${dv_read_rc}" -eq 0 ]; then
       JOBS_JSON="$_JOBS_OUT"
+      # Only a well-formed jobs listing counts as read (review of #10225).
+      if _jobs_json_valid "$JOBS_JSON"; then
+        dv_listing_read_ok=1
+      fi
+      break
+    fi
+    # rc 75: the helper already waited what the job's budget allows and
+    # gave up on a rate limit; another round would only repeat that.
+    if [ "${dv_read_rc}" -eq 75 ]; then
+      echo "  │  ⚠ API rate-limited (gh_api_retry rc=75) — not retrying"
+      break
+    fi
+    # rc 2: a permanent answer (e.g. 404); a retry cannot change it.
+    if [ "${dv_read_rc}" -eq 2 ]; then
+      echo "  │  ⚠ API read failed permanently (gh_api_retry rc=2) — not retrying"
       break
     fi
     echo "  │  ⚠ API attempt ${_attempt}/3 failed — retrying in 2s..."
@@ -86,7 +149,7 @@ check_all_steps() {
   # internal-implement.yml but the reusable workflow skips the job.
   TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
   SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
-  if [ "$TOTAL_JOBS" -eq 0 ]; then
+  if [ "$TOTAL_JOBS" -eq 0 ] && [ "${dv_last_rc}" -ne 75 ] && [ "${dv_last_rc}" -ne 2 ]; then
     # GitHub can briefly report zero jobs before the run is fully indexed.
     # Re-fetch a few times so we don't false-pass real runs as spurious.
     echo "  │  ⚠ Run has no jobs yet — rechecking for indexing delay..."
@@ -95,12 +158,26 @@ check_all_steps() {
       # Same hazard as the outer retry — assign fallback outside the
       # command substitution so gh's error-body stdout cannot
       # concatenate with the literal fallback JSON.
-      if _JOBS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
+      local dv_recheck_rc=0
+      _JOBS_OUT=$(deep_verify_gh_api_read "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null) || dv_recheck_rc=$?
+      dv_last_rc="${dv_recheck_rc}"
+      if [ "${dv_recheck_rc}" -eq 0 ]; then
         JOBS_JSON="$_JOBS_OUT"
+        if _jobs_json_valid "$JOBS_JSON"; then
+          dv_listing_read_ok=1
+        fi
       else
         JOBS_JSON='{"jobs":[]}'
       fi
       unset _JOBS_OUT
+      if [ "${dv_recheck_rc}" -eq 75 ]; then
+        echo "  │  ⚠ API rate-limited during recheck (gh_api_retry rc=75) — not retrying"
+        break
+      fi
+      if [ "${dv_recheck_rc}" -eq 2 ]; then
+        echo "  │  ⚠ API read failed permanently during recheck (gh_api_retry rc=2) — not retrying"
+        break
+      fi
       if ! _jobs_json_valid "$JOBS_JSON"; then
         JOBS_JSON='{"jobs":[]}'
       fi
@@ -108,6 +185,15 @@ check_all_steps() {
       SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
       [ "$TOTAL_JOBS" -gt 0 ] && break
     done
+  fi
+  # Fail closed: the steps of a run whose listing could not be read were
+  # not verified, so it must not pass as a spurious re-trigger.
+  if [ "$TOTAL_JOBS" -eq 0 ] && [ "${dv_last_rc}" -ne 0 ] && [ "${dv_listing_read_ok}" -eq 0 ]; then
+    echo "  │  ✗ Jobs listing unavailable (gh_api_retry rc=${dv_last_rc}) — steps not verified"
+    DEEP_PASS=false
+    FAILED_STEPS="${FAILED_STEPS}\n  - ${phase_name}: jobs listing unavailable (gh_api_retry rc=${dv_last_rc})"
+    echo "  └─"
+    return 0
   fi
   if [ "$TOTAL_JOBS" -eq 0 ]; then
     echo "  │  ⊘ Run has no jobs after retries (spurious re-trigger) — OK"

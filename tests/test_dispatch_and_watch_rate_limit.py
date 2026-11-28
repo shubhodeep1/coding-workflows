@@ -40,7 +40,8 @@ GATE_RATE_LIMIT_CAP_FLOOR_SECS = 1500
 UPDATE_WORKFLOWS_STEP = "Dispatch & watch — update_workflows (allow_workflow_edits=false)"
 # A dispatch step without its own timeout-minutes shares its job limit with the
 # job's other steps; the workflow budgets 360 s for them (orchestrate-decompose-test:
-# 3000s watch + 1500s cap + 360s = 4860s = 81m). The floor test counts that reserve.
+# 3000s watch + 1500s cap + 360s = 4860s, plus 1200s for one gh_api_retry reset
+# wait (#10225) = 6060s = 101m). The floor test counts that reserve.
 GATE_JOB_OTHER_STEPS_RESERVE_SECS = 360
 
 pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required by the watcher")

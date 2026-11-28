@@ -284,7 +284,7 @@ def test_project_description_checks_findings_first_and_keeps_guardrails() -> Non
 	assert desc.index("before planning any implementation issue") < desc.index("never rename or remove existing identifiers")
 	assert "process ONLY the single source doc" in desc
 	assert "Source doc: analysis/workflow-optimization-2026-09-01.md (branch main at " in desc
-	assert "Never delete or modify analysis/last_collection_timestamp.txt or analysis/validation-selftest-status.json." in desc
+	assert "Never delete or modify analysis/last_collection_timestamp.txt, analysis/validation-selftest-status.json or analysis/issue_pr_audit_state.json." in desc
 	assert re.search(r"(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s*:?\s*#\d+", desc) is None
 	marker = fields["tracking_comment"]
 	assert marker.startswith("<!-- apply-analysis-source-doc -->")
@@ -926,3 +926,77 @@ def test_long_zero_padded_min_docs_raises_the_cap_without_overflow() -> None:
 		assert "APPLY_ANALYSIS_CANDIDATES count=3 " in proc.stdout
 		assert "::warning::PROMOTE_CYCLE_MIN_DOCS must be a positive integer" in proc.stderr
 		assert "APPLY_ANALYSIS_CANDIDATE_CAP" not in proc.stderr + proc.stdout
+
+
+# --- second doc stream: issue/PR audit reports (#10153) -----------------------
+
+
+def _listed_docs(proc: subprocess.CompletedProcess[str]) -> list[str]:
+	for line in proc.stdout.splitlines():
+		if line.startswith("APPLY_ANALYSIS_CANDIDATES "):
+			docs = line.split(" docs=", 1)[1].split(" ", 1)[0]
+			return [doc for doc in docs.split(",") if doc]
+	raise AssertionError(proc.stdout + proc.stderr)
+
+
+AUDIT_DOCS = [
+	"analysis/workflow-optimization-2026-11-20.md",
+	"analysis/workflow-optimization-2026-11-22.md",
+	"analysis/issue-pr-audit-2026-11-22.md",
+	"analysis/issue-pr-audit-2026-11-21.md",
+	"analysis/issue-pr-audit-2026-11-22-2.md",
+]
+
+
+def test_audit_reports_join_the_candidates_newest_first() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=AUDIT_DOCS, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "APPLY_ANALYSIS_MAX_CANDIDATES": "5"})
+	assert proc.returncode == 0, proc.stderr
+	assert not final.get("dispatches")
+	# Same day: the -2 suffix first, then (no processing history) the
+	# workflow-optimization stream before the audit stream.
+	assert _listed_docs(proc) == [
+		"analysis/issue-pr-audit-2026-11-22-2.md",
+		"analysis/workflow-optimization-2026-11-22.md",
+		"analysis/issue-pr-audit-2026-11-22.md",
+		"analysis/issue-pr-audit-2026-11-21.md",
+		"analysis/workflow-optimization-2026-11-20.md",
+	]
+
+
+def test_same_day_tie_goes_to_the_stream_not_processed_last() -> None:
+	docs = ["analysis/workflow-optimization-2026-11-22.md", "analysis/issue-pr-audit-2026-11-22.md"]
+	env = {"APPLY_ANALYSIS_LIST_ONLY": "true", "APPLY_ANALYSIS_MAX_CANDIDATES": "5"}
+	wla_last = "- analysis/issue-pr-audit-2026-11-01.md: applied\n- analysis/workflow-optimization-2026-11-02.md: applied\n"
+	audit_last = "- analysis/workflow-optimization-2026-11-02.md: applied\n- analysis/issue-pr-audit-2026-11-03.md: applied\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=docs, env=env, report=wla_last)
+	assert _listed_docs(proc) == ["analysis/issue-pr-audit-2026-11-22.md", "analysis/workflow-optimization-2026-11-22.md"]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=docs, env=env, report=audit_last)
+	assert _listed_docs(proc) == ["analysis/workflow-optimization-2026-11-22.md", "analysis/issue-pr-audit-2026-11-22.md"]
+
+
+def test_extra_glob_none_restores_the_single_stream() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=AUDIT_DOCS, env={"APPLY_ANALYSIS_LIST_ONLY": "true", "APPLY_ANALYSIS_MAX_CANDIDATES": "5", "APPLY_ANALYSIS_DOC_GLOB_EXTRA": "none"})
+	assert _listed_docs(proc) == ["analysis/workflow-optimization-2026-11-22.md", "analysis/workflow-optimization-2026-11-20.md"]
+
+
+def test_only_audit_reports_present_still_dispatch() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=["analysis/issue-pr-audit-2026-11-22.md"])
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "APPLY_ANALYSIS_DISPATCHED doc=analysis/issue-pr-audit-2026-11-22.md role=proving" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": []}, docs=["analysis/issue-pr-audit-2026-11-22.md"], env={"APPLY_ANALYSIS_DOC_GLOB_EXTRA": "none"})
+	assert "APPLY_ANALYSIS_SKIPPED reason=no_docs" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_processed_audit_report_is_skipped() -> None:
+	docs = ["analysis/issue-pr-audit-2026-11-22.md", "analysis/issue-pr-audit-2026-11-21.md"]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _ = _run(Path(tmp), {"open_tracking": []}, docs=docs, report="- issue-pr-audit-2026-11-22.md: applied\n", env={"APPLY_ANALYSIS_LIST_ONLY": "true"})
+	assert _listed_docs(proc) == ["analysis/issue-pr-audit-2026-11-21.md"]

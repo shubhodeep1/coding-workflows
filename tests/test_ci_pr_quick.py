@@ -9,6 +9,7 @@ Pins the switch-over:
     `lint` aggregate included, is skipped by `if:`;
   * static-checks also runs the inventory parity gate, so it fails on every
     PR push instead of only in the final CI run;
+  * static-checks also runs the prompt template parity test (#10206);
   * internal-review.yml passes final_ci_workflow: ci.yml, and the review
     sweep's safety net names the same file.
 """
@@ -97,6 +98,21 @@ def test_static_checks_runs_inventory_parity() -> None:
 	assert "if" not in steps[index]
 	assert "CI test wiring guard" in names, "static-checks lost its CI test wiring guard step"
 	assert index > names.index("CI test wiring guard")
+
+
+def test_static_checks_runs_prompt_template_parity() -> None:
+	# Issue #10206: legacy/template prompt drift must be red on CI quick, not
+	# first in the final CI run (runs 45964653558 and 45974744375).
+	jobs = _load("ci.yml")["jobs"]
+	steps = jobs["static-checks"]["steps"]
+	matches = [s for s in steps if "tests/test_assemble_prompt.py" in str(s.get("run", ""))]
+	assert len(matches) == 1, "static-checks must run tests/test_assemble_prompt.py exactly once"
+	assert matches[0]["name"] == "Prompt template parity (quick)"
+	assert "if" not in matches[0]
+	full_steps = jobs["tests-release-and-log-analysis"]["steps"]
+	assert any("tests/test_assemble_prompt.py" in str(s.get("run", "")) for s in full_steps), (
+		"tests-release-and-log-analysis lost its full-CI copy of tests/test_assemble_prompt.py"
+	)
 
 
 def test_review_and_sweep_name_the_same_final_ci_workflow() -> None:

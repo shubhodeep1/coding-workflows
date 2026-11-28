@@ -20,6 +20,10 @@ is applied one per PATCH), graphql {..}, active_runs [workflow runs]
 (actions/runs?status=<s> returns those whose status is <s>; issue #9983),
 default_branch "main" (GET repos/<o>/<r>), dispatch_adds_run true (each
 `gh workflow run` adds a queued `[pr:<n>]` run to active_runs).
+Issue #10098: pull_fail [PR numbers] (an exact `GET pulls/<n>` fails, while
+`pulls/<n>/files` still works; a pull object's `mergeable` and
+`mergeable_state` are returned as seeded), wf_runs {sha: [workflow runs]}
+(actions/workflows/<file>/runs?head_sha=).
 """
 
 from __future__ import annotations
@@ -248,6 +252,8 @@ def main() -> None:
 		emit({}, jq_filter)
 		return
 	if parts[3:4] == ["pulls"] and len(parts) == 5:
+		if method == "GET" and int(parts[4]) in state.get("pull_fail", []):
+			fail("forced pulls/<n> read failure")
 		if int(parts[4]) in state.get("closed", []):
 			closed_pr = {"number": int(parts[4]), "state": "closed"}
 			if int(parts[4]) in state.get("closed_merged", []):
@@ -259,6 +265,10 @@ def main() -> None:
 				emit(p, jq_filter)
 				return
 		fail("no pr")
+	if parts[3:5] == ["actions", "workflows"] and len(parts) == 7 and parts[6] == "runs":
+		wf_runs = state.get("wf_runs", {}).get((query.get("head_sha") or [""])[0], [])
+		emit({"total_count": len(wf_runs), "workflow_runs": wf_runs}, jq_filter)
+		return
 	if parts[3:5] == ["actions", "runs"] or (len(parts) > 4 and parts[3] == "actions"):
 		run_sha = (query.get("head_sha") or [""])[0]
 		runs = state.get("runs", {}).get(run_sha, []) if parts[3:5] == ["actions", "runs"] else []

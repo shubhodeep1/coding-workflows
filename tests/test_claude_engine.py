@@ -66,6 +66,7 @@ CUTOVER_ROLES |= {"LOG_ANALYSIS", "LOG_AUDIT", "LOG_SUMMARY", "RETRO", "MATERIAL
 CUTOVER_ROLES |= {"PANEL_REVIEWER"}  # Claude account-pool review-panel slot (skipped, not codex, when unavailable)
 CUTOVER_ROLES |= {"CS_INVESTIGATE"}  # CS ticket investigation (#9440), read profile, codex fallback
 CUTOVER_ROLES |= {"PLAN_AUDIT"}  # plan autopilot audit (#10091), write profile, codex fallback
+CUTOVER_ROLES |= {"ISSUE_PR_AUDIT"}  # daily issue/PR audit (#10153), read profile, codex fallback
 
 
 def test_checked_in_config_is_valid_and_inert() -> None:
