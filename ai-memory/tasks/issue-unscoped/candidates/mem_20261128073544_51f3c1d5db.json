@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:2832-2837 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The inline base-sync jq projection in `_pr_base_sync_inline_merge` emits `{author_login, body}` without `author_type`, so the new `github-actions[bot]` trust check in `review_head_gate.sh` never matches final-CI failure markers on this path.\n  WHY: The `freshness-sync` check falls through to skip and the inline path posts `ai-review/head-gate` success on a head whose final CI is red, instead of sending it to review. Severity disagreement: MAJOR (gemini, luna, glm) vs BLOCKER (minimax); highest used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A pull request whose final CI failed on a branch-update head goes back to review instead of being approved again.\" (PRs #10152, #10133, #10070, #9902)\n  expected_change_site: scripts/pr_checks_lib.sh `_pr_base_sync_inline_merge`, jq projection at line 2833\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR touches scripts/review_single_issue_security_pass.sh:1075,1232 to add `author_type: (.user.type // \"\")`, but no hunk in scripts/pr_checks_lib.sh adds it. The projection at scripts/pr_checks_lib.sh:2833 cannot satisfy the `author_type == \"Bot\"` check at scripts/review_head_gate.sh:298-307.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh:2833-2837 | severity=MAJOR | confidence=4\n  PROBLEM: The inline base-sync path projects comments as `{author_login, body}` without `author_type`.\n  WHY: `review_head_gate.sh` trusts `github-actions[bot]` only when `author_type` is \"Bot\". This path lacks the field, so bot final-CI failure markers are untrusted and the head is skipped instead of reviewed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/pr_checks_lib.sh:2832-2837 | severity=BLOCKER | confidence=5\n  PROBLEM: The jq projection in `_pr_base_sync_inline_merge` drops `.user.type`. The new `final_ci_failed_on_head` check at `scripts/review_head_gate.sh:298-307` requires `author_type == \"Bot\"` for `github-actions[bot]`, so it cannot match here.\n  WHY: The gate falls through to the `freshness_sync` skip and posts `ai-review/head-gate = success` for a head whose `ci/final` is still red. The fix is incomplete for the PRs named in the description (#10152, #10133, #10070, #9902).\n- TASK_GAP:\n  Requirement: \"A pull request whose final CI failed on a branch-update head goes back to review instead of being approved again.\"\n  Expected change site: `scripts/pr_checks_lib.sh` `_pr_base_sync_inline_merge`, jq projection at line 2833\n  Evidence of absence: The diff adds `author_type` in `scripts/review_single_issue_security_pass.sh:1075,1232` but not in `scripts/pr_checks_lib.sh`. The projection at 2833 cannot satisfy the check at `scripts/review_head_gate.sh:298-307`.\n  severity=BLOCKER | confidence=5\n- HARDENING_SUGGESTIONS: scripts/pr_checks_lib.sh:2833 | HARDENING_RISK_SCORE=5\n  PROBLEM: The projection silently drops `.user.type`, and it is the lone outlier among the call sites.\n  WHY: Any `freshness-sync` check that distinguishes bot types will never match here. Suggested fix: add `author_type: (.user.type // \"\")` to the projection, plus a test in `tests/test_merge_lease_inline_sync.py`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh:2832-2837 | severity=MAJOR | confidence=5\n  PROBLEM: The inline path projects PR comments as `{author_login, body}`, but `review_head_gate.sh` now requires `author_type == \"Bot\"` to trust a `github-actions[bot]` final-CI marker.\n  WHY: The bot-posted `ai:final-ci-failed:v1` marker is ignored. The verifier returns the normal freshness-sync skip, and the inline caller posts a successful head-gate status without sending the failing head to review.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/pr_checks_lib.sh:2833 (feeding 2836-2837) | severity=MAJOR | confidence=4\n  PROBLEM: The inline base-sync projection lacks `author_type`. The new trust branch in `review_head_gate_freshness_sync` (scripts/review_head_gate.sh:291-307) therefore never accepts the `github.token`-posted marker (ci.yml:5364). The previous autofix fixed review_single_issue_security_pass.sh:1075,1232 but left this third projection unfixed.\n  WHY: `freshness-sync` exits 0 (`outcome=skip reason=freshness_sync`) instead of exit 1 (`reason=final_ci_failed_on_head`). Step 2 (`_pr_base_sync_inline_post_status`, line 2845) posts `ai-review/head-gate` success on the red head and the inline path proceeds toward merge.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a8525ef0e7ac76159419d7da736f158f37ad1610a33add5331401d70426489a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10251,
+    "run_id": "46117682097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46117682097",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128073544_51f3c1d5db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10251,
+    "run_id": "46117682097"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T07:35:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
