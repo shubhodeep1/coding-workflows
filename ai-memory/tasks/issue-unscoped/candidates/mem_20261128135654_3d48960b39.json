@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/INVENTORY.md:124 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The last autofix run edited docs/INVENTORY.md, which is outside the `ai:pipeline-plan-grant` `files_touched` list.\n  WHY: The edit is accurate and has no runtime effect, so the only defect is the scope breach. Both reviewers rated it NIT. Confidence is 3 from anthropic_claude-sonnet-5_5 and 4 from z-ai_glm-5_3-flash, and the higher value is used. anthropic_claude-sonnet-5_5 also noted that line 126 in its working tree still carries the older text.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- docs/INVENTORY.md:124 | severity=low (source: NIT) | confidence=3\n  PROBLEM: The autofix run edited docs/INVENTORY.md, which is outside the `ai:pipeline-plan-grant` `files_touched` list. The edit is accurate and matches the `scripts/alert_inbox_store.sh` header (\"up to 3 retries\").\n  WHY: There is no runtime effect, and the defect is the scope breach. Line 126 in the inspected working tree still carries the older text, so the hunk may not be applied there.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- docs/INVENTORY.md:124 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The last autofix run edited a file outside the linked issue's `ai:pipeline-plan-grant` `files_touched` list. The edit itself is accurate, verified against `scripts/alert_inbox_store.sh:17-18`.\n  WHY: There is no runtime impact, and the defect is the plan-grant scope breach.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9464409ab49517410c2c9b5103687873f2d9ed8f33d0d0f65d995f367fe2d7c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10267,
+    "run_id": "46150409430",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46150409430",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128135654_3d48960b39",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10267,
+    "run_id": "46150409430"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T13:56:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
