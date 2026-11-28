@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_gh_rate_limit_routing.py:425-429 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The allowlist check approves a whole logical line when any allowlist substring matches it, rather than checking each raw read identified by the scanner.\n  WHY: A new unallowlisted `gh api` read placed on the same line as an allowlisted call is accepted, so the contract test passes and CI does not catch that rate-limit-unaware read (the source severity was MAJOR; no other reviewer gave a severity for it).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Route every read the gate makes through the existing rate-limit-aware helpers (gh_retry, gh_read, _safe_gh_jq in scripts/gh_helpers.sh).\n  expected_change_site: .github/workflows/test-and-mark-stable.yml (job `orphan-workflows-test`, step \"Validate prerequisites\")\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The job \"Orphan workflows live-dispatch test\" (id: `orphan-workflows-test`) contains a raw `gh api` read inside the \"Validate prerequisites\" step.\n- requirement: Route every read the gate makes through the existing rate-limit-aware helpers (gh_retry, gh_read, _safe_gh_jq in scripts/gh_helpers.sh).\n  expected_change_site: .github/workflows/test-and-mark-stable.yml (job `validate`, step \"Validate prerequisites\")\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The job \"Validate release prerequisites\" (id: `validate`) contains a raw `gh api` read inside the \"Validate prerequisites\" step.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Route every read the gate makes through the existing rate-limit-aware helpers (gh_retry, gh_read, _safe_gh_jq in scripts/gh_helpers.sh).\n  Expected change site: .github/workflows/test-and-mark-stable.yml\n  Evidence of absence: The job \"Orphan workflows live-dispatch test\" (id: `orphan-workflows-test`) contains a raw `gh api` read inside the \"Validate prerequisites\" step.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: Route every read the gate makes through the existing rate-limit-aware helpers (gh_retry, gh_read, _safe_gh_jq in scripts/gh_helpers.sh).\n  Expected change site: .github/workflows/test-and-mark-stable.yml\n  Evidence of absence: The job \"Validate release prerequisites\" (id: `validate`) contains a raw `gh api` read inside the \"Validate prerequisites\" step.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_gh_rate_limit_routing.py:425-429 | severity=MAJOR | confidence=5\n  PROBLEM: The allowlist check approves a whole logical line when any allowlist substring matches it, rather than checking each raw read identified by the scanner.\n  WHY: A new unallowlisted `gh api` read placed on the same line as an allowlisted call is accepted, so the contract test passes and CI does not catch that rate-limit-unaware read.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "78d630982b914d2a3481016158460d019cb2f80cdee06dbb80ebea0b30cfa8a3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10228,
+    "run_id": "46126239685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46126239685",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128090040_8dbac4d43c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10228,
+    "run_id": "46126239685"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T09:00:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
