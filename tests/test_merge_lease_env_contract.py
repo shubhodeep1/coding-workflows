@@ -247,7 +247,7 @@ def violations(files: dict[str, str], defaults: dict[str, str], optional_default
 			):
 				# A reader is held to its listed keys: dropping one (for example
 				# MERGE_LEASE_MAX_HOLDERS, which falls back to the script default
-				# of 1) is still reported as missing.
+				# of 2) is still reported as missing.
 				missing = [k for k in REQUIRED_KEYS if k in read_only_keys and k not in effective]
 			if missing:
 				if lease_keys:
@@ -354,10 +354,10 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 		self.assertIn("missing MERGE_LEASE_TTL_MINUTES", found[0])
 
 	def test_fixture_different_default_fails(self) -> None:
-		text = _fixture(self._full(override={"MERGE_LEASE_MAX_HOLDERS": "${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}"}))
+		text = _fixture(self._full(override={"MERGE_LEASE_MAX_HOLDERS": "${{ vars.MERGE_LEASE_MAX_HOLDERS || '3' }}"}))
 		found = violations({"f.yml": text}, self.defaults)
 		self.assertEqual(len(found), 1, found)
-		self.assertIn("MERGE_LEASE_MAX_HOLDERS default '2' differs", found[0])
+		self.assertIn("MERGE_LEASE_MAX_HOLDERS default '3' differs", found[0])
 
 	def test_fixture_wrong_variable_fails(self) -> None:
 		text = _fixture(self._full(override={"MERGE_LEASE_TTL_MINUTES": f"${{{{ vars.OTHER || '{self.defaults['MERGE_LEASE_TTL_MINUTES']}' }}}}"}))
@@ -499,12 +499,12 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 	def test_fixture_read_only_step_wrong_default_fails(self) -> None:
 		text = _fixture(
 			"          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}\n"
-			"          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}",
+			"          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '3' }}",
 			step_name="Single-issue security pass",
 		)
 		found = violations({"review_autofix.yml": text}, self.defaults)
 		self.assertEqual(len(found), 1, found)
-		self.assertIn("MERGE_LEASE_MAX_HOLDERS default '2' differs", found[0])
+		self.assertIn("MERGE_LEASE_MAX_HOLDERS default '3' differs", found[0])
 
 	def test_fixture_partial_job_env_fails(self) -> None:
 		job_env = "    env:\n" + self._full(drop=("MERGE_LEASE_ENABLED",)).replace("          ", "      ") + "\n"

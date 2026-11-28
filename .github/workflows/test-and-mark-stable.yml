@@ -3297,7 +3297,27 @@ jobs:
     # Unit tests: orchestrate-poll 52.7 min, unit tests ~45 min, ~100 min
     # total; the 2026-11-17 run 44093205767 already used 88 of 90. 135 keeps
     # at least 25% headroom (CLAUDE.md §33).
+    # Parallel legs, not a fifth raise (#10220): one week after the raise
+    # to 135 the serial job used 58-93% of it. Runs 45518188323 (2026-11-25,
+    # 78 min: orchestrate-poll 40.9, unit tests 35.6, 58%), 45734337628
+    # (2026-11-26, 124 min, 92%), 45927857867 (2026-11-27, 125 min:
+    # orchestrate-poll 70.5, unit tests 51.1, 93%) and 46009933351
+    # (2026-11-27, 109 min: orchestrate-poll 58.6, unit tests 47.8, 81%).
+    # The combined job came within 25% of its timeout-minutes (CLAUDE.md
+    # §33.A), so the matrix below runs "Orchestrate poll process unit tests"
+    # in the `orchestrate-poll` leg and every other check in the
+    # `unit-tests` leg; the job's duration is the longer leg, not the sum.
+    # This supersedes the "keeps one runner" note above: the gate now uses
+    # 2 runners for this job instead of 1 (max-parallel: 2). Job id and step
+    # names are unchanged, and needs.validate-scripts.result is `success`
+    # only when both legs succeed. scripts/ci_budget_watch.py warns when a
+    # job of the latest completed gate run reaches 75% of its limit.
     timeout-minutes: 135
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        leg: [orchestrate-poll, unit-tests]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -3313,12 +3333,14 @@ jobs:
           python-version: "3.12"
 
       - name: YAML lint
+        if: matrix.leg == 'unit-tests'
         run: |
           set -euo pipefail
           pip install -q yamllint
           yamllint -s .github/workflows/*.yml .github/actions/*/action.yml
 
       - name: Shell script syntax check
+        if: matrix.leg == 'unit-tests'
         run: |
           set -euo pipefail
           for f in scripts/*.sh; do
@@ -3326,6 +3348,7 @@ jobs:
           done
 
       - name: ShellCheck static analysis
+        if: matrix.leg == 'unit-tests'
         run: |
           set -euo pipefail
           # Issue #6680: ShellCheck 0.9.x (the runner image's copy) always runs
@@ -3350,6 +3373,7 @@ jobs:
           done
 
       - name: Python syntax check
+        if: matrix.leg == 'unit-tests'
         run: |
           set -euo pipefail
           for f in scripts/*.py; do
@@ -3357,6 +3381,7 @@ jobs:
           done
 
       - name: Python lint (ruff)
+        if: matrix.leg == 'unit-tests'
         run: |
           set -euo pipefail
           pip install -q ruff
@@ -3376,6 +3401,7 @@ jobs:
           python3 -m pip install --quiet pyyaml jsonschema jinja2 pytest
 
       - name: Orchestrate poll process unit tests
+        if: matrix.leg == 'orchestrate-poll'
         env:
           CI_POLL_TEST_SHARDS: ${{ vars.CI_POLL_TEST_SHARDS || '4' }}
         run: |
@@ -3528,6 +3554,7 @@ jobs:
           fi
 
       - name: Unit tests
+        if: matrix.leg == 'unit-tests'
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
@@ -3634,6 +3661,7 @@ jobs:
       # Parity runs on the committed tree without PR-time dry-run preparation;
       # a template waiting for a live-copy sync PR blocks the release.
       - name: Claude asset tests (CLAUDE.md, .claude hooks, scripts, commands)
+        if: matrix.leg == 'unit-tests'
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
@@ -3652,6 +3680,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
 
       - name: Prompt files integrity
+        if: matrix.leg == 'unit-tests'
         run: |
           set -euo pipefail
           for f in prompts/*.txt; do
@@ -3663,6 +3692,7 @@ jobs:
           done
 
       - name: Script-workflow cross-reference
+        if: matrix.leg == 'unit-tests'
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py

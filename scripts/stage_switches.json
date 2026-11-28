@@ -1035,6 +1035,11 @@
 			"pending": true
 		},
 		{
+			"name": "ISSUE_PR_AUDIT_ENABLED",
+			"default": "true",
+			"stage": "Daily issue/PR audit in workflow-log-analysis.yml (collect-logs, 06:00 UTC): audits every issue and PR the pipeline account can reach, writes analysis/issue-pr-audit-<date>.md and one blocked-items Telegram report (#10153)."
+		},
+		{
 			"name": "JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED",
 			"default": "true",
 			"stage": "Turns on judge files touched companions (added by open pull request #9981; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."

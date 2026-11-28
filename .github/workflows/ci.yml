@@ -2181,19 +2181,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
 
-      - name: Review autofix step-script contract and workflow file size guard tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_step_scripts_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_step_scripts_contract.py
-
-      - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_claude_fixer_mode.py tests/test_validate_target_ref_input.py
-
       - name: Review autofix iteration count tests
         run: |
           set -euo pipefail
@@ -2327,15 +2314,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_summarize_reviewer_consensus_sandbox_pin.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_summarize_reviewer_consensus_prompt.py
-
-      - name: Standalone clarify auto-decide tests (port P3)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_auto_decisions.py \
-            tests/test_clarify_respond_standalone.py \
-            tests/test_clarify_github_facts.py \
-            tests/test_clarify_sandbox_base_image_preseed.py
 
       # Moved from tests-release-and-log-analysis, which took 15m10s of its 20
       # minutes on main (run 40625105162, budget-watch issue #8245). The run's
@@ -3220,6 +3198,9 @@ jobs:
     # from group 3).
     # Since #9895, the pre-push affected-test gate step runs in
     # tests-hooks-and-orchestrator instead of group 0.
+    # Since #10248, group 3 also pins the step-script/file-size guard,
+    # Claude-fixer/target_ref and clarify auto-decide steps (moved from
+    # tests-promote-stall-and-review).
     # Since #10182, group 3 also pins the orchestrate lib step and group 0
     # the post-Codex recovery step (moved from tests-release-and-log-analysis).
     # On 2026-11-21, after #9641 moved the pre-push gate step out of group
@@ -4405,6 +4386,48 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_post_stage.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_transient_rerun.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_owned_failures.py
+
+      # Moved from tests-promote-stall-and-review, which took 15m57s of its 20
+      # minutes on main (run 46098026068, budget-watch issue #10248), to group
+      # 3. The run's step timings could not be read (step statuses only), so
+      # the pick is an estimate from test and subprocess counts, not a
+      # measurement: together these three steps run about 207 tests and about
+      # 173 subprocess or bash call sites. Group 3 was the target because this
+      # job has the only 30-minute budget (budget-watch warns at 22m30s) and
+      # group 3 pinned only "Orchestrate poll single-file module tests" and
+      # #10182's "Orchestrate lib unit tests" when this was planned (its
+      # headroom is unmeasured); group 1 already took #9966's two steps.
+      # #10200 later also moved three steps to group 3 (below), so after the
+      # merge group 3 carries 8 guarded steps, more than any other group
+      # (3-6). Its combined time is unmeasured: if budget-watch flags
+      # orchestrate-poll (3), rebalance from its step timings. The modules need no checkout history
+      # (both jobs check out at depth 1), Node or job-level env; the shared pip
+      # install provides pytest and PyYAML. Names and bodies unchanged; each
+      # step runs once per CI run.
+      - name: Review autofix step-script contract and workflow file size guard tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_step_scripts_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_step_scripts_contract.py
+
+      - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_claude_fixer_mode.py tests/test_validate_target_ref_input.py
+
+      - name: Standalone clarify auto-decide tests (port P3)
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_auto_decisions.py \
+            tests/test_clarify_respond_standalone.py \
+            tests/test_clarify_github_facts.py \
+            tests/test_clarify_sandbox_base_image_preseed.py
 
       # Moved on from tests-heal-plan-and-validation, which took 18m44s of its
       # 20 minutes on main (run 45931627782, budget-watch issue #10200), to
