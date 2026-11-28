@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation to orchestrate-poll\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: .github/workflows/ci.yml lines 1729-1734 and 4434-4443 (also 4436-4437) state the run's step timings were unavailable and the five steps were chosen from test and subprocess counts; no hunk uses timing data. Severity disagreement: MAJOR (gemini, luna) vs NIT (glm, documented accepted residual).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\nExpected change site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation to orchestrate-poll.\nEvidence of absence: The workflow comments at lines 1730-1734 and 4434-4443 in .github/workflows/ci.yml state that the run's step timings were unavailable and the five steps were selected using test and subprocess counts instead of step timings.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\nExpected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` to `orchestrate-poll`.\nEvidence of absence: `.github/workflows/ci.yml` lines 1729\u20131734 and 4434\u20134443 state the run's timings were unavailable and the steps were selected using test and subprocess counts instead.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml, selection of the steps moved out of `tests-heal-plan-and-validation`.\nEvidence of absence: The five moved steps were selected from test and subprocess counts, not run 45931627782's step timings; ci.yml:4436-4437 and ci.yml:1731-1733 state this directly. Documented in workflow comments and changelog fragment; accepted as residual in six prior review cycles.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "88ca3a070cea740f44a94e42db9a98fe08f7143dc0149448ad1237c71470ecc2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10202,
+    "run_id": "46082118292",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46082118292",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128001801_fae015a946",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10202,
+    "run_id": "46082118292"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T00:18:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
