@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of the steps moved from `orchestrate-poll (0)` and their target group; `tests/test_ci_poll_test_sharding.py` contract for that selection.\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The workflow comments at `.github/workflows/ci.yml:4232-4239` and `4406-4410` say that run 46015617074's step timings could not be read and that the steps were picked by an estimate from test and subprocess counts. The changelog fragment says the same. The contract at `tests/test_ci_poll_test_sharding.py:6472-6495` pins three steps to group 2 but gives no evidence that they were the slowest steps or that orchestrate-poll (2) had the most headroom compared with other possible targets. Both reviewers rated it SEVERITY: MAJOR. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash chose not to raise this gap again. Their reasons: the timings are not in the repo or the run's inputs, the approved plan named orchestrate-poll (2), the estimate is documented, earlier editor passes accepted or deferred it, and the last run diff brings no new evidence.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: .github/workflows/ci.yml (step selection and grouping strategy), tests/test_ci_poll_test_sharding.py (contract validation of headroom/slowest steps)\n  Evidence of absence: The implementation comments in .github/workflows/ci.yml (e.g., lines 4234-4236 in the original implementation, lines 4232-4244 in current diff) and the changelog fragment confirm that the run's step timings could not be read, and an estimate was used instead. No analysis or validation shows that the moved steps were the slowest or that orchestrate-poll (2) had the most headroom compared to other potential targets.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of the steps moved from `orchestrate-poll (0)` and their target group; `tests/test_ci_poll_test_sharding.py` contract for that selection.\n  Evidence of absence: The workflow comments at `.github/workflows/ci.yml:4232-4239` and `4406-4410` state that run 46015617074's step timings could not be read and the selection was estimated from test and subprocess counts. The contract at `tests/test_ci_poll_test_sharding.py:6472-6495` pins three steps to group 2 but provides no evidence that they were the slowest or that group 2 had the most headroom. The timing-based selection the issue requires is therefore not established by the PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0ebfb86b6f84e56b58a63dee3615177251d5bde065b7b821a43a0ae6755e8011",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10268,
+    "run_id": "46161798025",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46161798025",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128160826_4a5eef76a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10268,
+    "run_id": "46161798025"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T16:08:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
