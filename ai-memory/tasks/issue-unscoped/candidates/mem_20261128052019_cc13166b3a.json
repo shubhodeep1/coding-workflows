@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description's acceptance table lists `tests/test_review_autofix_step_scripts_contract.py` as a done-check marked unmet.\n  expected_change_site: `tests/test_review_autofix_step_scripts_contract.py`\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The PR does not touch `tests/test_review_autofix_step_scripts_contract.py`, the PR description still reports the check as unmet. The issue's requirements are in the diff (line 106 of `scripts/stage_workflow_support.sh`, the new contract test in `tests/test_review_rb_judge_red_check_repair.py`). The issue names the file only as an example place for the test, and the pre-push gate lists it among failures inherited from the merge-base. Severity NIT from both reviewers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: The PR description's acceptance table lists `tests/test_review_autofix_step_scripts_contract.py` as an unmet done-check. The linked issue names that file only as one example place for the contract test.\n  Expected change site: `tests/test_review_autofix_step_scripts_contract.py`.\n  Evidence of absence: The PR does not touch that file. The issue's actual requirements are both in the diff: line 106 of `scripts/stage_workflow_support.sh` and the contract test in `tests/test_review_rb_judge_red_check_repair.py`. The pre-push gate lists the file among failures inherited from the merge-base.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude_sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: The PR description's approved-plan acceptance table lists `tests/test_review_autofix_step_scripts_contract.py` as a done-check and marks it `unmet`.\n  Expected change site: `tests/test_review_autofix_step_scripts_contract.py`, or the acceptance check that reports its status.\n  Evidence of absence: The PR does not change that test file, and the PR description still reports the check as unmet. The new contract test in `tests/test_review_rb_judge_red_check_repair.py` addresses the linked issue's test requirement but does not satisfy the separately listed acceptance check as recorded.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "964d2f31b1900dff05ee7e80cb386f88900a35f927a245a6b8caa19f7f7a254e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10244,
+    "run_id": "46108369381",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46108369381",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128052019_cc13166b3a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10244,
+    "run_id": "46108369381"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T05:20:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
