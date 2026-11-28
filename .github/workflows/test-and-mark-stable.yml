@@ -1769,11 +1769,12 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
         run: |
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
           set -euo pipefail
           # Create the label if missing (404 is non-fatal; addLabels below
           # will fail-soft and the gate will skip — verify-bait-removed
           # then surfaces the regression as a hard failure).
-          gh api "repos/${TEST_REPO}/labels/force-review" >/dev/null 2>&1 || \
+          gh_api_retry "repos/${TEST_REPO}/labels/force-review" >/dev/null 2>&1 || \
             gh api "repos/${TEST_REPO}/labels" \
               -f name="force-review" \
               -f color="d93f0b" \

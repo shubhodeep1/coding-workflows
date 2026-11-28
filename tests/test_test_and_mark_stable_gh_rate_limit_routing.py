@@ -183,16 +183,67 @@ def _is_raw_read(sub: str, rest: str) -> bool:
 	return bool(words) and words[0] in _READ_SUBCOMMANDS[sub]
 
 
+def _command_segments(line: str) -> list[str]:
+	"""Split a logical line at unquoted `||`, `&&`, `;` and `|`.
+
+	Review of #10225: a joined `gh api GET ... || gh api POST -f ...` line was
+	classified as a write because the POST's flags sat in the GET's `rest`, and
+	the greedy capture hid any later call on the line. Each command is now
+	classified on its own flags only.
+	"""
+	segments: list[str] = []
+	buf: list[str] = []
+	quote = ""
+	i = 0
+	while i < len(line):
+		ch = line[i]
+		if quote:
+			buf.append(ch)
+			if ch == "\\" and quote == '"' and i + 1 < len(line):
+				buf.append(line[i + 1])
+				i += 2
+				continue
+			if ch == quote:
+				quote = ""
+			i += 1
+			continue
+		if ch == "\\" and i + 1 < len(line):
+			buf.append(line[i:i + 2])
+			i += 2
+			continue
+		if ch in ("'", '"'):
+			quote = ch
+			buf.append(ch)
+			i += 1
+			continue
+		if line[i:i + 2] in ("||", "&&"):
+			segments.append("".join(buf))
+			buf = []
+			i += 2
+			continue
+		if ch in (";", "|"):
+			segments.append("".join(buf))
+			buf = []
+			i += 1
+			continue
+		buf.append(ch)
+		i += 1
+	segments.append("".join(buf))
+	return segments
+
+
 def raw_reads(text: str) -> list[str]:
 	found: list[str] = []
 	for line in _logical_lines(text):
 		if _SAFE_GH_JQ_CALL.search(line):
 			found.append(line)
 			continue
-		for match in _GH_CALL.finditer(line):
-			if _is_raw_read(match.group(1), match.group(2)):
-				found.append(line)
-				break
+		if any(
+			_is_raw_read(match.group(1), match.group(2))
+			for segment in _command_segments(line)
+			for match in _GH_CALL.finditer(segment)
+		):
+			found.append(line)
 	return found
 
 
@@ -293,6 +344,12 @@ def test_scanner_recognises_reads_and_writes() -> None:
 			'echo "::warning::gh api failed (gh api returned empty)"',
 			'if ! R="$(_safe_gh_jq "repos/o/r/runs" --jq .x)"; then',
 			'Z="$(gh_retry _safe_gh_jq repos/o/r/y)"',
+			# Review of #10225: a GET joined to a continued POST is still a read.
+			'gh api "repos/o/r/labels/x" >/dev/null 2>&1 || \\',
+			'  gh api "repos/o/r/labels" \\',
+			'    -f name="x" >/dev/null 2>&1 || true',
+			'gh_api_retry "repos/o/r/labels/y" >/dev/null 2>&1 || gh api "repos/o/r/labels" -f name="y"',
+			"V=$(gh api repos/o/r/z --jq '.a | .b' 2>/dev/null) || V=\"\"",
 		]
 	)
 	got = raw_reads(text)
@@ -308,6 +365,8 @@ def test_scanner_recognises_reads_and_writes() -> None:
 		'( gh run list --repo o/r )',
 		'${SUDO} gh api repos/o/r/hooks',
 		'if ! R="$(_safe_gh_jq "repos/o/r/runs" --jq .x)"; then',
+		'gh api "repos/o/r/labels/x" >/dev/null 2>&1 ||  gh api "repos/o/r/labels"  -f name="x" >/dev/null 2>&1 || true',
+		"V=$(gh api repos/o/r/z --jq '.a | .b' 2>/dev/null) || V=\"\"",
 	], got
 
 
