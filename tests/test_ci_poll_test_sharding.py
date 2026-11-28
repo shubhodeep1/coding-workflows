@@ -1176,7 +1176,8 @@ GROUP_PINNED_STEPS = {
 	# group 4 in #9037.
 	"Validation harness sandbox tests": 4,
 	# Moved from tests-release-and-log-analysis in #9450.
-	"Check-failure triage workflow security tests": 0,
+	# Moved from group 0 in #10273.
+	"Check-failure triage workflow security tests": 4,
 	# "Pre-push affected-test gate tests" (moved from
 	# tests-hooks-and-orchestrator to group 3 in #9391, and from group 3 to
 	# group 0 in #9639) left the matrix for tests-hooks-and-orchestrator in
@@ -1210,15 +1211,19 @@ GROUP_PINNED_STEPS = {
 	# Moved from tests-release-and-log-analysis in #10182.
 	"Orchestrate lib unit tests": 3,
 	# Moved from tests-release-and-log-analysis in #10182.
-	"Implement post-Codex recovery unit tests": 0,
+	# Moved from group 0 in #10273.
+	"Implement post-Codex recovery unit tests": 4,
 }
 # The only steps pinned to the last matrix group (#8118; #8772's step moved
 # on to group 0 in #8980; #9037 moved the Claude engine judges and validation
-# harness sandbox steps in from group 3).
+# harness sandbox steps in from group 3; #10273 moved the check-failure triage
+# and post-Codex recovery steps in from group 0).
 LAST_GROUP_PINNED_STEPS = (
 	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)",
 	"Orchestrator judges on the Claude engine tests (Phase 5c)",
 	"Validation harness sandbox tests",
+	"Check-failure triage workflow security tests",
+	"Implement post-Codex recovery unit tests",
 )
 POLL_JOB_UNGUARDED_STEPS = {
 	"Checkout repository",
@@ -1262,7 +1267,8 @@ class PollGroupPinnedStepsTest(unittest.TestCase):
 
 		#8772 moved the CI wiring guard part 2 step into it as well, and #8980
 		moved that step on to group 0. #9037 moved the Claude engine judges
-		and validation harness sandbox steps in from group 3.
+		and validation harness sandbox steps in from group 3. #10273 moved the
+		check-failure triage and post-Codex recovery steps in from group 0.
 
 		A later move into group 4 must update LAST_GROUP_PINNED_STEPS on purpose.
 		"""
@@ -2810,14 +2816,112 @@ class MovedPromote10248StepsContractTest(unittest.TestCase):
 				self.assertLess(names.index(PROMOTE_10248_SETUP_STEP), names.index(name))
 
 
+# Steps moved out of orchestrate-poll (0), which took 27m05s of its 30 minutes
+# (run 46162139761, budget-watch issue #10273): step name -> module paths its
+# body names. The run's step timings were not readable, so the pick is an
+# estimate from test and subprocess counts: group 0's only movable steps that
+# run their tests one after another (about 392 tests and about 99 subprocess
+# call sites together). Both go to group 4, which pinned the fewest steps (3)
+# and had taken no step since #9037. The fast-fail step (pinned to group 0 on
+# purpose) and the sharded merge-train step stay in group 0.
+POLL_ZERO_10273_SOURCE_GROUP = 0
+POLL_ZERO_10273_TARGET_GROUP = 4
+POLL_ZERO_10273_SETUP_STEP = "Install Python CI dependencies"
+POLL_ZERO_10273_TIMEOUT_MINUTES = 30
+POLL_ZERO_10273_GROUP_COUNT = 5
+POLL_ZERO_10273_FAST_FAIL_STEP = "Orchestrate poll implementation-failed regression fast-fail"
+POLL_ZERO_10273_MERGE_TRAIN_STEP = "Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)"
+MOVED_POLL_ZERO_10273_STEPS = {
+	"Check-failure triage workflow security tests": (
+		"tests/test_check_failure_triage_workflow_security.py",
+		"tests/test_clarify_isolated_run.py",
+		"tests/test_check_failure_triage_post_stage.py",
+		"tests/test_check_failure_triage_transient_rerun.py",
+		"tests/test_check_failure_triage_owned_failures.py",
+	),
+	"Implement post-Codex recovery unit tests": (
+		"tests/test_implement_post_codex_recovery.py",
+	),
+}
+
+
+class MovedPollGroupZero10273StepsContractTest(unittest.TestCase):
+	"""The steps moved out of orchestrate-poll (0) run once, in orchestrate-poll (4) (#10273)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_POLL_ZERO_10273_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [POLL_JOB_ID])
+
+	def test_each_step_is_guarded_to_the_last_group(self) -> None:
+		# A guard naming a group the matrix does not run would skip the step silently.
+		self.assertLess(POLL_ZERO_10273_TARGET_GROUP, poll_group_count())
+		self.assertEqual(POLL_ZERO_10273_TARGET_GROUP, poll_group_count() - 1)
+		for name in MOVED_POLL_ZERO_10273_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), POLL_ZERO_10273_TARGET_GROUP)
+				self.assertIn(name, LAST_GROUP_PINNED_STEPS)
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {POLL_ZERO_10273_TARGET_GROUP}")
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_POLL_ZERO_10273_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_group_zero(self) -> None:
+		source_guard = f"strategy.job-index == {POLL_ZERO_10273_SOURCE_GROUP}"
+		group_zero_guarded = [
+			step.get("name")
+			for step in self.jobs()[POLL_JOB_ID]["steps"]
+			if str(step.get("if", "")) == source_guard
+		]
+		for name in MOVED_POLL_ZERO_10273_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, group_zero_guarded)
+		self.assertEqual(
+			group_zero_guarded,
+			[POLL_ZERO_10273_FAST_FAIL_STEP, POLL_ZERO_10273_MERGE_TRAIN_STEP],
+		)
+
+	def test_moved_steps_run_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in self.jobs()[POLL_JOB_ID]["steps"]]
+		for name in MOVED_POLL_ZERO_10273_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(POLL_ZERO_10273_SETUP_STEP, names)
+				self.assertIn(name, names)
+				self.assertLess(names.index(POLL_ZERO_10273_SETUP_STEP), names.index(name))
+
+	def test_job_timeout_and_matrix_are_unchanged(self) -> None:
+		self.assertEqual(self.jobs()[POLL_JOB_ID].get("timeout-minutes"), POLL_ZERO_10273_TIMEOUT_MINUTES)
+		self.assertEqual(poll_group_count(), POLL_ZERO_10273_GROUP_COUNT)
+
+
 # Steps moved out of tests-release-and-log-analysis, which took 18m23s of its
 # 20 minutes (run 45766722607, budget-watch issue #10182, re-issued from
 # #10162): step name -> (orchestrate-poll group, module paths its body names).
 # The run's step timings were not readable; the pick is an estimate from test
 # and subprocess counts: the two heaviest steps of that job that run their
 # tests one after another and can move whole. They go to two different groups
-# of the job with the only 30-minute budget; neither is the last group, whose
-# steps LAST_GROUP_PINNED_STEPS locks.
+# of the job with the only 30-minute budget; neither was the last group, whose
+# steps LAST_GROUP_PINNED_STEPS locks. Issue #10273 moved the post-Codex
+# recovery step on from group 0 to group 4 and added it to
+# LAST_GROUP_PINNED_STEPS.
 RELEASE_10182_SOURCE_JOB_ID = "tests-release-and-log-analysis"
 RELEASE_10182_SETUP_STEP = "Install Python CI dependencies"
 MOVED_RELEASE_10182_STEPS = {
@@ -2836,11 +2940,14 @@ MOVED_RELEASE_10182_STEPS = {
 			"tests/test_orchestrator_concurrency_caps.py",
 		),
 	),
+	# Issue #10273 moved it on to group 4.
 	"Implement post-Codex recovery unit tests": (
-		0,
+		4,
 		("tests/test_implement_post_codex_recovery.py",),
 	),
 }
+# Empty since #10273 moved the post-Codex recovery step on to group 4; kept
+# for history.
 RELEASE_10182_GROUP_ZERO_STEPS = tuple(
 	name for name, (group, _modules) in MOVED_RELEASE_10182_STEPS.items() if group == 0
 )
@@ -2871,7 +2978,10 @@ class MovedRelease10182StepsContractTest(unittest.TestCase):
 			with self.subTest(step=name):
 				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
 				self.assertLess(group, poll_group_count(), "guard names a group the matrix does not run")
-				self.assertNotEqual(group, last_group, "the last group's steps are locked by LAST_GROUP_PINNED_STEPS")
+				# The last group's steps are locked by LAST_GROUP_PINNED_STEPS
+				# (#10273 moved the post-Codex recovery step there).
+				if group == last_group:
+					self.assertIn(name, LAST_GROUP_PINNED_STEPS)
 				for _owner, step in self.owning_steps(name):
 					self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
 
@@ -5253,21 +5363,21 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 		# the fast-fail step in workflow order, and #9895 moved it out of the
 		# poll matrix back to tests-hooks-and-orchestrator. Since #9496 group 0
 		# also runs the merge-train step, before the triage step. Since #10182
-		# group 0 also runs the post-Codex recovery step, after the triage step.
+		# group 0 also ran the post-Codex recovery step, after the triage step.
+		# Since #10273 the triage and post-Codex recovery steps run in group 4,
+		# so group 0 keeps only the fast-fail and merge-train steps.
 		# Any further group-0 step must update POLL_GROUP_ZERO_9496_PINNED_STEPS
-		# or RELEASE_10182_GROUP_ZERO_STEPS on purpose.
+		# on purpose.
 		self.assertEqual(
 			group_zero_guarded,
 			[
 				POLL_GROUP_ZERO_9214_FAST_FAIL_STEP,
 				*POLL_GROUP_ZERO_9496_PINNED_STEPS,
-				RELEASE_9450_STEP_NAME,
-				*RELEASE_10182_GROUP_ZERO_STEPS,
 			],
 		)
 		self.assertEqual(
 			{name for name, group in GROUP_PINNED_STEPS.items() if group == 0},
-			{*POLL_GROUP_ZERO_9496_PINNED_STEPS, RELEASE_9450_STEP_NAME, *RELEASE_10182_GROUP_ZERO_STEPS},
+			{*POLL_GROUP_ZERO_9496_PINNED_STEPS},
 		)
 
 
@@ -5281,7 +5391,8 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 RELEASE_9450_SOURCE_JOB_ID = "tests-release-and-log-analysis"
 RELEASE_9450_SETUP_STEP = "Install Python CI dependencies"
 RELEASE_9450_DERIVE_STEP = "Derive orchestrate poll test subsets"
-RELEASE_9450_TARGET_GROUP = 0
+# Issue #10273 moved the step on from group 0 to group 4.
+RELEASE_9450_TARGET_GROUP = 4
 RELEASE_9450_TIMEOUT_MINUTES = 20
 RELEASE_9450_STEP_NAME = "Check-failure triage workflow security tests"
 MOVED_RELEASE_9450_STEPS = {
@@ -5296,7 +5407,7 @@ MOVED_RELEASE_9450_STEPS = {
 
 
 class MovedRelease9450StepsContractTest(unittest.TestCase):
-	"""The check-failure triage step runs once, in orchestrate-poll group 0 (#9450)."""
+	"""The check-failure triage step runs once, in one orchestrate-poll group (#9450; group 4 since #10273)."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
