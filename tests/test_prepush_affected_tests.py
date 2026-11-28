@@ -2033,3 +2033,28 @@ def test_wrapper_reports_baseline_lines_past_the_cap(tmp_path):
 	lines = proc.stderr.splitlines()
 	assert sum(1 for line in lines if line.startswith("PREPUSH_TEST_GATE phase=baseline outcome=inherited ")) == 200
 	assert "PREPUSH_TEST_GATE phase=baseline outcome=truncated omitted=3" in lines
+
+
+def test_unittest_classes_at_the_qualified_cap_are_unverified(tmp_path):
+	# Review of #10249: 51 classes failing one method give one method name but
+	# cut the class-qualified list at 50, so a new class past the cap was inherited.
+	def script(classes: int) -> str:
+		lines = "".join(f"print('FAIL: test_x (mod.Case{n})')\n" for n in range(classes))
+		return "import sys\n" + lines + "sys.exit(1)\n"
+
+	root = _repo(tmp_path, {"tests/test_a.py": script(51)})
+	baseline = _repo(tmp_path, {"tests/test_a.py": script(50)}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_names_unreadable")]
+
+
+def test_first_failure_is_read_from_the_whole_baseline_output(tmp_path):
+	# Review of #10249: the first failure line scrolled out of the 4 KB tail.
+	text = ("import sys\nprint('FAIL: test_old (mod.Case)')\nprint('KeyError: first')\n"
+		"print('x' * 5000)\nprint('FAILED (failures=1)')\nsys.exit(1)\n")
+	root = _repo(tmp_path, {"tests/test_a.py": text})
+	baseline = _repo(tmp_path, {"tests/test_a.py": text}, name="baseline")
+	result = gate.run_gate(root, _whole("tests/test_a.py"), baseline, timeout_minutes=2, shards=1)
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_a.py"]
+	assert result["inherited"][0]["first_failure"] == "KeyError: first"

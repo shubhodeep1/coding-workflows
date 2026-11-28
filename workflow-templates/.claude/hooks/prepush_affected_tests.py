@@ -772,11 +772,14 @@ def _run_one(argv: list[str], cwd: Path, deadline: float) -> dict:
 	# when it was cut, so long tracebacks do not push earlier failure headers out
 	# of the tail. Always set (None when not cut): run_units merges a baseline
 	# result over the change's unit, which must not keep the change's lists.
+	# `full_first_failure`: baseline_first_failure() of the whole output, so the
+	# merge-base diagnostic is the first failure line, not one left in the tail.
 	full_text = output.decode("utf-8", "replace") if len(output) > TAIL_BYTES else None
 	return {"status": "pass" if proc.returncode == 0 else "fail", "rc": proc.returncode, "tail": tail,
 		"truncated": len(output) > TAIL_BYTES, "elapsed": round(time.monotonic() - start, 2),
 		"full_names": _output_failing_set(full_text) if full_text is not None else None,
-		"full_unittest_names": _unittest_qualified_names(full_text) if full_text is not None else None}
+		"full_unittest_names": _unittest_qualified_names(full_text) if full_text is not None else None,
+		"full_first_failure": baseline_first_failure(full_text) if full_text is not None else None}
 
 
 def run_units(units: list[dict], cwd: Path, deadline: float, shards: int) -> list[dict]:
@@ -892,6 +895,10 @@ def _failing_names_readable(unit: dict, names: list[str]) -> bool:
 	TAIL_BYTES whose totals line does not account for every name.
 	"""
 	if not names or len(names) >= MAX_PARSED_NAMES:
+		return False
+	# The class-qualified unittest list stops at MAX_PARSED_NAMES as well; at the
+	# cap a class past the 50th header would never be compared.
+	if len(_unit_unittest_names(unit)) >= MAX_PARSED_NAMES:
 		return False
 	tail = str(unit.get("tail") or "")
 	is_pytest = any(isinstance(arg, str) and "pytest" in arg for arg in unit.get("argv") or [])
@@ -1080,7 +1087,8 @@ def classify_baseline(
 			if unit_id not in inherited_ids:
 				continue
 			base_unit = reran_by_id.get(unit_id) or {}
-			unit["baseline_first_failure"] = baseline_first_failure(str(base_unit.get("tail") or ""))
+			full_first = base_unit.get("full_first_failure")
+			unit["baseline_first_failure"] = full_first if isinstance(full_first, str) else baseline_first_failure(str(base_unit.get("tail") or ""))
 			if unit.get("kind") != "test":
 				continue
 			if unit.get("tests_file_nodes") and pr_rcs.get(unit_id) in (4, 5) and baseline_rcs.get(unit_id) in (4, 5):
