@@ -169,7 +169,9 @@ GH_CALL_COUNTER_NO_CONTINUE_ON_ERROR_JOBS = {("review_autofix.yml", "post-merge-
 GH_PAT_BUDGET_NO_PAT_JOBS = {("test-and-mark-stable.yml", "validate")}
 # Release-gate jobs whose budget steps make no gh call at all (issue #9887:
 # no added GitHub request); their quota keys always read unknown.
-GH_PAT_BUDGET_NO_API_CALL_JOBS = {key for key in GH_CALL_COUNTER_TRUSTED_HELPERS if key[0] == "test-and-mark-stable.yml"}
+# Issue #10225: the seven PAT jobs of the release gate now read /rate_limit in
+# their budget start step; only `validate`, which holds no PAT, makes no call.
+GH_PAT_BUDGET_NO_API_CALL_JOBS = {("test-and-mark-stable.yml", "validate")}
 # Jobs whose budget end step must stay the last step, so every gh call is counted.
 GH_PAT_BUDGET_END_LAST_JOBS = {("clarify.yml", "clarify"), ("orchestrate_poll.yml", "poll"), ("review_autofix_sweep.yml", "sweep")}
 
@@ -241,7 +243,8 @@ fi
 				for phase, step in zip(("start", "end"), budget):
 					path_dirs = f"{no_gh_dir}" if (no_pat or no_api) else f"{bin_dir}"
 					env = {**os.environ, "PATH": f"{path_dirs}:{os.environ['PATH']}",
-						"GH_PAT_BUDGET_FILE": str(bin_dir / f"budget-{file}-{name}"), "GH_TOKEN": "fake"}
+						"GH_PAT_BUDGET_FILE": str(bin_dir / f"budget-{file}-{name}"), "GH_TOKEN": "fake",
+						"RUNNER_TEMP": str(runner_temp)}
 					result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=REPO_ROOT,
 						env=env, capture_output=True, text=True)
 					assert result.returncode == 0, (file, name, phase, result.stderr)
