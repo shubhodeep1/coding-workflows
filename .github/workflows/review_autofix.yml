@@ -1515,6 +1515,26 @@ jobs:
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=security_followup_guard_unavailable"
             return 1
           }
+          # Open-PR guard (#10260): the PR must still be open, not a draft and
+          # at the bound head when the merge path starts and right before the
+          # merge call (PR #5800 was merged 22 minutes after it was closed).
+          # Fail closed unless the verified library below replaces the stub.
+          _pr_merge_open_guard() {
+            PR_MERGE_OPEN_GUARD_REASON="pr_state_unavailable"
+            echo "AUTOFIX_MERGE_SKIPPED pr=${1:-unknown} head_sha=${2:-unknown} reason=pr_state_unavailable"
+            return 1
+          }
+          _pr_merge_open_guard_release_lease() { return 0; }
+          det_skip_merge_open_guard() {
+            if _pr_merge_open_guard "${PR_NUMBER}" "${PR_HEAD_SHA}" "$1"; then
+              return 0
+            fi
+            auto_merge_summary="SKIPPED (${PR_MERGE_OPEN_GUARD_REASON:-pr_state_unavailable})"
+            if [ "${PR_MERGE_OPEN_GUARD_REASON:-}" = "pr_closed" ]; then
+              _pr_merge_open_guard_release_lease "${PR_NUMBER}" "${PR_BASE_REF:-${PR_MERGE_OPEN_GUARD_BASE_REF:-}}" || true
+            fi
+            return 1
+          }
           freshness_helper_verified=false
           if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
             && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
@@ -1556,10 +1576,20 @@ jobs:
             # The gate snapshot cannot prove freshness on paths that
             # intentionally skip gh pr merge, so those paths refresh only the
             # head SHA instead of adding another call to the normal merge path.
-            if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null)"; then
+            # #10260: the same read also carries the state; labels need an
+            # open, non-draft PR.
+            if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '"\(.state // "") \(.draft // false) \(.head.sha // "")"' 2>/dev/null)"; then
               echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing deterministic-skip merge-authorization labels."
               return 1
             fi
+            case "${ready_label_current_head_sha}" in
+              "open false "*) ready_label_current_head_sha="${ready_label_current_head_sha#open false }" ;;
+              *)
+                echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} reason=$(case "${ready_label_current_head_sha}" in "closed "*) echo pr_closed ;; "open true "*) echo pr_draft ;; *) echo pr_state_unavailable ;; esac)"
+                echo "::warning::PR #${PR_NUMBER} is not an open, ready PR (${ready_label_current_head_sha%% *}); refusing deterministic-skip merge-authorization labels."
+                return 1
+                ;;
+            esac
             if [ -z "${ready_label_current_head_sha}" ] || [ "${ready_label_current_head_sha}" != "${PR_HEAD_SHA}" ]; then
               echo "::warning::PR #${PR_NUMBER} no longer points at gate-observed head ${PR_HEAD_SHA}; refusing deterministic-skip merge-authorization labels for current head ${ready_label_current_head_sha:-unknown}."
               return 1
@@ -1626,7 +1656,10 @@ jobs:
             if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
               echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"
-              if ! PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" "" && ! { type _pr_base_sync_inline_merge >/dev/null 2>&1 && _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && PR_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; then
+              if ! det_skip_merge_open_guard start; then
+                # #10260: closed, draft or moved before the lease or a branch update.
+                :
+              elif ! PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" "" && ! { type _pr_base_sync_inline_merge >/dev/null 2>&1 && _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && PR_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; then
                 if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
                   auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
                   echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
@@ -1640,6 +1673,10 @@ jobs:
               elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then
                 auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+              elif ! det_skip_merge_open_guard pre_merge; then
+                # #10260: one live read after the checks wait, before the post-wait
+                # freshness/lease re-check and the merge call.
+                :
               elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
                 if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
                   auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
@@ -1671,7 +1708,10 @@ jobs:
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash"
-            if ! PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" "" && ! { type _pr_base_sync_inline_merge >/dev/null 2>&1 && _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && PR_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; then
+            if ! det_skip_merge_open_guard start; then
+              # #10260: closed, draft or moved before the lease or a branch update.
+              :
+            elif ! PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" "" && ! { type _pr_base_sync_inline_merge >/dev/null 2>&1 && _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && PR_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; then
               if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
                 auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
@@ -1685,6 +1725,10 @@ jobs:
             elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF:-}"; then
               auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+            elif ! det_skip_merge_open_guard pre_merge; then
+              # #10260: one live read after the checks wait, before the post-wait
+              # freshness/lease re-check and the merge call.
+              :
             elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
               if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
                 auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"

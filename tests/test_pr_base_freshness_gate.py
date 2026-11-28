@@ -231,9 +231,10 @@ class Wiring(unittest.TestCase):
 		self.assertEqual(len(sites), 2)
 		# 1600: the merge-lease `lease_wait` branch (2026-11-17) sits between
 		# the post-wait gate and the merge call. 2000: the #9939 blocked-merge
-		# guard comment and RB_SYNC_MERGE_DEFERRED reset sit there too.
+		# guard comment and RB_SYNC_MERGE_DEFERRED reset sit there too. 2400:
+		# the open-PR guard branch (#10260) sits there as well.
 		for site in sites:
-			self.assertIn("_pr_base_fresh_for_merge", site[-2000:])
+			self.assertIn("_pr_base_fresh_for_merge", site[-2400:])
 		# Each call to the retry helper follows its site's gate.
 		retry_calls = list(re.finditer(r"\|\| rb_judge_merge_retry_transient (?:auto|direct) (?:merge|terminal|sync); then", case_text))
 		self.assertEqual(len(retry_calls), 3)
@@ -245,8 +246,10 @@ class Wiring(unittest.TestCase):
 		# 4600: all three together (4357 chars).
 		# 5200: the merge-lease Phase 4 inline-merge fallback (#10198) lengthens
 		# the gated line itself by about 400 chars.
+		# 6400: the open-PR guard branch (#10260) sits between the sync
+		# site's freshness gate and its merge call (about 900 chars).
 		for call in retry_calls:
-			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 5200):call.start()])
+			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 6400):call.start()])
 		# merge_with_followup's synchronous merge is gated too.
 		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}" || { type _pr_base_sync_inline_merge', text)
 

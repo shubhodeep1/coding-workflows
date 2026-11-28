@@ -1681,6 +1681,8 @@ def test_followup_guard_terminal_arm_uses_its_own_pr_read(base: str, merged: boo
 			f"_safe_gh_jq() {{ printf '%s\\n' \"$*\" >> {str(reads)!r}; printf '%s' \"${{FG_PAYLOAD_JSON}}\"; }}\n"
 			"_pr_base_fresh_for_merge() { return 0; }\n"
 			"_pr_wait_for_required_checks() { return 0; }\n"
+			# Open-PR guard (#10260): covered by tests/test_pr_merge_state_guard.py.
+			"_pr_merge_open_guard() { return 0; }\n"
 			"review_head_gate_post_status() { :; }\n"
 			+ _merge_err_helpers()
 			+ "\n"
