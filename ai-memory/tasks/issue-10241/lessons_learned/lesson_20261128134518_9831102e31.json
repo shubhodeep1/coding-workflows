@@ -1,0 +1,27 @@
+{
+  "discovered_at": "2026-11-28T13:45:18Z",
+  "issue_number": 10241,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/review_autofix_sweep.yml:1004-1035; cited_path=.github/workflows/review_autofix_sweep.yml; files_touched=.github/workflows/cancel_on_pr_close.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/review_autofix.yml, .github/workflows/unblock_judge.yml, README.md, agents.d/10241-unblock-reissue-own-pr-guard.md, changelog.d/10241-unblock-reissue-own-pr-guard.md, scripts/pr_checks_lib.sh, scripts/review_merge_train.sh, scripts/stage_switches.json, scripts/unblock_actions.py, scripts/unblock_judge.sh, tests/test_merge_lease.py, tests/test_unblock_judge.py.",
+  "phase": "review_autofix",
+  "pr_number": 10246,
+  "record_id": "lesson_20261128134518_9831102e31",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix_sweep.yml",
+    ".github/workflows/cancel_on_pr_close.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/unblock_judge.yml",
+    "README.md",
+    "agents.d/10241-unblock-reissue-own-pr-guard.md",
+    "changelog.d/10241-unblock-reissue-own-pr-guard.md",
+    "scripts/pr_checks_lib.sh",
+    "scripts/review_merge_train.sh",
+    "scripts/stage_switches.json",
+    "scripts/unblock_actions.py",
+    "scripts/unblock_judge.sh",
+    "tests/test_merge_lease.py",
+    "tests/test_unblock_judge.py"
+  ]
+}
