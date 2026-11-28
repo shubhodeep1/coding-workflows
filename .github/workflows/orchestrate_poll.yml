@@ -1667,6 +1667,11 @@ jobs:
           STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES: ${{ vars.STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES || '' }}
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
+          # Issue #9892: merge-lease hold lapse, close_and_reissue green-PR guard
+          # kill switch, and the lease-wait label the hold reads (script defaults:
+          # 1440, true, ai:merge-lease-wait).
+          STALL_MERGE_LEASE_WAIT_MAX_MINUTES: ${{ vars.STALL_MERGE_LEASE_WAIT_MAX_MINUTES || '' }}
+          STALL_REISSUE_GREEN_PR_GUARD_ENABLED: ${{ vars.STALL_REISSUE_GREEN_PR_GUARD_ENABLED || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
           STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
@@ -1932,6 +1937,11 @@ jobs:
           STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES: ${{ vars.STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES || '' }}
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
+          # Issue #9892: merge-lease hold lapse, close_and_reissue green-PR guard
+          # kill switch, and the lease-wait label the hold reads (script defaults:
+          # 1440, true, ai:merge-lease-wait).
+          STALL_MERGE_LEASE_WAIT_MAX_MINUTES: ${{ vars.STALL_MERGE_LEASE_WAIT_MAX_MINUTES || '' }}
+          STALL_REISSUE_GREEN_PR_GUARD_ENABLED: ${{ vars.STALL_REISSUE_GREEN_PR_GUARD_ENABLED || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
           STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
