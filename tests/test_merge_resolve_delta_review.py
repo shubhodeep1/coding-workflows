@@ -615,7 +615,7 @@ def test_security_pass_audits_a_resolution_head_as_a_delta() -> None:
 	assert 'if [[ "${single_pass_remerge_since:-}" =~ ^[0-9a-f]{40}$ ]]; then' in text
 	# The override sits inside the delta-enabled, non-exhausted branch.
 	delta = text.index('if [ "${SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED:-true}" != "false" ] && [ "${exhausted_retry}" != "true" ]; then')
-	assert delta < text.index('if [[ "${single_pass_remerge_since:-}" =~ ^[0-9a-f]{40}$ ]]; then') < text.index("if [ -n \"${delta_since}\" ]; then\n\t\tif gh")
+	assert delta < text.index('if [[ "${single_pass_remerge_since:-}" =~ ^[0-9a-f]{40}$ ]]; then') < text.index("if [ -n \"${delta_since}\" ]; then\n\t\tif single_pass_dispatch_audit")
 
 
 def _step(text: str, name: str) -> str:
