@@ -2406,9 +2406,24 @@ unblock_resolve_own_prs()
 	# unblock_judge.yml does not forward MERGE_LEASE_WAIT_LABEL, so when it is
 	# unset the repository variable is read once. §14 audit: no other call in
 	# this run returns repository variables (the placeholder hold reads only its
-	# own name). A missing variable or a failed read keeps the default label.
-	if [ -n "${graphql_file}" ] && [ -z "${own_wait_label}" ]; then
-		own_wait_label="$(gh api "repos/${REPOSITORY}/actions/variables/MERGE_LEASE_WAIT_LABEL" --jq '.value // ""' 2>/dev/null | head -n 1 | tr -d '[:cntrl:]' | cut -c1-100 || true)"
+	# own name). The read is skipped when the response has no open
+	# `ai/issue-<n>` node (the label cannot change the result). A missing
+	# variable (HTTP 404) keeps the default label; any other failed read makes
+	# the facts `unknown` (reason=label_read_failed), so a custom-labelled
+	# lease-waiting PR is never closed by a re-issue.
+	if [ -n "${graphql_file}" ] && [ -z "${own_wait_label}" ] \
+		&& ! jq -e --arg h "ai/issue-${ITEM}" '[.data.repository.pullRequests.nodes[]? | select(type == "object" and .headRefName == $h and .state == "OPEN")] | length == 0' "${graphql_file}" >/dev/null 2>&1; then
+		local own_label_rc=0 own_label_err="${RUNTIME_DIR}/own_wait_label.err"
+		own_wait_label="$(gh api "repos/${REPOSITORY}/actions/variables/MERGE_LEASE_WAIT_LABEL" --jq '.value // ""' 2>"${own_label_err}")" || own_label_rc=$?
+		own_wait_label="$(printf '%s\n' "${own_wait_label}" | head -n 1 | tr -d '[:cntrl:]' | cut -c1-100)"
+		if [ "${own_label_rc}" != "0" ]; then
+			own_wait_label=""
+			if ! grep -q 'HTTP 404' "${own_label_err}" 2>/dev/null; then
+				graphql_file=""
+				reason="label_read_failed"
+			fi
+		fi
+		rm -f "${own_label_err}"
 	fi
 	if [ -n "${graphql_file}" ] && ! MERGE_LEASE_WAIT_LABEL="${own_wait_label:-ai:merge-lease-wait}" unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" own-prs --graphql-file "${graphql_file}" \
 		--item "${ITEM}" --repo "${REPOSITORY}" --pipeline-login "${UNBLOCK_LOGIN:-}" > "${result_file}" 2>/dev/null; then

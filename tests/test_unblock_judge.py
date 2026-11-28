@@ -1439,12 +1439,18 @@ if endpoint.startswith(("repos/o/r/actions/variables/", "repos/o/r/actions/secre
 	name = endpoint.rsplit("/", 1)[1]
 	state.setdefault("actions_reads", []).append(endpoint)
 	# #10241: a variable's value (the own-PR wait label read); --jq is not applied.
+	if kind == "VARIABLES" and os.environ.get("FAKE_GH_FAIL_VARIABLE_READ"):
+		json.dump(state, open(state_path, "w"))
+		print("gh: Server Error (HTTP 500)", file=sys.stderr)
+		sys.exit(1)
 	variable_values = json.loads(os.environ.get("FAKE_GH_VARIABLE_VALUES") or "{}")
 	if kind == "VARIABLES" and name in variable_values:
 		done(variable_values[name])
 	if name in os.environ.get("FAKE_GH_ACTIONS_" + kind, "").split(","):
 		done(name)
 	json.dump(state, open(state_path, "w"))
+	# The real gh reports an unset variable or secret as HTTP 404.
+	print("gh: Not Found (HTTP 404)", file=sys.stderr)
 	sys.exit(1)
 if endpoint.startswith("repos/o/r/actions/runs/"):
 	run_id = endpoint.rsplit("/", 1)[1]
@@ -1708,6 +1714,8 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 	# refuses a reissue when it is unreadable. The tests written before it pin
 	# it off; the #10241 tests below pass `true` explicitly.
 	env["UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED"] = "false"
+	# The wait-label read runs only when this is unset; never inherit the runner's.
+	env.pop("MERGE_LEASE_WAIT_LABEL", None)
 	env.update(env_extra)
 	result = subprocess.run(["bash", str(JUDGE)], capture_output=True, text=True, env=env, check=False)
 	return result, json.loads(state_file.read_text(encoding="utf-8"))
@@ -7496,3 +7504,24 @@ def test_judge_reads_the_repositorys_custom_wait_label(tmp_path: Path) -> None:
 	assert "op=reissue outcome=refused reason=own_pr_lease_wait pr=62" in result.stdout, result.stdout + result.stderr
 	assert "repos/o/r/actions/variables/MERGE_LEASE_WAIT_LABEL" in state.get("actions_reads", [])
 	assert state["created"] == [] and not any(endpoint == "repos/o/r/pulls/62" for endpoint, _ in state["patched"])
+
+
+def test_judge_refuses_reissue_when_the_wait_label_read_fails(tmp_path: Path) -> None:
+	# A failed (non-404) variable read could hide a custom wait label: the facts are unknown.
+	payload = _judge_own_payload(_own_node(62, gate="PENDING", labels=("custom:lease-wait",)))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true",
+		FAKE_GH_FAIL_VARIABLE_READ="1")
+	assert result.returncode == 0, result.stderr
+	assert "op=own_prs outcome=unknown count=0 reason=label_read_failed" in result.stdout, result.stdout + result.stderr
+	assert "op=reissue outcome=refused reason=own_pr_unknown pr=unknown" in result.stdout
+	assert state["created"] == [] and not any(endpoint == "repos/o/r/pulls/62" for endpoint, _ in state["patched"])
+
+
+def test_judge_skips_the_wait_label_read_without_an_own_pr_candidate(tmp_path: Path) -> None:
+	payload = _judge_own_payload(_own_node(62, gate="PENDING", ref="ai/issue-70"))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true",
+		FAKE_GH_FAIL_VARIABLE_READ="1")
+	assert result.returncode == 0, result.stderr
+	assert "op=own_prs outcome=ok count=0 reason=reused" in result.stdout, result.stdout + result.stderr
+	assert "repos/o/r/actions/variables/MERGE_LEASE_WAIT_LABEL" not in state.get("actions_reads", [])
+	assert len(state["created"]) == 1
