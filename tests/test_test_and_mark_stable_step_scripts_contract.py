@@ -344,7 +344,11 @@ def _run_orchestrate_capacity_check(tmp: Path, log: str, trackers: str = "0", lo
 	bash = shutil.which("bash")
 	assert bash is not None
 	run = _step(_all_steps(_raw()), ORCHESTRATE_STEP)["run"]
-	snippet = run[run.index('CAP_EVIDENCE=""'):run.index('echo "::error::Could not locate tracking issue')]
+	# Issue #10225: the step's reads go through gh_api_retry; keep the step's
+	# own first line, which sources scripts/gh_helpers.sh from the checkout.
+	source_line = run.splitlines()[0]
+	assert source_line.startswith("declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh"), source_line
+	snippet = source_line + "\n" + run[run.index('CAP_EVIDENCE=""'):run.index('echo "::error::Could not locate tracking issue')]
 	bindir = tmp / "bin"
 	bindir.mkdir()
 	(tmp / "job.log").write_text(log, encoding="utf-8")
@@ -373,9 +377,14 @@ def _run_orchestrate_capacity_check(tmp: Path, log: str, trackers: str = "0", lo
 			"STUB_LOG_FAIL": "1" if log_fail else "0",
 			"GITHUB_OUTPUT": str(output),
 			"TEST_REPO": "o/r",
+			# One attempt per read keeps the failing-log case fast.
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"TMPDIR": str(tmp),
+			"RUNNER_TEMP": str(tmp),
+			"GH_RATE_LIMIT_BREAKER_FILE": str(tmp / "breaker"),
 		}
 	)
-	result = subprocess.run([bash, "-c", snippet], env=env, capture_output=True, text=True, check=False, timeout=60)
+	result = subprocess.run([bash, "-c", snippet], env=env, capture_output=True, text=True, check=False, timeout=60, cwd=str(Path(__file__).resolve().parent.parent))
 	return result.returncode, output.read_text(encoding="utf-8"), result.stdout
 
 

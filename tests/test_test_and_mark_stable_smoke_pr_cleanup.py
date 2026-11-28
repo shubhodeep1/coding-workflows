@@ -208,7 +208,16 @@ def test_smoke_cleanup_cancels_a_caller_run_past_page_one() -> None:
 	body = _run_body(_step(_wf(), "- name: Cleanup test artifacts"))
 	start = body.index('elif [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then')
 	fallback = body[start:body.index("# Close issue", start)]
-	script = "set -euo pipefail\nif false; then :\n" + fallback + "\n"
+	# Issue #10225: the step's reads go through gh_api_retry; keep the step's
+	# own first line, which sources scripts/gh_helpers.sh from the checkout.
+	# The line is fail-soft here (always() cleanup): a missing helper falls
+	# back to a plain read instead of stopping the step.
+	source_line = next(line for line in body.splitlines() if line.startswith("declare -F gh_api_retry"))
+	assert source_line.startswith("declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry()"), source_line
+	# The reads go through the step's own cleanup_gh_api_read (per-read wait cap).
+	fn_start = body.index("cleanup_gh_api_read() {")
+	read_fn = body[fn_start:body.index("\n}\n", fn_start) + 3]
+	script = "set -euo pipefail\n" + source_line + "\n" + read_fn + "if false; then :\n" + fallback + "\n"
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		bin_dir = root / "bin"
@@ -224,8 +233,18 @@ def test_smoke_cleanup_cancels_a_caller_run_past_page_one() -> None:
 			"ISSUE_TITLE": "[E2E Smoke Test] canary",
 			"IMPL_CREATED_AFTER_INPUT": "2026-11-01T00:00:00Z",
 			"GITHUB_RUN_ID": "1",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"TMPDIR": str(root),
+			"GH_RATE_LIMIT_BREAKER_FILE": str(root / "breaker"),
 		}
-		proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
+		proc = subprocess.run(
+			["bash", "-c", script],
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+			cwd=str(Path(__file__).resolve().parent.parent),
+		)
 		assert proc.returncode == 0, proc.stdout + proc.stderr
 		calls = (root / "calls").read_text(encoding="utf-8").splitlines()
 		cancels = [c for c in calls if "/cancel" in c]
