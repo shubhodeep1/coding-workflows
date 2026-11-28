@@ -2830,7 +2830,7 @@ _pr_base_sync_inline_merge()
 		return 1
 	fi
 	if ! gh_retry _safe_gh_jq --paginate --slurp "repos/${inline_repo}/issues/${inline_pr}/comments?per_page=100" 2>/dev/null \
-		| jq -c '[ .[]? | if type == "array" then .[] else . end | select(type == "object") | {author_login: (.user.login // ""), body: (.body // "")} ]' \
+		| jq -c '[ .[]? | if type == "array" then .[] else . end | select(type == "object") | {author_login: (.user.login // ""), author_type: (.user.type // ""), body: (.body // "")} ]' \
 			> "${inline_comments}" 2>/dev/null \
 		|| ! jq -e 'type == "array"' "${inline_comments}" >/dev/null 2>&1 \
 		|| ! bash "${inline_lib}/review_head_gate.sh" freshness-sync "${inline_repo}" "${inline_pr}" "${inline_update}" \

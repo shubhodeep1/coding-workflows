@@ -1072,7 +1072,7 @@ single_pass_base_sync_carry()
 		return 1
 	fi
 	carry_tmp="$(mktemp -d)" || { single_pass_carry_skip "${head_sha}" tmp_unavailable; return 1; }
-	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), body: (.body // "")}]' "${comments_file}" > "${carry_tmp}/comments.json" 2>/dev/null; then
+	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), author_type: (.user.type // ""), body: (.body // "")}]' "${comments_file}" > "${carry_tmp}/comments.json" 2>/dev/null; then
 		rm -rf "${carry_tmp}"
 		single_pass_carry_skip "${head_sha}" comments_unreadable
 		return 1
@@ -1229,7 +1229,7 @@ single_pass_inherited_clean()
 	inherit_work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/single_pass_inherit.XXXXXX" 2>/dev/null)" || return 1
 	inherit_comments="${inherit_work}/comments.json"
 	inherit_markers="${inherit_work}/markers.tsv"
-	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), body: (.body // "")}]' "${comments_file}" > "${inherit_comments}" 2>/dev/null \
+	if ! jq '[.[]? | select(type == "object") | {author_login: (.user.login // ""), author_type: (.user.type // ""), body: (.body // "")}]' "${comments_file}" > "${inherit_comments}" 2>/dev/null \
 		|| ! printf '%s\n' "${markers}" > "${inherit_markers}"; then
 		rm -rf "${inherit_work}"
 		return 1

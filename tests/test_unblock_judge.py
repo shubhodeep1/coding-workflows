@@ -1474,6 +1474,14 @@ if method == "GET" and "search/issues" in args:
 		sys.exit(1)
 	state.setdefault("searches", []).append(f.get("q", ""))
 	done(os.environ.get("FAKE_GH_REISSUES", "[]"))
+# Issue #10149: an issue's open ai/issue-<n> pull request, kept apart from
+# pull_lookups (the closed fix-up lookups) so existing assertions hold.
+if method == "GET" and endpoint == "repos/o/r/pulls" and f.get("state") == "open":
+	state.setdefault("open_pull_lookups", []).append(f.get("head", ""))
+	if os.environ.get("FAKE_GH_FAIL_OPEN_PULLS"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	done(os.environ.get("FAKE_GH_OPEN_PULLS", "[]"))
 if method == "GET" and endpoint == "repos/o/r/pulls":
 	state.setdefault("pull_lookups", []).append(f.get("head", ""))
 	merged = json.loads(os.environ.get("FAKE_GH_MERGED_PULLS", "{}"))
@@ -1607,6 +1615,9 @@ if method == "GET" and endpoint.startswith("repos/o/r/pulls/") and endpoint.ends
 		sys.exit(1)
 	files = json.loads(os.environ.get("FAKE_GH_PR_FILES", "{}")).get(endpoint.split("/")[4], [])
 	done("\n".join(files))
+if os.environ.get("FAKE_GH_PR_DIFF") is not None and endpoint.startswith("repos/o/r/pulls/") and "Accept: application/vnd.github.diff" in args:
+	state.setdefault("diff_lookups", []).append(endpoint)
+	done(os.environ["FAKE_GH_PR_DIFF"])
 owner_pr = json.loads(os.environ.get("FAKE_GH_OWNER_PR", "null"))
 if owner_pr is not None and endpoint == "repos/o/r/pulls/" + str(owner_pr.get("number")):
 	if os.environ.get("FAKE_GH_FAIL_OWNER_PR"):
@@ -6894,6 +6905,119 @@ def test_unblock_workflow_forwards_triage_nothing_to_implement_gate_switch() -> 
 	assert "\n          UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED: ${{ vars.UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED || 'true' }}\n" in step
 	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
 	assert '"${UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED:-true}"' in script
+
+
+# Issue #10149 (re-implementation of #9546): an issue whose work sits on an
+# open ai/issue-<n> pull request is judged from that pull request.
+LINKED_OPEN_PULLS = json.dumps([{
+	"number": 12, "state": "open",
+	"head": {"ref": "ai/issue-7", "sha": "b" * 40, "repo": {"full_name": "o/r"}},
+	"base": {"ref": "main"},
+}])
+
+
+def test_unblock_issue_linked_open_pr_adds_diff_context_and_fingerprint(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	verdict = {"verdict": "descope", "reason": "r", "instructions": "drop the failing part"}
+	plain_dir = tmp_path / "plain"
+	plain_dir.mkdir()
+	plain, plain_state = _judge(plain_dir, ISSUE, verdict=verdict)
+	assert plain.returncode == 0, plain.stderr
+	assert "op=linked_pr_lookup outcome=none pr=" in plain.stdout
+	linked_dir = tmp_path / "linked"
+	linked_dir.mkdir()
+	result, state = _judge(linked_dir, ISSUE, verdict=verdict, FAKE_GH_OPEN_PULLS=LINKED_OPEN_PULLS,
+		FAKE_GH_PR_DIFF="diff --git a/cache.py b/cache.py\n+cached = True\n")
+	assert result.returncode == 0, result.stderr
+	assert state["open_pull_lookups"] == ["o:ai/issue-7"]
+	assert plain_state["open_pull_lookups"] == ["o:ai/issue-7"]
+	assert "op=linked_pr_lookup outcome=found pr=12" in result.stdout
+	assert state["diff_lookups"] == ["repos/o/r/pulls/12"]
+	assert "pull_lookups" not in state or state.get("pull_lookups") == plain_state.get("pull_lookups")
+	context = json.loads((linked_dir / "rt" / "judge_context.json").read_text(encoding="utf-8"))
+	assert context["linked_open_pr"] == {"number": 12, "head_ref": "ai/issue-7", "base_ref": "main", "head_sha": "b" * 40}
+	assert context["evidence"]["linked_pr"] == 12
+	plain_context = json.loads((plain_dir / "rt" / "judge_context.json").read_text(encoding="utf-8"))
+	assert plain_context["linked_open_pr"] is None
+	assert "linked_pr" not in plain_context["evidence"]
+	assert context["fingerprint"] != plain_context["fingerprint"]
+	assert "+cached = True" in (linked_dir / "rt" / "prompt.txt").read_text(encoding="utf-8")
+
+
+def test_unblock_validate_refuses_reimplement_with_linked_open_pr(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	retry = {"verdict": "retry_budget", "reason": "r", "instructions": "try again"}
+	result, state = _judge(tmp_path, ISSUE, verdict=retry, FAKE_GH_OPEN_PULLS=LINKED_OPEN_PULLS, FAKE_GH_PR_DIFF="",
+		MOCK_UNBLOCK_JUDGE_JSON_REASK=json.dumps(retry))
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.count("op=linked_pr_check outcome=reasked reason=linked_open_pr pr=12") == 1
+	assert "op=linked_pr_check outcome=refused_after_reask reason=linked_open_pr pr=12" in result.stdout
+	assert "reason=invalid_verdict" in result.stdout
+	assert not any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+	prompt = (tmp_path / "rt" / "prompt.txt").read_text(encoding="utf-8")
+	assert "issue has open pull request #12 carrying the work" in prompt
+	# The re-ask makes no new diff read.
+	assert state["diff_lookups"] == ["repos/o/r/pulls/12"]
+
+
+def test_unblock_linked_open_pr_switch_off_skips_lookup(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "try again"},
+		FAKE_GH_OPEN_PULLS=LINKED_OPEN_PULLS, UNBLOCK_JUDGE_LINKED_PR_ENABLED="false")
+	assert result.returncode == 0, result.stderr
+	assert "open_pull_lookups" not in state
+	assert "op=linked_pr_lookup outcome=disabled" in result.stdout
+	context = json.loads((tmp_path / "rt" / "judge_context.json").read_text(encoding="utf-8"))
+	assert "linked_open_pr" not in context
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+
+
+def test_unblock_linked_open_pr_lookup_failure_fails_open(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, _ = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "try again"},
+		FAKE_GH_FAIL_OPEN_PULLS="1")
+	assert result.returncode == 0, result.stderr
+	assert "op=linked_pr_lookup outcome=unavailable pr=" in result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+
+
+def test_unblock_linked_open_pr_ignores_fork_branch(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	fork = json.loads(LINKED_OPEN_PULLS)
+	fork[0]["head"]["repo"]["full_name"] = "mallory/r"
+	result, _ = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": "try again"},
+		FAKE_GH_OPEN_PULLS=json.dumps(fork))
+	assert result.returncode == 0, result.stderr
+	assert "op=linked_pr_lookup outcome=none pr=" in result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+
+
+def test_ledger_linked_pr_evidence_and_validate_rule() -> None:
+	assert ledger.normalise_evidence({"reason": "x", "linked_pr": "#12"}) == {"reason": "x", "linked_pr": "12"}
+	assert ledger.fingerprint("blocked", {"reason": "x"}) != ledger.fingerprint("blocked", {"reason": "x", "linked_pr": 12})
+	decision = {"allowed": ["retry_budget", "reissue", "descope", "wait"], "item": 7, "stop": "blocked",
+		"fingerprint": "0" * 12, "next_round": 1, "terminal": False}
+	for name in ("retry_budget", "reissue"):
+		with pytest.raises(ledger.UsageError, match=r"^linked_open_pr:12$"):
+			ledger.validate({"verdict": name, "reason": "r", "instructions": "i"}, decision, "o/r", linked_pr={"number": 12})
+		assert ledger.validate({"verdict": name, "reason": "r", "instructions": "i"}, decision, "o/r", linked_pr={})["verdict"] == name
+		assert ledger.validate({"verdict": name, "reason": "r", "instructions": "i"}, decision, "o/r")["verdict"] == name
+		assert ledger.validate({"verdict": name, "reason": "r", "instructions": "i"}, decision, "o/r", linked_pr={"number": True})["verdict"] == name
+	assert ledger.validate({"verdict": "descope", "reason": "r", "instructions": "i"}, decision, "o/r", linked_pr={"number": 12})["verdict"] == "descope"
+
+
+def test_unblock_workflow_forwards_linked_pr_switch() -> None:
+	# #10149: the linked-PR switch reaches scripts/unblock_judge.sh from a repository variable.
+	workflow = (ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8")
+	step = workflow[workflow.index("      - name: Judge the blocked item\n"):]
+	assert "\n          UNBLOCK_JUDGE_LINKED_PR_ENABLED: ${{ vars.UNBLOCK_JUDGE_LINKED_PR_ENABLED || 'true' }}\n" in step
+	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	assert '"${UNBLOCK_JUDGE_LINKED_PR_ENABLED:-true}"' in script
 
 
 # --- Existing implementation PR routing (#9809, UNBLOCK_EXISTING_PR_ROUTING_ENABLED) ---
