@@ -107,7 +107,10 @@ def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> Non
 			# preceded by the blocked-merge guard's deferral branch. The
 			# success post must still come first, within that short branch,
 			# with no other merge attempt in between.
-			window = judge_lines[max(0, index - 8):index]
+			# #10049: the deferral branch also holds the guard-found-closed
+			# skip (state check, warning, judge_skip_reason), so the window
+			# spans 24 lines; the no-merge-between check below still holds.
+			window = judge_lines[max(0, index - 24):index]
 			posts = [i for i, line in enumerate(window) if 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success' in line]
 			assert posts, merge_line
 			assert not any("gh pr merge" in line for line in window[posts[-1] + 1:]), merge_line
@@ -7044,11 +7047,13 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 		# Every call is recorded; the required-checks wait reads one green check-run.
 		# The merge-base freshness gate defers when it cannot resolve the base
 		# (#6988), so the PR read names one and the compare reports it up to date.
+		# The merge-time PR state guard (#10049) fails closed without `.state`,
+		# so the PR read reports an open, ready PR.
 		fake_gh.write_text(
 			'#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n'
 			'case "$*" in *check-runs*) printf \'[{"check_runs":[{"name":"lint","status":"completed","conclusion":"success","details_url":""}]}]\' ;;\n'
 			f'  *compare/*) printf \'{{"ahead_by":0,"files":[]}}\' ;;\n'
-			f'  *pulls/42*) printf \'{{"head":{{"sha":"{head_sha}"}},"base":{{"ref":"main"}}}}\' ;;\nesac\n',
+			f'  *pulls/42*) printf \'{{"state":"open","draft":false,"head":{{"sha":"{head_sha}"}},"base":{{"ref":"main"}}}}\' ;;\nesac\n',
 			encoding="utf-8",
 		)
 		fake_gh.chmod(0o755)
