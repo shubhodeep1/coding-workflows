@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1775-1780 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The last run's merge-conflict resolution in the tests-heal-plan-and-validation job combines the budget-watch timing note (#10200) with the tests-main-delta gate (issue #10156); the reviewer recorded this as a no-regression check, not a bug.\n  WHY: The reviewer says \"Does not fail\" because the resolution keeps `needs: tests-main-delta` and the `!cancelled()` gate, so the job still skips on a push to main when the delta suite is active; the source severity is NIT, which is shown as low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:lines 1775-1780 (in tests-heal-plan-and-validation job) | severity=NIT | confidence=4\n  PROBLEM: The last run's diff merges the budget-watch timing note (#10200) and the tests-main-delta gate (issue #10156) into this job; the resolution keeps `needs: tests-main-delta`, the `!cancelled()` gate and the #10200 context. The reviewer found no logic regression.\n  WHY: Does not fail; the conflict resolution keeps the gate, so the job still skips on a push to main when the delta suite is active.\n- SUMMARISER NOTES, not raised as findings (the reviewer calls them explicitly residual from prior rounds) (3 related items)\n  PROBLEM: .github/workflows/ci.yml ~line 5130: the tests-main-delta comment says \"newest successful\". scripts/ci_main_delta.sh: the temp error-file can leak if the step is cancelled mid-read. .github/workflows/ci.yml: tests-main-delta has no Node/Wrangler setup.\n  WHY: The comment fix was left out to keep the patch minimal. Both normal exits remove the temp file, and the runner temp directory is thrown away. A test that needs Node fails loudly, and MAIN_PUSH_DELTA_CI_ENABLED=false rolls the change back.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ea5ce0a003d777c3379603373639ae473962bd6f58155dbb77c3e483ba590778",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10163,
+    "run_id": "46136673227",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46136673227",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128111309_fc34774f86",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10163,
+    "run_id": "46136673227"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T11:13:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
