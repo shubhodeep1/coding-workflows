@@ -316,6 +316,7 @@ def test_orchestrate_poll_stages_every_claude_isolation_support_file():
 		"plan.yml", "implement.yml", "orchestrate.yml", "orchestrate_poll.yml", "check_failure_triage.yml",
 		"validate.yml", "workflow-log-analysis.yml", "validation-refresh.yml", "security-audit.yml",
 		"workflow-failure-heal-intake.yml", "issue_pr_status.yml",
+		"alert-triage.yml", "alert-self-fix.yml",
 	],
 )
 def test_workflows_pin_the_sandbox_codex_version(workflow):

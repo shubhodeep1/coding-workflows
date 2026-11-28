@@ -100,7 +100,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/install-codex
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       - name: Create Codex config
         if: steps.prepare.outputs.proceed == 'true'
@@ -151,7 +151,7 @@ jobs:
         env:
           ALERT_SELF_FIX_MODEL: ${{ vars.ALERT_SELF_FIX_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ALERT_SELF_FIX_EDITOR_TIMEOUT_SECS: ${{ vars.ALERT_SELF_FIX_EDITOR_TIMEOUT_SECS || '3600' }}
-          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
           # The codex fallback's host-side broker needs the inference key
           # (scripts/codex_isolated_exec.sh); it never enters the sandbox.
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -214,7 +214,7 @@ jobs:
         if: steps.prepare.outputs.proceed == 'true'
         env:
           ALERT_SELF_FIX_GATE_TIMEOUT_MINUTES: ${{ vars.ALERT_SELF_FIX_GATE_TIMEOUT_MINUTES || '20' }}
-          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
         run: bash scripts/alert_self_fix.sh verify
 
       - name: Publish the self-fix PR
@@ -270,7 +270,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/install-codex
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       - name: Create Codex config
         if: steps.scan.outputs.candidate != ''
@@ -320,7 +320,7 @@ jobs:
         if: steps.scan.outputs.candidate != ''
         env:
           ALERT_BREAK_GLASS_MODEL: ${{ vars.ALERT_BREAK_GLASS_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
-          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
         run: bash scripts/alert_self_fix_break_glass.sh review
@@ -331,7 +331,7 @@ jobs:
         if: steps.review.outputs.approved == 'true'
         env:
           ALERT_TRIAGE_BREAK_GLASS_TEST_TIMEOUT_MINUTES: ${{ vars.ALERT_TRIAGE_BREAK_GLASS_TEST_TIMEOUT_MINUTES || '90' }}
-          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
         run: bash scripts/alert_self_fix_break_glass.sh test
 
       - name: Post break-glass status
