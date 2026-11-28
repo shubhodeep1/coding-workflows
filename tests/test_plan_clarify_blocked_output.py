@@ -1226,9 +1226,17 @@ def test_route_scope_block_step_sits_before_the_handler_with_the_same_if() -> No
 	route = _plan_step_block("Route planning scope block")
 	handler = _plan_step_block("Handle blocked planning output")
 	assert wf.index(route) < wf.index(handler)
-	assert wf[wf.index(route) + len(route):].startswith("\n      - name: Handle blocked planning output\n")
+	# Issue #10015: "Verify nothing-to-implement block" sits between the route
+	# step and the handler; the handler skips when the verify closed the issue.
+	verify = _plan_step_block("Verify nothing-to-implement block")
+	assert wf[wf.index(route) + len(route):].startswith("\n      - name: Verify nothing-to-implement block\n")
+	assert wf[wf.index(verify) + len(verify):].startswith("\n      - name: Handle blocked planning output\n")
 	condition = "        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'\n"
-	assert condition in route and condition in handler
+	assert condition in route and condition in verify
+	assert (
+		"        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'"
+		" && steps.nothing_to_implement_verify.outputs.outcome != 'closed'\n"
+	) in handler
 	assert "        id: route_scope_block\n" in route
 	assert "          PLAN_SCOPE_BLOCK_ROUTING_ENABLED: ${{ vars.PLAN_SCOPE_BLOCK_ROUTING_ENABLED || 'true' }}\n" in route
 	assert "          WAITING_PARSED: ${{ steps.parse_plan.outputs.waiting }}\n" in route

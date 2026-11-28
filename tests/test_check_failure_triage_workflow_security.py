@@ -344,8 +344,9 @@ esac
 	def test_triage_checkouts_do_not_persist_credentials(self) -> None:
 		triage_job = _workflow()["jobs"]["triage"]
 		checkouts = [step for step in triage_job["steps"] if step.get("uses", "").startswith("actions/checkout@")]
-		# Three normal checkouts plus the historical-mode default-branch fallback.
-		self.assertEqual(len(checkouts), 4)
+		# Three normal checkouts, the historical-mode default-branch fallback and
+		# the target-files guard's default-branch checkout (#9823).
+		self.assertEqual(len(checkouts), 5)
 		for checkout in checkouts:
 			self.assertIn(checkout["with"]["persist-credentials"], (False, "false"))
 
@@ -1036,7 +1037,7 @@ esac
 		self.assertEqual(diagnose["env"]["CHECK_TRIAGE_STAGE"], "diagnose")
 		self.assertEqual(diagnose["env"]["CHECK_TRIAGE_PREPARE_ONLY"], "true")
 		self.assertEqual(diagnose["env"]["CHECK_TRIAGE_CHECK_RUN_ID"], "${{ inputs.check_run_id }}")
-		self.assertEqual(diagnose["env"]["CLARIFY_CODEX_VERSION"], "${{ vars.CODEX_VERSION || 'v0.114.0' }}")
+		self.assertEqual(diagnose["env"]["CLARIFY_CODEX_VERSION"], "${{ vars.CODEX_VERSION || 'v0.171.0' }}")
 		self.assertEqual(diagnose["if"], "${{ steps.collect_triage.outputs.ready == 'true' }}")
 		post = _step(triage_job, name="Post check-failure triage issue")
 		self.assertLess(post["run"].index("triage_post_check_name="), post["run"].index("gh_retry gh issue create"))
