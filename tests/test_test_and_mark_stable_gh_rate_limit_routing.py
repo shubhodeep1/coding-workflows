@@ -128,20 +128,20 @@ ALLOWLIST: tuple[tuple[str, str, str], ...] = (
 	),
 )
 
-# A call starts a command: line start, after `$(`, a shell operator, a
+# A call starts a command: line start, after `$(` or a backtick, a shell operator, a
 # group or function-body brace, a subshell `( `, a keyword, or after
 # `timeout N` / `command` / `env` / a leading `NAME=value ` assignment or a
 # `$VAR ` / `${VAR} ` word. `gh` inside echo text such as
 # "::warning::gh api failed" or "(gh api returned empty)" is prose, and
 # `gh_retry gh api ...` already goes through a helper.
 _GH_CALL = re.compile(
-	r"(?:^|\$\(|\(\s|[;|&!{]|\b(?:then|do|if|while|else)\b|\btimeout\s+\d+|\bcommand|\benv"
+	r"(?:^|\$\(|\(\s|[;|&!{`]|\b(?:then|do|if|while|else)\b|\btimeout\s+\d+|\bcommand|\benv"
 	r"|\b[A-Za-z_][A-Za-z0-9_]*=[^\s()]*\s|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\s)\s*gh\s+(api|run|pr|issue)\b(.*)"
 )
 # `_safe_gh_jq` (scripts/gh_helpers.sh) makes one plain `gh api` attempt and
 # never waits for a rate-limit reset, so a call to it counts as a raw read;
 # `gh_retry _safe_gh_jq ...` goes through a helper and is not matched.
-_SAFE_GH_JQ_CALL = re.compile(r"(?:^|\$\(|\(\s|[;|&!{]|\b(?:then|do|if|while|else)\b)\s*_safe_gh_jq\s")
+_SAFE_GH_JQ_CALL = re.compile(r"(?:^|\$\(|\(\s|[;|&!{`]|\b(?:then|do|if|while|else)\b)\s*_safe_gh_jq\s")
 _READ_SUBCOMMANDS = {
 	"run": {"view", "list", "watch"},
 	"pr": {"view", "list", "checks", "diff"},
@@ -368,6 +368,19 @@ def test_scanner_recognises_reads_and_writes() -> None:
 		'gh api "repos/o/r/labels/x" >/dev/null 2>&1 ||  gh api "repos/o/r/labels"  -f name="x" >/dev/null 2>&1 || true',
 		"V=$(gh api repos/o/r/z --jq '.a | .b' 2>/dev/null) || V=\"\"",
 	], got
+
+
+def test_scanner_treats_backtick_substitution_as_a_command_start() -> None:
+	# Review of #10225: backtick command substitution starts a command too.
+	text = "\n".join(
+		[
+			"R=`gh api repos/o/r/issues`",
+			"S=`_safe_gh_jq repos/o/r/runs --jq .x`",
+			"T=`gh_api_retry repos/o/r/issues`",
+		]
+	)
+	got = raw_reads(text)
+	assert got == ["R=`gh api repos/o/r/issues`", "S=`_safe_gh_jq repos/o/r/runs --jq .x`"], got
 
 
 def test_gate_reads_go_through_rate_limit_aware_helpers() -> None:
