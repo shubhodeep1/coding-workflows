@@ -198,7 +198,7 @@ while true; do
     # Plan finished but didn't produce awaiting-approval or implementing
     # Give one more cycle in case labels are delayed
     sleep "$POLL_INTERVAL"
-    LABELS_RECHECK=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+    LABELS_RECHECK=$(. scripts/gh_helpers.sh >/dev/null 2>&1 && gh_api_retry "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
       --jq '[.labels[].name] | join(",")' 2>/dev/null) || LABELS_RECHECK=""
     if echo "$LABELS_RECHECK" | grep -qE 'ai:awaiting-approval|ai:implementing'; then
       continue
