@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10240,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10240\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10244\",\"pr_number\":10244,\"branch\":\"ai/issue-10240\",\"run_id\":\"46099437045\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/46099437045\",\"changed_files\":[\"changelog.d/10240-rb-judge-stage-freshness-helper.md\",\"scripts/stage_workflow_support.sh\",\"tests/test_review_rb_judge_red_check_repair.py\"]}",
+  "fingerprint": "69b41d3867fc17f6358fae1e7612fa5a5f1708ce0e12df1b0077d7232ef2caa1",
+  "lineage": {
+    "issue_number": 10240,
+    "parent_ids": [],
+    "pr_number": 10244,
+    "run_id": "46099437045",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46099437045",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10244"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261128034257_934dd526dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10240,
+    "level": "run",
+    "pr_number": 10244,
+    "run_id": "46099437045"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10240: https://github.com/shubhodeep1/coding-workflows/pull/10244",
+  "timestamps": {
+    "created_at": "2026-11-28T03:42:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
