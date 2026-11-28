@@ -512,9 +512,17 @@ def test_rb_judge_guard_precedes_every_merge() -> None:
 		assert start < first_fresh < text.index("elif ! rb_judge_merge_open_guard; then", start)
 	# A PR already closed at the judge's read logs pr_closed/pr_merged on
 	# that read (no call) in both not-open exits.
-	assert text.count('rb_judge_merge_open_guard start "${_pr_json:-}" || true') == 1
+	# The merge arm's not-open exit and merge_with_followup's closed exit.
+	assert text.count('rb_judge_merge_open_guard start "${_pr_json:-}" || true') == 2
 	assert text.count('rb_judge_merge_open_guard start "${_rb_terminal_pr_json:-}" || true') == 1
 	sync = text.index('[ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_merge_open_guard; then')
+	# merge_with_followup: start check on its own read before the
+	# freshness/lease call, which comes before the pre-merge guard (#10260).
+	mwf_start = text.index('[ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_merge_open_guard start "${_pr_json:-}"; then')
+	mwf_fresh = text.index("PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge", mwf_start)
+	assert mwf_start < mwf_fresh < sync
+	mwf_closed = text.index('is closed without merge (merged=false). Skipping follow-up creation')
+	assert 'rb_judge_merge_open_guard start "${_pr_json:-}" || true' in text[mwf_closed:mwf_closed + 900]
 	assert sync < text.index("rb_judge_followup_merge_guard sync", sync) < text.index("_match_head_arg=(--match-head-commit", sync)
 	assert "judge_skip_reason=pr_not_open" in text[sync:sync + 1500]
 

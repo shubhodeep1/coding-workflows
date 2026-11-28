@@ -4231,6 +4231,16 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # rejected the PR. Don't create the follow-up against a base
         # that doesn't contain the PR's changes.
         echo "::warning::PR #${PR_NUMBER} is closed without merge (merged=false). Skipping follow-up creation; the deferred gap will not be tracked because the source PR's changes never landed."
+        if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+          # Issue #10260: the contractual skip line (and a held lease given
+          # back) on the judge's own read, no call. This arm checks the SHA
+          # only on its open path, so an unresolved one logs without it.
+          if [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            rb_judge_merge_open_guard start "${_pr_json:-}" || true
+          else
+            echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=unknown reason=pr_closed closed_at=$(printf '%s' "${_pr_json:-}" | jq -r '.closed_at // "-"' 2>/dev/null | grep -xE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z' || echo -)"
+          fi
+        fi
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
         # Check-runs gate: delegate to the shared `_pr_checks_completed`
         # helper in scripts/pr_checks_lib.sh — the SAME gate the
@@ -4303,6 +4313,17 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
                 echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped (a cancelled required check blocks; re-run it; non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
                 echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
               fi
+            fi
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_merge_open_guard start "${_pr_json:-}"; then
+            # Issue #10260: start check on the judge's own PR read (no call),
+            # before the freshness/lease call below: a draft or moved head
+            # asks for no lease and gets no branch update. Same mapping as
+            # the pre-merge guard further down.
+            if [ "$(rb_judge_merge_open_guard_status)" = "not_open" ]; then
+              echo "judge_skip_reason=pr_not_open" >> "$GITHUB_OUTPUT"
+              [ -z "${GITHUB_ENV:-}" ] || echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+            else
+              echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
             && ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
@@ -4401,6 +4422,10 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is. Leaving linked issues in ai:review-blocked so the follow-up is not opened against unmerged code."
         echo "judge_skip_reason=merge_conflict" >> "$GITHUB_OUTPUT"
       else
+        if [ -z "${PR_STATE}" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+          # Issue #10260: the PR read failed (rate limit, 5xx); nothing merges.
+          echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} reason=pr_state_unavailable"
+        fi
         echo "::warning::PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null} merged=${PR_MERGED:-false}, cannot confirm merge (mergeability still computing or PR not open). Leaving linked issues in ai:review-blocked."
         echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
       fi
