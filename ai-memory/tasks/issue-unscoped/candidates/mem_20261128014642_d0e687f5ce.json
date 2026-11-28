@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When changing GitHub Actions YAML or scripts invoked by workflows, inspect and update the corresponding tests under `tests/`; this repository uses them to verify both workflow structure and runtime behavior. Plan for contract-test changes alongside implementation rather than treating workflow edits as standalone.",
+  "fingerprint": "bb5cad424b340c007925a62fb0c582b422ba241e0fe8a63203ac0483739a30b3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46092673742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46092673742",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10063",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10078",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10172",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10198",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10205",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10067",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10081",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10174",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10203",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10207"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261128014642_d0e687f5ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is often guarded by explicit contract tests.",
+  "timestamps": {
+    "created_at": "2026-11-28T01:46:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
