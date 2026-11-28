@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cG4 gets MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED\u201d; setting it to false must restore the previous behavior, and the switches must be passed through the environment of steps that run these scripts.\n  expected_change_site: .github/workflows/review_autofix_sweep.yml, the \u201cEnsure the final CI run on reviewed PR heads\u201d step.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: That step runs review_final_ci_sweep.sh and exports MERGE_LEASE_REVOKE_ENABLED at lines 1032-1038, but does not export MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED; the sweep's base-sync path calls the merge-lease update gate, so with the repository variable set to false that path still sees the helper's default true and applies the new guard instead of restoring the prior behavior (severity MAJOR per source; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash both saw this item but treated it as a documented deferral with a safe default and did not report it as a gap).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cG4 gets MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED\u201d; setting it to false must restore the previous behavior, and the switches must be passed through the environment of steps that run these scripts.\n  Expected change site: .github/workflows/review_autofix_sweep.yml, the \u201cEnsure the final CI run on reviewed PR heads\u201d step.\n  Evidence of absence: That step runs review_final_ci_sweep.sh and exports MERGE_LEASE_REVOKE_ENABLED at lines 1032-1038, but does not export MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED. The sweep\u2019s base-sync path calls the merge-lease update gate. With the repository variable set to false, that path still sees the helper\u2019s default true and applies the new guard instead of restoring the prior behavior.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a9914510b9d7b87773d22527b0586e0b367b65acf373e18e5b87c2967f8cdaf0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10246,
+    "run_id": "46131074303",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46131074303",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128095657_fc25daab72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10246,
+    "run_id": "46131074303"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T09:56:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
