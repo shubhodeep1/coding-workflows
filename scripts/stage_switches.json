@@ -436,6 +436,11 @@
 			"stage": "Merge-lease Phase 2: the merge-train tick revokes the lease from a holder that can no longer merge (draft, [skip ai] title, pipeline ai-review/head-gate failure, failed final CI, or idle; reasons revoked_*), grants a..."
 		},
 		{
+			"name": "MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Merge-lease tick skips and unlabels a waiter whose ai/issue-<n> source issue is closed as not planned (reason=source_issue_not_planned; one batched read per base; issue #10241); only false turns it off."
+		},
+		{
 			"name": "MERGE_TRAIN_CONFLICT_CHECK_ENABLED",
 			"default": "true",
 			"stage": "Merge-train real-conflict check (issue #6570)."
@@ -828,6 +833,11 @@
 			"name": "UNBLOCK_EXISTING_PR_ROUTING_ENABLED",
 			"default": "true",
 			"stage": "Unblock judge reset and stall recovery dispatch review on an open implementation PR instead of posting /approved (unblock_judge.yml, orchestrate_poll.yml, issue #9809)."
+		},
+		{
+			"name": "UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Unblock judge reads an issue's own open ai/issue-<n> PRs, refuses a reissue while one is green, lease-waiting or unreadable, and closes the others when a reissue goes ahead (unblock_judge.yml, orchestrate_poll.yml, issue #10241); only false turns it off."
 		},
 		{
 			"name": "UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED",
