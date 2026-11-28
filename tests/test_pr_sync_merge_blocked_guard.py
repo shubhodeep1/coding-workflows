@@ -221,6 +221,11 @@ def test_garbage_input_defers(tmp_path: Path, arg: str) -> None:
 
 
 GUARD_WINDOW_LINES = 30
+PY_ARGV_MERGE_RE = re.compile(r"""['"]pr['"]\s*,\s*['"]merge['"]""")
+# One item per line (formatter style): `"pr",` then `"merge",` on the next non-blank line.
+PY_ARGV_PR_LINE_RE = re.compile(r"""^['"]pr['"]\s*,\s*$""")
+PY_ARGV_MERGE_LINE_RE = re.compile(r"""^['"]merge['"]\s*(,|$)""")
+PY_ARGV_LIST_SCAN_LINES = 15
 
 
 def _direct_merge_lines(path: Path) -> list[int]:
@@ -228,9 +233,16 @@ def _direct_merge_lines(path: Path) -> list[int]:
 	hits = []
 	for index, line in enumerate(lines):
 		stripped = line.lstrip()
-		if stripped.startswith("#") or "gh pr merge" not in line:
+		# Python helpers may call gh with an argument list: ["gh", "pr", "merge", ...].
+		argv_merge = path.suffix == ".py" and PY_ARGV_MERGE_RE.search(line) is not None
+		prev = next((prior.strip() for prior in reversed(lines[:index]) if prior.strip()), "")
+		split_merge = path.suffix == ".py" and bool(PY_ARGV_MERGE_LINE_RE.match(stripped)) and bool(PY_ARGV_PR_LINE_RE.match(prev))
+		if stripped.startswith("#") or ("gh pr merge" not in line and not argv_merge and not split_merge):
 			continue
-		if "--auto" in line or "--disable-auto" in line:
+		# A split list carries its flags on the following lines, up to the closing bracket.
+		tail = lines[index:index + PY_ARGV_LIST_SCAN_LINES] if split_merge else [line]
+		tail = tail[:next((i + 1 for i, item in enumerate(tail) if "]" in item), len(tail))]
+		if any("--auto" in item or "--disable-auto" in item for item in tail):
 			continue
 		if stripped.startswith("echo ") or stripped.startswith('_noop_gate_failure_alert'):
 			continue
@@ -255,6 +267,71 @@ def test_direct_merge_site_counts_are_pinned() -> None:
 	# A new direct merge site must be guarded and counted here.
 	assert len(_direct_merge_lines(JUDGE)) == 4
 	assert len(_direct_merge_lines(POLLER)) == 3
+
+
+# Issue #10151: every other `gh pr merge` line without --auto in workflows,
+# templates and scripts is either text (not a merge) or exempt with a reason.
+# Path (relative to the repo root) -> (expected hit count, reason).
+DIRECT_MERGE_EXEMPT: dict[str, tuple[int, str]] = {
+	".github/workflows/claude-engine-smoke.yml": (
+		3,
+		"text: the smoke's deny-list assert, its prompt and its tool-call filter; no merge runs",
+	),
+	".github/workflows/review_autofix.yml": (1, "text: a Telegram alert message; no merge runs"),
+	"scripts/review_autofix_step_post_review_blocked_comment.sh": (2, "text: the review-blocked PR comment body"),
+	".github/workflows/update_workflows.yml": (
+		1,
+		"consumer repos only, legacy UPDATER_PR_DELIVERY_ENABLED=false path, after GitHub refuses --auto "
+		"with 'clean status' or 'auto-merge not allowed'; never merges into this repo's ruleset-protected main",
+	),
+}
+GUARDED_DIRECT_MERGE_FILES = (JUDGE, POLLER)
+
+
+def _direct_merge_scan_paths() -> list[Path]:
+	paths: list[Path] = []
+	for pattern in (".github/workflows/*.yml", ".github/workflows/*.yaml", "workflow-templates/*.yml", "workflow-templates/*.yaml"):
+		paths.extend(REPO_ROOT.glob(pattern))
+	# Python helpers too (shell-string and argument-list forms), so a later direct merge there fails this test.
+	for suffix in ("*.sh", "*.py"):
+		paths.extend((REPO_ROOT / "scripts").rglob(suffix))
+	return sorted(set(paths))
+
+
+def test_no_unguarded_direct_merge_into_the_default_branch() -> None:
+	# A direct merge with the admin GH_PAT bypasses ruleset 25851281
+	# (ai-review/head-gate + ci/final). The guarded files are covered by the
+	# guard-window test above; anything else must be exempt with a reason.
+	found: dict[str, int] = {}
+	for path in _direct_merge_scan_paths():
+		if path in GUARDED_DIRECT_MERGE_FILES:
+			continue
+		hits = _direct_merge_lines(path)
+		if hits:
+			found[path.relative_to(REPO_ROOT).as_posix()] = len(hits)
+	unexpected = {path: count for path, count in found.items() if path not in DIRECT_MERGE_EXEMPT}
+	assert not unexpected, (
+		f"direct (non --auto) gh pr merge outside the guarded files: {unexpected}; "
+		"arm --auto --match-head-commit, put it behind _pr_sync_merge_blocked_guard, or exempt it with a reason"
+	)
+	for path, (count, reason) in DIRECT_MERGE_EXEMPT.items():
+		assert reason.strip(), path
+		assert found.get(path, 0) == count, f"{path}: expected {count} exempt direct-merge line(s), found {found.get(path, 0)}"
+
+
+def test_python_argv_merge_forms_are_detected(tmp_path: Path) -> None:
+	helper = tmp_path / "helper.py"
+	helper.write_text(
+		'run(["gh", "pr", "merge", "1", "--squash"])\n'
+		'run(["gh", "pr", "merge", "2", "--auto", "--squash"])\n'
+		'run([\n\t"gh",\n\t"pr",\n\t"merge",\n\t"3",\n\t"--squash",\n])\n'
+		'run([\n\t"gh",\n\t"pr",\n\t"merge",\n\t"4",\n\t"--auto",\n])\n'
+		'run([\n\t"gh",\n\t"pr",\n\t"list",\n])\n',
+		encoding="utf-8",
+	)
+	lines = helper.read_text(encoding="utf-8").splitlines()
+	assert [lines[index].strip() for index in _direct_merge_lines(helper)] == ['run(["gh", "pr", "merge", "1", "--squash"])', '"merge",']
+	assert len(_direct_merge_lines(helper)) == 2
 
 
 def test_judge_wrapper_fails_closed_without_the_library() -> None:
