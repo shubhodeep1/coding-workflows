@@ -1191,6 +1191,12 @@ GROUP_PINNED_STEPS = {
 	"Review Semble contract test": 1,
 	# Moved from tests-hooks-and-orchestrator in #9496.
 	"Clarify sandbox base image pre-seed tests (#6985)": 1,
+	# Moved from tests-promote-stall-and-review in #10248.
+	"Review autofix step-script contract and workflow file size guard tests": 3,
+	# Moved from tests-promote-stall-and-review in #10248.
+	"Review autofix retired Claude-fixer hand-off and validate target_ref contract tests": 3,
+	# Moved from tests-promote-stall-and-review in #10248.
+	"Standalone clarify auto-decide tests (port P3)": 3,
 }
 # The only steps pinned to the last matrix group (#8118; #8772's step moved
 # on to group 0 in #8980; #9037 moved the Claude engine judges and validation
@@ -1927,8 +1933,9 @@ MOVED_HOOKS_JOB_STEPS = {
 			"tests/test_smoke_alert_silencing_contract.py",
 		),
 	),
+	# Issue #10248 moved it on to orchestrate-poll group 3.
 	"Standalone clarify auto-decide tests (port P3)": (
-		"tests-promote-stall-and-review",
+		"orchestrate-poll",
 		(
 			"tests/test_auto_decisions.py",
 			"tests/test_clarify_respond_standalone.py",
@@ -2698,6 +2705,90 @@ class MovedRelease9966StepsContractTest(unittest.TestCase):
 				self.assertLess(names.index(RELEASE_9966_SETUP_STEP), names.index(name))
 
 
+# Steps moved out of tests-promote-stall-and-review, which took 15m57s of its
+# 20 minutes (run 46098026068, budget-watch issue #10248): step name -> module
+# paths its body names. The run's step timings were not readable (statuses
+# only); the pick is an estimate from test and subprocess counts (about 207
+# tests and about 173 subprocess or bash call sites together), not a
+# measurement. All three go to orchestrate-poll group 3: the poll job has the
+# only 30-minute budget, group 3 pinned only the single-file module step, and
+# group 1 already took #9966's steps. The sharded "Promote cycle and
+# blocked-verdict unit tests" step stays in the source job.
+PROMOTE_10248_SOURCE_JOB_ID = "tests-promote-stall-and-review"
+PROMOTE_10248_TARGET_GROUP = 3
+PROMOTE_10248_SETUP_STEP = "Install Python CI dependencies"
+MOVED_PROMOTE_10248_STEPS = {
+	"Review autofix step-script contract and workflow file size guard tests": (
+		"tests/test_review_autofix_step_scripts_contract.py",
+		"tests/test_workflow_file_size_limit.py",
+		"tests/test_implement_step_scripts_contract.py",
+		"tests/test_test_and_mark_stable_step_scripts_contract.py",
+	),
+	"Review autofix retired Claude-fixer hand-off and validate target_ref contract tests": (
+		"tests/test_review_autofix_claude_fixer_mode.py",
+		"tests/test_validate_target_ref_input.py",
+	),
+	"Standalone clarify auto-decide tests (port P3)": (
+		"tests/test_auto_decisions.py",
+		"tests/test_clarify_respond_standalone.py",
+		"tests/test_clarify_github_facts.py",
+		"tests/test_clarify_sandbox_base_image_preseed.py",
+	),
+}
+
+
+class MovedPromote10248StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-promote-stall-and-review run once, in orchestrate-poll (3) (#10248)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_PROMOTE_10248_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [POLL_JOB_ID])
+
+	def test_each_step_is_guarded_to_its_group(self) -> None:
+		# A guard naming a group the matrix does not run would skip the step silently.
+		self.assertLess(PROMOTE_10248_TARGET_GROUP, poll_group_count())
+		for name in MOVED_PROMOTE_10248_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), PROMOTE_10248_TARGET_GROUP)
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {PROMOTE_10248_TARGET_GROUP}")
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_PROMOTE_10248_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[PROMOTE_10248_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_PROMOTE_10248_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in self.jobs()[POLL_JOB_ID]["steps"]]
+		for name in MOVED_PROMOTE_10248_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(PROMOTE_10248_SETUP_STEP, names)
+				self.assertIn(name, names)
+				self.assertLess(names.index(PROMOTE_10248_SETUP_STEP), names.index(name))
+
+
 # Steps moved out of tests-heal-plan-and-validation, which took 16m08s of its
 # 20 minutes (run 42373283876, budget-watch issue #8993): step name -> (target
 # job id, module paths its body names). The run's step timings were not
@@ -3212,9 +3303,11 @@ MOVED_POLL_GROUP_THREE_8472_STEPS = {
 # group 4, so only the single-file module step stays. #9391 then pinned the
 # pre-push affected-test gate step (moved from tests-hooks-and-orchestrator)
 # to group 3, and #9639 moved that step on to group 0, so only the single-file
-# module step stays.
+# module step stays. #10248 then pinned three steps moved from
+# tests-promote-stall-and-review to group 3 (MOVED_PROMOTE_10248_STEPS).
 POLL_GROUP_THREE_8472_REMAINING_STEPS = {
 	SINGLE_FILE_MODULES_STEP,
+	*MOVED_PROMOTE_10248_STEPS,
 }
 
 
