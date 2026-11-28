@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A workflow that comes within 30,000 bytes of the 430,000-byte test ceiling opens a ai:ci-budget issue before any test fails.\"\n  expected_change_site: `.github/workflows/ci.yml`, `budget-watch` trigger and ordering.\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The `budget-watch` job runs only for pushes to `main` (`if` at lines 5143-5143), and depends on all test jobs (`needs` at lines 5144-5153), It does not run for PR final CI, so a PR that crosses the 430,000-byte test ceiling can fail its tests without opening the budget issue first, Pull request final CI, which runs the full test suite and validates workflow files, does not trigger this watcher (both reviewers stated SEVERITY: MAJOR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: A workflow that comes within 30,000 bytes of the 430,000-byte test ceiling opens a ai:ci-budget issue before any test fails.\n  Expected change site: .github/workflows/ci.yml (budget-watch job triggers).\n  Evidence of absence: The budget-watch job currently runs only on pushes to main. Pull request final CI, which runs the full test suite and validates workflow files, does not trigger this watcher. If a pull request introduces a workflow change that crosses the 430,000-byte contract-test ceiling, it could fail final CI before any ai:ci-budget issue is filed, which violates the requirement for the issue to open before any test fails.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cA workflow that comes within 30,000 bytes of the 430,000-byte test ceiling opens a ai:ci-budget issue before any test fails.\u201d\n  Expected change site: `.github/workflows/ci.yml`, `budget-watch` trigger and ordering.\n  Evidence of absence: The `budget-watch` job runs only for pushes to `main` (`if` at lines 5143-5143), and depends on all test jobs (`needs` at lines 5144-5153). It does not run for PR final CI, so a PR that crosses the 430,000-byte test ceiling can fail its tests without opening the budget issue first.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "36292d3e4524e641056e31587373a1ba2984d9c66e44a4a03bda03798a4d2893",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10167,
+    "run_id": "46133369255",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46133369255",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128102703_7ae9473db7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10167,
+    "run_id": "46133369255"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T10:27:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
