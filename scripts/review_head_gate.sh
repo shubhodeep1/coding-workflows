@@ -229,7 +229,9 @@ review_head_gate_main()
 # is reviewed normally.
 # Usage: freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file>
 # The comments file is the review gate's existing marker-comment read (an array
-# of {author_login, body}); this adds no comments call. API budget (§15): one
+# of {author_login, author_type, body}; author_type is optional and is only
+# needed to trust a github-actions[bot] final-CI-failed marker); this adds no
+# comments call. API budget (§15): one
 # `commits/<head>` and one compare read, both only when a bound marker names
 # the head. Exit 0 = skip the reviewers; 1 = review normally. Every outcome
 # logs one REVIEW_HEAD_GATE mode=freshness_sync line. On exit 0 it also sets
