@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:989-995 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_own_pr_retire_ops()` keeps an own pull request when it matches the ci_owner, even when that pull request is not green.\n  WHY: The requirement says an open own pull request that is not green gets commented on and closed when a re-issue goes ahead, and the kept CI-owner PR goes against a strict reading of that; the reviewer noted the keep may be intended (\"The replacement is routed onto the verified open CI-owner PR's head; keep it.\") and asked for clarification or a justifying code comment; the source stated no severity, so the field is left out.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"G4 gets MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, default true\" and \"Pass the two switches through the env: of the steps that run these scripts\"; G5 \"false keeps today's behaviour\".\n  expected_change_site: .github/workflows/review_autofix_sweep.yml, the two env blocks that already forward MERGE_LEASE_REVOKE_ENABLED: the lease tick (lines 263-271, line 267) and the final-CI base-sync gate (lines 1030-1043, line 1035)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: Both env blocks in review_autofix_sweep.yml set MERGE_LEASE_REVOKE_ENABLED (lines 267 and 1035), and MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED appears nowhere in the file. scripts/pr_checks_lib.sh `_merge_lease_source_issue_guard_enabled` falls back to `${MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED:-true}`, so setting the repository variable to `false` does not turn G4 off on these sweep paths. The guard stays on, which is the safe default, so the only loss is that the kill switch does not reach these steps. The gap is documented in README.md and agents.d/10241-unblock-reissue-own-pr-guard.md. The file is outside the plan grant's files_touched. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT; google_gemini-3_1-flash-lite and openai_gpt-6-luna rated it MAJOR.\n- requirement: \"When a `reissue` goes ahead and the issue has an open own pull request that is not green, the operations also comment on that pull request ('Superseded by #<new>') and close it.\"\n  expected_change_site: `scripts/unblock_actions.py:_own_pr_retire_ops` and the standalone issue re-issue path\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `_own_pr_retire_ops` keeps an own PR whose number matches an open `ci_owner` (lines 989\u2013995). `test_open_ci_owner_pr_is_never_retired` expects that non-green own PR to stay open, with no superseded comment and no close. Severity MAJOR (source).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"G4 gets MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, default true\" and \"Pass the two switches through the env: of the steps that run these scripts\". G5 also says \"false keeps today's behaviour\".\n  Expected change site: .github/workflows/review_autofix_sweep.yml, the two env blocks that already forward MERGE_LEASE_REVOKE_ENABLED, at lines 267 and 1035.\n  Evidence of absence: MERGE_LEASE_REVOKE_ENABLED is at lines 267 and 1035, and MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED is nowhere in the file. scripts/pr_checks_lib.sh `_merge_lease_source_issue_guard_enabled` falls back to `${MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED:-true}`, so setting the variable to `false` does not turn G4 off in the sweep's lease tick or its final-CI base-sync gate. The guard is on by default, so nothing breaks at runtime; only the kill switch is lost. Documented in README.md and agents.d/10241-unblock-reissue-own-pr-guard.md. The file is not in the plan grant's files_touched.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_actions.py:_own_pr_retire_ops() (lines 989-995) | confidence=3\n  PROBLEM: The function keeps an own pull request that matches the ci_owner, even when it is not green.\n  WHY: This goes against the requirement to comment on and close every open own pull request that is not green when a re-issue goes ahead. The keep may be intended (\"The replacement is routed onto the verified open CI-owner PR's head; keep it.\"), so the reviewer asked for clarification or a justifying code comment.\n- TASK_GAP\n  Requirement: \"G4 gets MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, default true\"; the issue also requires passing the switches through the environments of steps that run these scripts.\n  Expected change site: .github/workflows/review_autofix_sweep.yml\n  Evidence of absence: The env blocks in .github/workflows/review_autofix_sweep.yml (lines 263-271 and 1030-1043) pass MERGE_LEASE_REVOKE_ENABLED but leave out MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED. scripts/pr_checks_lib.sh defaults the switch to true, so the guard stays on but cannot be turned off on these sweep paths.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"G4 gets MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, default true\"; the issue also requires passing the switches through the environments of steps that run these scripts.\n  Expected change site: `.github/workflows/review_autofix_sweep.yml`, lease-tick environment around lines 263\u2013271 and final-CI base-sync environment around lines 1030\u20131043.\n  Evidence of absence: Both env blocks set `MERGE_LEASE_REVOKE_ENABLED` (lines 267 and 1035) but leave out `MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED`. The sweep uses the script default `true` even when the variable is `false`, so the switch does not restore the old behaviour on these paths.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"When a `reissue` goes ahead and the issue has an open own pull request that is not green, the operations also comment on that pull request ('Superseded by #<new>') and close it.\"\n  Expected change site: `scripts/unblock_actions.py:_own_pr_retire_ops` and the standalone issue re-issue path.\n  Evidence of absence: `_own_pr_retire_ops` keeps an own PR whose number matches an open `ci_owner` (lines 989\u2013995). `test_open_ci_owner_pr_is_never_retired` expects that non-green own PR to stay open, with no superseded comment and no close.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f398bf899e0eee5a76423ef44083a1da989860908852d79872e0169c82d3893",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10246,
+    "run_id": "46133559610",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46133559610",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128103110_75f54109e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10246,
+    "run_id": "46133559610"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T10:31:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
