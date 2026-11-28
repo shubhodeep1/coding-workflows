@@ -261,6 +261,53 @@ def _gh_calls(segment: str) -> list[tuple[str, str]]:
 	return calls
 
 
+def _raw_read_positions(line: str) -> list[int]:
+	"""Offset in `line` of each raw read on one logical line.
+
+	Review of #10225: the allowlist used to approve a whole logical line when
+	any needle matched it, so a new raw read joined to an allowlisted call
+	passed unseen. Each raw read is now located on its own (the offset of its
+	`api`/`run`/`pr`/`issue` word, or of `_safe_gh_jq`) so every one of them
+	must sit inside an allowlist needle.
+	"""
+	positions: list[int] = []
+	for match in _SAFE_GH_JQ_CALL.finditer(line):
+		positions.append(match.start() + match.group(0).rfind("_safe_gh_jq"))
+	cursor = 0
+	for segment in _command_segments(line):
+		# Segments are contiguous slices of `line` in order; operators between
+		# them are dropped, so the next one starts at or after the cursor.
+		offset = line.find(segment, cursor) if segment else cursor
+		offset = cursor if offset < 0 else offset
+		cursor = offset + len(segment)
+		match = _GH_CALL.search(segment)
+		while match:
+			nxt = _GH_CALL.search(segment, match.start(2))
+			rest = segment[match.start(2):nxt.start() if nxt else len(segment)]
+			if _is_raw_read(match.group(1), rest):
+				positions.append(offset + match.start(1))
+			match = nxt
+	return sorted(set(positions))
+
+
+def _unlisted_reads(path: str, line: str, allowlist: tuple[tuple[str, str, str], ...]) -> tuple[list[int], set[int]]:
+	"""Raw-read offsets on `line` no allowlist needle covers, and the entries used."""
+	unlisted: list[int] = []
+	used: set[int] = set()
+	for pos in _raw_read_positions(line):
+		covering = [
+			i
+			for i, (p, needle, _r) in enumerate(allowlist)
+			if p == path and any(
+				m.start() <= pos < m.start() + len(needle) for m in re.finditer(re.escape(needle), line)
+			)
+		]
+		if not covering:
+			unlisted.append(pos)
+		used.update(covering)
+	return unlisted, used
+
+
 def _workflow() -> dict:
 	"""Parse the jobs of the workflow without a YAML dependency.
 
@@ -417,15 +464,34 @@ def test_scanner_splits_calls_chained_inside_a_quoted_substitution() -> None:
 	], got
 
 
+def test_allowlist_covers_each_read_not_the_whole_line() -> None:
+	# Review of #10225: an allowlisted call must not hide a second raw read
+	# on the same logical line (for example one joined by `|| \` or `;`).
+	allow = (("f.sh", 'A="$(timeout 20 gh api', "fixture"),)
+	ok = 'A="$(timeout 20 gh api repos/o/r/x)" || true'
+	both = 'A="$(timeout 20 gh api repos/o/r/x)" || B="$(gh api repos/o/r/y)"'
+	safe = 'A="$(timeout 20 gh api repos/o/r/x)"; C="$(_safe_gh_jq repos/o/r/z)"'
+	write = 'A="$(timeout 20 gh api repos/o/r/x)" || gh api repos/o/r/labels -f name=x'
+	assert _unlisted_reads("f.sh", ok, allow) == ([], {0})
+	missing, used = _unlisted_reads("f.sh", both, allow)
+	assert missing == [both.index("api repos/o/r/y")] and used == {0}, missing
+	missing, _used = _unlisted_reads("f.sh", safe, allow)
+	assert missing == [safe.index("_safe_gh_jq")], missing
+	assert _unlisted_reads("f.sh", write, allow) == ([], {0})
+	assert _unlisted_reads("other.sh", ok, allow)[0] == [ok.index("api repos")]
+
+
 def test_gate_reads_go_through_rate_limit_aware_helpers() -> None:
 	for path, needle, reason in ALLOWLIST:
 		assert reason.strip(), (path, needle)
 	unlisted: list[str] = []
 	used: set[int] = set()
 	for path, line in _all_raw_reads():
-		hit = [i for i, (p, needle, _r) in enumerate(ALLOWLIST) if p == path and needle in line]
-		if not hit:
-			unlisted.append(f"{path}: {line}")
+		# Every raw read on the line needs its own covering needle (review of
+		# #10225): one allowlisted call must not hide another read beside it.
+		missing, hit = _unlisted_reads(path, line, ALLOWLIST)
+		if missing:
+			unlisted.append(f"{path}: {line} (unlisted read at offset(s) {missing})")
 		used.update(hit)
 	assert not unlisted, "raw gh reads outside the allowlist (route through gh_api_retry):\n" + "\n".join(unlisted)
 	stale = [ALLOWLIST[i][:2] for i in range(len(ALLOWLIST)) if i not in used]
