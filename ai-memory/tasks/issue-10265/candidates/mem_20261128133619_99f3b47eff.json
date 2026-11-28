@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10265,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10265\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10267\",\"pr_number\":10267,\"branch\":\"ai/issue-10265\",\"run_id\":\"46149318731\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/46149318731\",\"changed_files\":[\"changelog.d/10265-break-glass-review-template.md\",\"prompts/_templates/mode-alert-break-glass-review.txt\"]}",
+  "fingerprint": "230fa4608c22a1fddb96126ccb2995e47d38ba9ba33125d2a078cf8c0e134039",
+  "lineage": {
+    "issue_number": 10265,
+    "parent_ids": [],
+    "pr_number": 10267,
+    "run_id": "46149318731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46149318731",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10267"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261128133619_99f3b47eff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10265,
+    "level": "run",
+    "pr_number": 10267,
+    "run_id": "46149318731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10265: https://github.com/shubhodeep1/coding-workflows/pull/10267",
+  "timestamps": {
+    "created_at": "2026-11-28T13:36:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
