@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The full test suite passes.\"\n  expected_change_site: Full-suite CI or pre-push validation for this PR.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The provided pre-push report is marked unverified, listing 53 inherited failures and 3 unverified tests. The current check-run snapshot reports zero failures but still has `review / codex-agent` in progress, and does not establish that the full suite passed. (SEVERITY: NIT. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly declined to report this as a gap: they call it a CI/validation status, not missing code, and note failed_count=0 on the head plus inherited-only pre-push failures.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cThe full test suite passes.\u201d\n  Expected change site: Full-suite CI or pre-push validation for this PR.\n  Evidence of absence: The provided pre-push report is marked unverified, listing 53 inherited failures and 3 unverified tests. The current check-run snapshot reports zero failures but still has `review / codex-agent` in progress, and does not establish that the full suite passed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "87dae533a3b3588f70da1cb8e5cb8f98a075678164d830971d1e50437450230a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10190,
+    "run_id": "46115223756",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46115223756",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128062651_0a5dc06263",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10190,
+    "run_id": "46115223756"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T06:26:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
