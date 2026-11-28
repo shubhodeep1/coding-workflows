@@ -12103,8 +12103,8 @@ def test_heal_stale_closes_a_held_plan_with_no_files() -> None:
 
 def test_heal_stale_target_and_resolve_fallback() -> None:
 	target = heal.heal_stale_target(_stale_issue())
-	assert target == {"source_repo": "owner/repo", "source_kind": "run", "workflow": "ci.yml", "branch": "main",
-		"fallback_run": None, "reason": ""}
+	assert target == {"source_repo": "owner/repo", "source_kind": "run", "source_number": None, "workflow": "ci.yml",
+		"branch": "main", "fallback_run": None, "reason": ""}
 	legacy = heal.heal_stale_target(_stale_issue(body=_stale_body(workflow=None, branch=None,
 		scope_runs="other/repo:7,owner/repo:40990538508")))
 	assert legacy["workflow"] is None and legacy["fallback_run"] == {"repo": "owner/repo", "run_id": "40990538508"}
@@ -12143,6 +12143,82 @@ def test_heal_stale_decision_cli(tmp_path) -> None:
 	assert run("--stage", "decide", "--issue-json", str(tmp_path / "missing.json")).returncode == 2
 	target = run("--stage", "target", "--issue-json", str(tmp_path / "issue.json"))
 	assert target.returncode == 0 and json.loads(target.stdout)["workflow"] == "ci.yml"
+
+
+def test_heal_stale_target_reports_the_pr_source_number() -> None:
+	# #9967: the unblock judge reads a `#<n>` source item's state.
+	target = heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#123")))
+	assert target["source_kind"] == "pr" and target["source_number"] == 123
+	assert heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#x")))["source_number"] is None
+	assert heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#0")))["source_number"] is None
+
+
+def test_heal_stale_default_purpose_still_needs_approval_label_and_hold_marker() -> None:
+	unheld = _stale_issue(labels=["ai:workflow-heal", "ai:blocked"])
+	assert _stale_decide(issue=unheld)["reason"] == "not_awaiting_approval"
+	assert _stale_decide(comments=[])["reason"] == "hold_marker_missing"
+	# source_closed is ignored without the unblock purpose.
+	assert _stale_decide(comments=[], source_closed=True)["reason"] == "hold_marker_missing"
+
+
+def test_heal_stale_unblock_placeholder_purpose_skips_only_the_hold_gates() -> None:
+	unheld = _stale_issue(labels=["ai:workflow-heal", "ai:blocked"])
+	result = _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder")
+	assert result["decision"] == "close" and result["reason"] == "workflow_green" and result["green_runs"] == 5
+	assert "comment_body" not in result
+	# Every other gate stays.
+	runs = _stale_runs(6)
+	runs["workflow_runs"][2]["conclusion"] = "failure"
+	assert _stale_decide(issue=unheld, comments=[], runs=runs, purpose="unblock_placeholder")["reason"] == "run_not_green"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder",
+		linked_pr={"state": "OPEN"})["reason"] == "open_pr"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder",
+		linked_pr=heal.HEAL_STALE_LINKED_PR_UNKNOWN)["reason"] == "linked_pr_unknown"
+	assert _stale_decide(issue=_stale_issue(labels=["ai:workflow-heal", "ai:orchestrator-managed"]), comments=[],
+		purpose="unblock_placeholder")["reason"] == "orchestrator_managed"
+	assert _stale_decide(issue=_stale_issue(labels=["ai:blocked"]), comments=[], purpose="unblock_placeholder")["reason"] == "not_heal_issue"
+	assert _stale_decide(issue=_stale_issue(labels=["ai:workflow-heal"], user={"login": "outsider"}), comments=[],
+		purpose="unblock_placeholder")["reason"] == "untrusted_issue_author"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder", workflow="")["reason"] == "workflow_unknown"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder",
+		now=datetime(2026, 1, 1, 12, tzinfo=timezone.utc))["reason"] == "too_young"
+
+
+def test_heal_stale_unblock_placeholder_source_closed_decides_without_runs() -> None:
+	pr_issue = _stale_issue(labels=["ai:workflow-heal", "ai:blocked"], body=_stale_body(source="owner/consumer#123"))
+	params = {"comments": [], "runs": None, "workflow": "", "branch": "", "purpose": "unblock_placeholder"}
+	closed = _stale_decide(issue=pr_issue, source_closed=True, **params)
+	assert closed["decision"] == "close" and closed["reason"] == "source_closed_no_recurrence" and closed["green_runs"] == 0
+	assert _stale_decide(issue=pr_issue, source_closed=False, **params)["reason"] == "source_open"
+	assert _stale_decide(issue=pr_issue, source_closed=True, now=datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+		**{k: v for k, v in params.items()})["reason"] == "too_young"
+	# A trusted occurrence report moves the anchor, so a recent recurrence keeps it.
+	occurrence = _stale_comment("<!-- workflow-failure-heal:occurrence -->\nSeen again.", created_at="2026-02-28T12:00:00Z")
+	assert _stale_decide(issue=pr_issue, source_closed=True, **{**params, "comments": [occurrence]})["reason"] == "too_young"
+	# Without source_closed the runs path applies (and here, no runs: kept).
+	assert _stale_decide(issue=pr_issue, **params)["reason"] == "workflow_unknown"
+
+
+def test_heal_stale_decision_cli_unblock_placeholder_flags(tmp_path) -> None:
+	def write(name: str, value: object) -> str:
+		path = tmp_path / name
+		path.write_text(json.dumps(value), encoding="utf-8")
+		return str(path)
+
+	def run(*args: str) -> subprocess.CompletedProcess:
+		return subprocess.run([sys.executable, "-I", "-B", str(LIB_PATH), "heal-stale-decision", *args],
+			capture_output=True, text=True, check=False)
+
+	base = ["--stage", "decide", "--issue-json", write("issue.json", _stale_issue(labels=["ai:workflow-heal"])),
+		"--comments-json", write("comments.json", []), "--pipeline-login", _STALE_LOGIN, "--workflow", "ci.yml",
+		"--branch", "main", "--now", "2026-03-01T00:00:00Z", "--runs-json", write("runs.json", _stale_runs(5)),
+		"--linked-pr-json", write("pr.json", None)]
+	assert json.loads(run(*base).stdout)["reason"] == "not_awaiting_approval"
+	assert json.loads(run(*base, "--purpose", "unblock_placeholder").stdout)["decision"] == "close"
+	assert json.loads(run(*base, "--purpose", "unblock_placeholder", "--source-closed", "false").stdout)["reason"] == "source_open"
+	assert json.loads(run(*base, "--purpose", "unblock_placeholder", "--source-closed", "true").stdout)["reason"] == \
+		"source_closed_no_recurrence"
+	assert run(*base, "--purpose", "other").returncode == 2
 
 
 def test_compose_issue_body_adds_workflow_marker_only_for_workflow_run() -> None:
@@ -15015,3 +15091,197 @@ def test_heal_scope_recovery_budget_rerun_drops_the_report_issue() -> None:
 	loop = recovery.split("local recovery_budget_args=()", 1)[1].split("done", 1)[0]
 	report_arm = loop.split("--report-issue)", 1)[1].split(";;", 1)[0]
 	assert "recovery_arg_index=$((recovery_arg_index + 2))" in report_arm and "continue" in report_arm
+
+
+# ---------------------------------------------------------------------------
+# Red-main grouping (issue #9823, plan Phase 2 of
+# docs/plans/pipeline-human-wait-elimination-plan.md)
+#
+# A red default-branch push CI run whose error text differs from the previous
+# one got a new fingerprint and a second heal issue. The red-main group key
+# (workflow name, failing job, branch) records it on the open heal issue.
+# ---------------------------------------------------------------------------
+
+RED_MAIN_ENV_LINE = "      WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED || 'true' }}\n"
+RED_MAIN_CI = {"default_branch": "main", "event": "push", "workflow_path": ".github/workflows/ci.yml"}
+
+
+def _red_main_issue(number: int, *, fp: str, group: str, state: str = "open") -> dict:
+	issue = _p5_cause_issue(number, fp=fp, state=state)
+	issue["body"] = issue["body"].replace(
+		f"<!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->",
+		f"<!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->\n<!-- {heal.MARKER_PREFIX}red-main-group={group} -->",
+	)
+	return issue
+
+
+def test_red_main_group_key_only_for_default_branch_push_ci() -> None:
+	key = heal.red_main_group_key("CI", "tests", "main", **RED_MAIN_CI)
+	assert re.fullmatch(r"[0-9a-f]{64}", key)
+	assert key == hashlib.sha256(b"red-main|ci|tests|main").hexdigest()
+	# Pure and stable: the cycle suffix and a pinned path ref do not change it.
+	assert key == heal.red_main_group_key("CI [cycle:7]", "tests", "main", **RED_MAIN_CI)
+	assert key == heal.red_main_group_key("CI", "tests", "main", **{**RED_MAIN_CI, "workflow_path": ".github/workflows/ci.yml@refs/heads/main"})
+	assert key != heal.red_main_group_key("CI", "lint", "main", **RED_MAIN_CI)
+	ineligible = (
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "event": "pull_request"}, "not_default_branch_push"),
+		(("CI", "tests", "feature/x"), RED_MAIN_CI, "not_default_branch_push"),
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "default_branch": "bad..branch"}, "not_default_branch_push"),
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "default_branch": ""}, "not_default_branch_push"),
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "workflow_path": ".github/workflows/implement.yml"}, "not_ci_workflow"),
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "workflow_path": ""}, "not_ci_workflow"),
+		(("CI", "", "main"), RED_MAIN_CI, "no_job"),
+		(("", "tests", "main"), RED_MAIN_CI, "no_job"),
+	)
+	for args, facts, reason in ineligible:
+		assert heal.red_main_group_key(*args, **facts) == "", (args, facts)
+		assert heal.red_main_group_reason(*args, **facts) == reason, (args, facts)
+	assert heal.red_main_group_reason("CI", "tests", "main", **RED_MAIN_CI) == "ok"
+	assert "no API call" in (heal.red_main_group_key.__doc__ or "")
+
+
+def test_budget_decision_red_main_group_hit_miss_branch_and_switch_off(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+	fp, other = "1" * 64, "2" * 64
+	group = heal.red_main_group_key("CI", "tests", "main", **RED_MAIN_CI)
+	grouped = _red_main_issue(9701, fp=other, group=group)
+	# Hit: a different fingerprint, same group.
+	hit = heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=group)
+	assert hit == {
+		"action": "duplicate", "match": "red_main_group", "red_main_group": group, "existing_issue": 9701,
+		"existing_url": grouped["html_url"], "existing_repo": "", "gen": 1, "root": other,
+		"open_count": 1, "today_count": 0,
+	}
+	# Checked first: ahead of a fingerprint duplicate and of the budget caps.
+	same_fp = _heal_issue(9, state="open", fp=fp)
+	assert heal.budget_decision([same_fp, grouped], fp=fp, now=P5_NOW, red_main_group=group)["match"] == "red_main_group"
+	assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=group, max_open=1)["match"] == "red_main_group"
+	# The group issue also carries this report's fingerprint: the fingerprint
+	# match records it, so inline heal-scope recovery still sees the issue.
+	same_fp_grouped = _red_main_issue(9702, fp=fp, group=group)
+	same_fp_decision = heal.budget_decision([same_fp_grouped], fp=fp, now=P5_NOW, red_main_group=group)
+	assert same_fp_decision["action"] == "duplicate" and same_fp_decision["match"] == "fingerprint"
+	assert same_fp_decision["existing_issue"] == 9702
+	assert heal.budget_decision([same_fp_grouped, grouped], fp=fp, now=P5_NOW, red_main_group=group)["match"] == "fingerprint"
+	# A lower-numbered group issue with this fingerprint beats a higher-numbered
+	# group issue with another one: the occurrence lands on the matching issue.
+	low_same_fp = _red_main_issue(9690, fp=fp, group=group)
+	low_decision = heal.budget_decision([grouped, low_same_fp], fp=fp, now=P5_NOW, red_main_group=group)
+	assert low_decision["match"] == "fingerprint" and low_decision["existing_issue"] == 9690
+	# A higher-numbered open non-group issue with this fingerprint never takes
+	# the occurrence from the group issue that carries the same fingerprint.
+	high_non_group = _heal_issue(9800, state="open", fp=fp)
+	for listing in ([low_same_fp, high_non_group], [high_non_group, low_same_fp], [grouped, high_non_group, low_same_fp]):
+		pinned = heal.budget_decision(listing, fp=fp, now=P5_NOW, red_main_group=group)
+		assert pinned["match"] == "fingerprint" and pinned["existing_issue"] == 9690, listing
+	# Grouping off: today's fingerprint preference (the higher number) applies.
+	assert heal.budget_decision([low_same_fp, high_non_group], fp=fp, now=P5_NOW)["existing_issue"] == 9800
+	# Miss: another group, or a closed grouped issue, falls through to today's logic.
+	baseline = heal.budget_decision([grouped], fp=fp, now=P5_NOW)
+	assert baseline["action"] == "open"
+	assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group="d" * 64) == baseline
+	assert heal.budget_decision([same_fp], fp=fp, now=P5_NOW, red_main_group=group)["match"] == "fingerprint"
+	closed = _red_main_issue(9701, fp=other, group=group, state="closed")
+	assert heal.budget_decision([closed], fp=fp, now=P5_NOW, red_main_group=group) == heal.budget_decision([closed], fp=fp, now=P5_NOW)
+	# Marker quoted in the body (outside the header block) never matches.
+	quoted = dict(grouped, body=f"<!-- {heal.MARKER_PREFIX}fp={other} -->\nsome text\n<!-- {heal.MARKER_PREFIX}red-main-group={group} -->")
+	assert heal.parse_red_main_group_marker(quoted["body"]) == ""
+	assert heal.budget_decision([quoted], fp=fp, now=P5_NOW, red_main_group=group)["action"] == "open"
+	# Non-main branch: no key, so no group match.
+	assert heal.red_main_group_key("CI", "tests", "feature/x", **RED_MAIN_CI) == ""
+	assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=heal.red_main_group_key("CI", "tests", "feature/x", **RED_MAIN_CI) or None) == baseline
+	# Switch off, or an invalid key: today's decision.
+	assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=group, red_main_grouping_enabled=False) == baseline
+	for value in ("", "D" * 64, "d" * 63):
+		assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=value) == baseline
+	# CLI: the env switch is a second gate.
+	issues_json = tmp_path / "issues.json"
+	issues_json.write_text(json.dumps([grouped]), encoding="utf-8")
+	cli = ["budget", "--issues-json", str(issues_json), "--fingerprint", fp, "--red-main-group", group]
+	monkeypatch.delenv("WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED", raising=False)
+	assert heal.main(cli) == 0
+	assert json.loads(capsys.readouterr().out)["match"] == "red_main_group"
+	monkeypatch.setenv("WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED", "FALSE")
+	assert heal.main(cli) == 0
+	assert json.loads(capsys.readouterr().out)["action"] == "open"
+	# red-main-group-key subcommand: always exits 0 with a reason.
+	assert heal.main(["red-main-group-key", "--workflow-name", "CI", "--failing-job", "tests", "--branch", "main",
+		"--default-branch", "main", "--event", "push", "--workflow-path", ".github/workflows/ci.yml"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"key": group, "reason": "ok"}
+	assert heal.main(["red-main-group-key", "--workflow-name", "CI", "--failing-job", "tests", "--branch", "dev",
+		"--default-branch", "main", "--event", "push", "--workflow-path", ".github/workflows/ci.yml"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"key": "", "reason": "not_default_branch_push"}
+
+
+def test_red_main_group_header_line_compose_and_validator() -> None:
+	group = "e" * 64
+	five = _p5_body()
+	six = _p5_body(cause=P5_CAUSE)
+	check = lambda body: heal.validate_heal_issue_body_routing(body, target_branch="main", integration_branch=None)  # noqa: E731
+	group_line = f"<!-- {heal.MARKER_PREFIX}red-main-group={group} -->"
+	with_group = _p5_body(cause=P5_CAUSE, red_main_group=group)
+	lines = with_group.split("\n")
+	assert lines[5] == f"<!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->" and lines[6] == group_line
+	assert lines[:6] == six.split("\n")[:6] and lines[7:] == six.split("\n")[6:]
+	assert check(with_group) == ""
+	assert heal.parse_red_main_group_marker(with_group) == group
+	only_group = _p5_body(red_main_group=group)
+	assert only_group.split("\n")[5] == group_line and check(only_group) == ""
+	# Absent / invalid key: byte-identical body.
+	for value in (None, "", "E" * 64, "e" * 63):
+		assert _p5_body(cause=P5_CAUSE, red_main_group=value) == six, value
+		assert _p5_body(red_main_group=value) == five, value
+	# Only workflow_run sources carry the line.
+	non_run = heal.compose_issue_body(
+		payload=dict(_p1_payload(), source_kind="phase_failure"), diagnosis=DIAG_WORKFLOW_DEFECT, fp="1" * 64, gen=1, root="1" * 64,
+		classification="workflow-defect", target_branch="main", max_depth=3,
+		intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/1", run_summaries=[], red_main_group=group,
+	)
+	assert group_line not in non_run
+	# Duplicated, malformed or indented lines are rejected.
+	assert check("\n".join(lines[:7] + [group_line] + lines[7:])) == "marker"
+	for bad in ("E" * 64, "e" * 63, "e" * 65):
+		assert check("\n".join(lines[:6] + [f"<!-- {heal.MARKER_PREFIX}red-main-group={bad} -->"] + lines[7:])) == "marker", bad
+	assert check("\n".join(lines[:6] + [" " + group_line] + lines[7:])) == "marker"
+	assert check(with_group + "\n<!-- injected -->\n") == "marker"
+
+
+def test_red_main_grouping_switch_default_log_and_workflow_wiring() -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'RED_MAIN_GROUPING_ENABLED="${WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED:-true}"' in script
+	assert "WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED default \"true\"" in script
+	# Computed after the cause key, before the budget decision.
+	assert script.index("\n_heal_cause_key ||") < script.index("\n_heal_red_main_group_key ||") < script.index('python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" >')
+	body = script.split("\n_heal_red_main_group_key()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "gh " not in body and "gh_retry" not in body and "curl" not in body
+	assert '"${PROVENANCE_RUNS}"' in body and '"${SUMMARIES_FILE}"' in body and "--default-branch \"${PROVENANCE_DEFAULT_BRANCH:-}\"" in body
+	assert 'log "red_main_group key= outcome=skipped reason=disabled"' in body
+	assert 'BUDGET_ARGS+=(--red-main-group "${RED_MAIN_GROUP_KEY}")' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=fingerprint_match"' in script
+	# Other duplicates, and escalate / budget caps, are never logged as a new issue.
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=other_match"' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=skipped reason=budget_decision"' in script
+	assert 'elif [ "${red_main_decision_action}" = "open" ]; then\n\t\tlog "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"' in script
+	# The outcome is logged from the final decision: after the re-issue lookup
+	# and scope recovery, which can rewrite DECISION_FILE.
+	outcome_log = script.index('log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"')
+	assert script.index("\n_heal_reissue_lookup\n") < outcome_log
+	assert script.index("\n_heal_scope_recovery_evaluate\n") < outcome_log < script.index('\ncase "${ACTION}" in\n\tduplicate)')
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=scope_recovery"' in script
+	# Recovery strips the group argument and never replaces a group-matched issue.
+	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert '!= "red_main_group" ] || return 0' in recovery
+	assert "\t\t\t--red-main-group)\n\t\t\t\trecovery_arg_index=$((recovery_arg_index + 2))" in recovery
+	# New red-main heals carry the marker only with the switch on.
+	assert '[ "${RED_MAIN_GROUPING_ENABLED}" = true ] && [ -n "${RED_MAIN_GROUP_KEY}" ]; then\n\t\tcause_args+=(--red-main-group "${RED_MAIN_GROUP_KEY}")' in script
+	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	intake_job, scan_job = workflow.split("\n  recovery-scan:\n", 1)
+	assert workflow.count(RED_MAIN_ENV_LINE) == 2
+	assert intake_job.split("\n  intake:\n", 1)[1].count(RED_MAIN_ENV_LINE) == 1
+	assert scan_job.count(RED_MAIN_ENV_LINE) == 1
+	# End to end: a non-CI release run is skipped with a reason; switch off logs disabled.
+	result, _state, _frozen = _run_p1_intake(_p1_state(), {"WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED": None})
+	assert re.search(r"WORKFLOW_HEAL red_main_group key= outcome=skipped reason=(not_default_branch_push|not_ci_workflow|no_verified_run)", result.stdout + result.stderr)
+	off, _state, _frozen = _run_p1_intake(_p1_state(), {"WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED": "false"})
+	assert "WORKFLOW_HEAL red_main_group key= outcome=skipped reason=disabled" in off.stdout + off.stderr

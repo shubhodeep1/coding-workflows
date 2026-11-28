@@ -127,6 +127,10 @@ env:
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+  # Plan-granted .github/ai/<file> writes (issue #9920, plan Phase 5 / R3): default on;
+  # repo variable AI_PLAN_GRANT_WRITE_ENABLED=false rolls back (GitHub reserves the GITHUB_
+  # prefix for configuration variables). Scripts default to true too.
+  GITHUB_AI_PLAN_GRANT_WRITE_ENABLED: ${{ vars.AI_PLAN_GRANT_WRITE_ENABLED || 'true' }}
   # Repair loop (issue #8427, P3): default off; see scripts/review_autofix_step_prepush_test_gate.sh.
   PERSIST_REPAIR_LOOP_ENABLED: ${{ vars.PERSIST_REPAIR_LOOP_ENABLED || 'false' }}
   # Repair loop (issue #8427, P3): repair turns cap, clamped to 1..5.
@@ -148,7 +152,7 @@ env:
   MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
   MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
   MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
-  MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
+  MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security,ai:priority' }}
   MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
   OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
@@ -1355,6 +1359,10 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+          # Issue #10176: fresh comments re-read before a security-pass dispatch, and
+          # no reuse of a marker cycle number (the script defaults both to true).
+          SECURITY_PASS_MARKER_REREAD_ENABLED: ${{ vars.SECURITY_PASS_MARKER_REREAD_ENABLED || 'true' }}
+          SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED: ${{ vars.SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_LOST_AUDIT_RETRIES: ${{ vars.SECURITY_PASS_LOST_AUDIT_RETRIES || '2' }}
@@ -1363,6 +1371,8 @@ jobs:
           SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
           SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
           SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           SECURITY_PASS_PENDING_MARKER_ATTEMPTS: ${{ vars.SECURITY_PASS_PENDING_MARKER_ATTEMPTS || '3' }}
           SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS: ${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}
           SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
@@ -3184,6 +3194,7 @@ jobs:
           echo "REVIEW_STATIC_CONTEXT_AGENTS mode=${review_static_agents_mode} reason=${review_static_agents_reason} bytes=$(wc -c < ./pre_assembled_static.txt | tr -d '[:space:]')"
 
       - name: Collect PR metadata
+        id: collect_pr_metadata
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -4044,6 +4055,11 @@ jobs:
           REVIEW_SANDBOX_BUILD_ATTEMPTS: ${{ vars.REVIEW_SANDBOX_BUILD_ATTEMPTS || '3' }}
           REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_1 || '10' }}
           REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2: ${{ vars.REVIEW_SANDBOX_BUILD_RETRY_SLEEP_2 || '30' }}
+          # Issue #9920: the GH_PAT login for the plan-granted .github/ai/<file> grant,
+          # resolved by the metadata step; this step gets no GitHub token.
+          REVIEW_GITHUB_AI_GRANT_PIPELINE_LOGIN: ${{ steps.collect_pr_metadata.outputs.github_ai_grant_pipeline_login || '' }}
+          # The grant record (Q82 origin chain included) the metadata step built with GH_PAT.
+          REVIEW_GITHUB_AI_GRANT_RECORD: ${{ steps.collect_pr_metadata.outputs.github_ai_grant_record || '' }}
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.
@@ -4598,6 +4614,9 @@ jobs:
           # Take the default branch's .ai/validate.yml on an orchestrator/project-*
           # integration-sync conflict (the sandbox excludes .ai/).
           CONFLICT_AI_ASSET_TAKE_BASE_ENABLED: ${{ vars.CONFLICT_AI_ASSET_TAKE_BASE_ENABLED || 'true' }}
+          # Take the base deletion of a non-fragment file the PR only touched in a
+          # repo-wide sweep (modify/delete, #9886).
+          CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED: ${{ vars.CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED || 'true' }}
           # Read the poller's ORCHESTRATOR_STATE_V2 state (merged sub-issues and
           # their fingerprints) on an integration-sync conflict; 'false' keeps
           # the V1-only read, which leaves the resolver's fingerprint check off.
@@ -4644,6 +4663,10 @@ jobs:
           # Escalate the integration-sync retry state on the first non-retryable
           # isolation failure (sandbox_path_host_only and friends).
           RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED: ${{ vars.RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED || 'true' }}
+          # Provenance check: resolved regions must come from ours or theirs (#9842).
+          RESOLVER_PROVENANCE_CHECK_ENABLED: ${{ vars.RESOLVER_PROVENANCE_CHECK_ENABLED || 'true' }}
+          # Modify/delete stage context and the in-loop unmerged-path check (#9886).
+          CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED: ${{ vars.CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED || 'true' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
           # the single-line bait removal completes deterministically. The
@@ -4860,6 +4883,10 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+          # Issue #10176: fresh comments re-read before a security-pass dispatch, and
+          # no reuse of a marker cycle number (the script defaults both to true).
+          SECURITY_PASS_MARKER_REREAD_ENABLED: ${{ vars.SECURITY_PASS_MARKER_REREAD_ENABLED || 'true' }}
+          SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED: ${{ vars.SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_LOST_AUDIT_RETRIES: ${{ vars.SECURITY_PASS_LOST_AUDIT_RETRIES || '2' }}
@@ -4868,6 +4895,8 @@ jobs:
           SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES: ${{ vars.SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES || '20' }}
           SECURITY_PASS_MAX_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_MAX_AUDIT_ATTEMPTS || '' }}
           SECURITY_PASS_MAX_CONCURRENT_AUDITS: ${{ vars.SECURITY_PASS_MAX_CONCURRENT_AUDITS || '3' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           SECURITY_PASS_PENDING_MARKER_ATTEMPTS: ${{ vars.SECURITY_PASS_PENDING_MARKER_ATTEMPTS || '3' }}
           SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS: ${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}
           SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
@@ -5055,6 +5084,11 @@ jobs:
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
+          # A red required check on a judge merge goes to the final-CI repair or a
+          # hand-over (issue #10063); false keeps the checks_failed page.
+          RB_JUDGE_RED_CHECK_REPAIR_ENABLED: ${{ vars.RB_JUDGE_RED_CHECK_REPAIR_ENABLED || 'true' }}
+          FINAL_CI_REPAIR_ENABLED: ${{ vars.FINAL_CI_REPAIR_ENABLED || 'true' }}
+          REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED: ${{ vars.PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
@@ -5146,106 +5180,13 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
         run: |
-          set -euo pipefail
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
-            :
-          else
-            if [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" ]; then
-              mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
-              source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
-            else
-              type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-              ensure_label_exists() {
-                local label_name="$1"
-                local repo="$2"
-                case "${label_name}" in
-                  ai:review-blocked)
-                    gh_retry gh label create "${label_name}" --repo "${repo}" --color "e11d48" --description "PR review/autofix could not resolve all issues — needs human intervention" 2>/dev/null || true
-                    ;;
-                  *)
-                    gh_retry gh label create "${label_name}" --repo "${repo}" --color "1d76db" --description "AI workflow label" 2>/dev/null || true
-                    ;;
-                esac
-              }
-              set_issue_phase_label_resilient() {
-                local issue_number="$1"
-                local target_label="$2"
-                local repo="$3"
-                ensure_label_exists "${target_label}" "${repo}" || true
-                if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-                  -f "labels[]=${target_label}" >/dev/null 2>&1; then
-                  SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
-                else
-                  SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
-                  echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
-                fi
-              }
-            fi
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_mark_review_blocked_exhaustion.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_review_blocked_exhaustion.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_mark_review_blocked_exhaustion.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Mark linked issues review-blocked (autofix exhaustion)'."
+            exit 1
           fi
-          if ! type set_issue_phase_label_resilient >/dev/null 2>&1; then
-            set_issue_phase_label_resilient() {
-              local issue_number="$1"
-              local target_label="$2"
-              local repo="$3"
-              ensure_label_exists "${target_label}" "${repo}" || true
-              if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-                -f "labels[]=${target_label}" >/dev/null 2>&1; then
-                SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
-              else
-                SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
-                echo "::warning::Fallback label add failed for #${issue_number}. Label may need manual application."
-              fi
-            }
-          fi
-
-          ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
-          fi
-
-          if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
-            PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
-            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
-              PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
-            fi
-            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
-              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
-            else
-              ISSUE_NUMBERS=""
-            fi
-            if [ -z "${ISSUE_NUMBERS}" ]; then
-              echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
-              { echo "labelled_issue_numbers="; echo "labelled_issue_numbers_resolved=true"; } >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
-          fi
-
-          ensure_label_exists "ai:review-blocked" "${REPOSITORY}"
-          # Issue #7099: record the issues actually labelled so the outage
-          # marker step marks exactly that set (including PR-text fallbacks).
-          labelled=()
-          while IFS= read -r issue_number; do
-            [ -n "${issue_number}" ] || continue
-            [[ "${issue_number}" =~ ^[0-9]+$ ]] || continue
-            echo "Setting ai:review-blocked on issue #${issue_number}"
-            SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME=""
-            set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
-            case "${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-}" in
-              applied) labelled+=("${issue_number}") ;;
-              "")
-                # Helper copy without the outcome signal: keep the old "attempted" behaviour.
-                echo "::notice::Label outcome unknown for #${issue_number}; treating it as labelled."
-                labelled+=("${issue_number}")
-                ;;
-            esac
-          done <<< "${ISSUE_NUMBERS}"
-          labelled_csv="$(IFS=,; printf '%s' "${labelled[*]:-}")"
-          { echo "labelled_issue_numbers=${labelled_csv}"; echo "labelled_issue_numbers_resolved=true"; } >> "$GITHUB_OUTPUT"
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Mark outage-caused review-blocked labels (autofix exhaustion)
         # Issue #6633: the judge failed because the model provider is down.
@@ -5323,7 +5264,12 @@ jobs:
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
         id: rb_blocked_comment
-        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
+        # #10063: a merge_with_followup refused on a red head already posted
+        # its own final-CI repair request or hand-over (judge_handled stays
+        # false so the alert keys on the skip reason); the generic cap comment
+        # would contradict it and, as review output newer than the request,
+        # keep the gate from re-arming the dispatched repair run.
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && !contains(fromJSON('["final_ci_repair_requested","final_ci_handover","final_ci_handover_posted"]'), steps.rb_judge.outputs.judge_skip_reason) && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -5885,6 +5831,7 @@ jobs:
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           JUDGE_MERGE_STATUS: ${{ steps.rb_judge.outputs.judge_merge_status }}
+          JUDGE_CI_FAILURE_SUMMARY: ${{ steps.rb_judge.outputs.judge_ci_failure_summary }}
           JUDGE_REISSUE_CREATED: ${{ steps.rb_judge.outputs.judge_reissue_created }}
           RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
           RB_JUDGE_EXIT_CODE: ${{ steps.rb_judge.outputs.rb_judge_exit_code }}
@@ -5919,6 +5866,12 @@ jobs:
           # ready_for_review event brings the judge back. Nothing for a human.
           if [ "${JUDGE_HANDLED}" = "true" ] && [ "${JUDGE_ACTION}" = "skip" ] && [ "${JUDGE_SKIP_REASON}" = "draft_pr" ]; then
             echo "Review-blocked judge skipped draft PR #${PR_NUMBER}; it runs once the PR is ready for review. Suppressing alert."
+            exit 0
+          fi
+          # #10063: the final-CI hand-over for this head was already posted and
+          # alerted; a repeat judge run on the same head stays silent.
+          if [ "${JUDGE_HANDLED}" = "true" ] && [ "${JUDGE_ACTION}" = "skip" ] && [ "${JUDGE_SKIP_REASON}" = "final_ci_handover_posted" ]; then
+            echo "Review-blocked judge skipped PR #${PR_NUMBER}: the final-CI hand-over for this head was already posted. Suppressing alert."
             exit 0
           fi
           if [ "${JUDGE_HANDLED}" = "true" ]; then
@@ -6013,6 +5966,17 @@ jobs:
                   JUDGE_ALERT_LEVEL="DEBUG"
                 elif [ "${JUDGE_MERGE_STATUS}" = "checks_failed" ]; then
                   MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed\nNeeds a CI fix before the merge')"
+                elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_repair_requested" ]; then
+                  # #10063: the red head goes to the final-CI repair run.
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed\nThe final-CI repair was requested automatically')"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_handover_posted" ]; then
+                  MSG="Review-blocked judge: the final-CI hand-over for this head was already posted"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_handover" ]; then
+                  # #10063: the repair is used up; one hand-over per head.
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed and the final-CI repair is used up\nFailing: %s\nHanded to a person (ai:needs-human)' "${JUDGE_CI_FAILURE_SUMMARY:-see the PR checks}")"
+                  JUDGE_ALERT_LEVEL="ERROR"
                 elif [ "${JUDGE_MERGE_STATUS}" = "manual_merge_required" ]; then
                   MSG="$(printf 'Review-blocked judge approved PR as-is; ENABLE_AUTO_MERGE=false\nManual merge required')"
                 fi ;;
@@ -6057,6 +6021,17 @@ jobs:
               blocking_check_runs)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
+              final_ci_repair_requested)
+                # #10063: merge_with_followup on a red head goes to the final-CI repair.
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but required check-runs failed\nThe final-CI repair was requested automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              final_ci_handover_posted)
+                MSG="PR review blocked — the final-CI hand-over for this head was already posted"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              final_ci_handover)
+                # #10063: the repair is used up; one hand-over per head.
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but required check-runs failed and the final-CI repair is used up\nFailing: %s\nHanded to a person (ai:needs-human)' "${JUDGE_CI_FAILURE_SUMMARY:-see the PR checks}")"
+                JUDGE_ALERT_LEVEL="ERROR" ;;
               base_moved_overlap)
                 # review_rb_judge.sh requested a branch update; its
                 # synchronize run re-validates the PR without a person.
