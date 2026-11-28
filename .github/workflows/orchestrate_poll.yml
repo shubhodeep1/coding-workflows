@@ -318,7 +318,7 @@ jobs:
           MERGE_LEASE_HOLD_LABELS: ${{ vars.MERGE_LEASE_HOLD_LABELS || 'ai:needs-human,ai:security-pass-failed,ai:review-blocked,ai:scope-blocked' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
-          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}
           FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
           PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED: ${{ vars.PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED || 'true' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
@@ -1652,7 +1652,7 @@ jobs:
           MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
-          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           # Freshness window (minutes) the in-flight / zombie guards use for
           # review-family runs (AI Review / Internal Review / Review Autofix),
@@ -1928,7 +1928,7 @@ jobs:
           MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
-          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
           STALL_THRESHOLD_NO_LABELS_MINUTES: ${{ vars.STALL_THRESHOLD_NO_LABELS_MINUTES || '' }}
@@ -2121,7 +2121,7 @@ jobs:
           REVIEW_FINAL_CI_WORKFLOW: ${{ vars.REVIEW_FINAL_CI_WORKFLOW || '' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
-          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
           # Conflict dispatches forward this to review; keep a repository's
