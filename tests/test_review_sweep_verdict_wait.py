@@ -302,6 +302,19 @@ def test_train_off_auto_merge_alert_names_the_ruleset_blocker_not_the_stale_labe
 	assert "final CI queued or running" not in result.stdout
 
 
+def test_final_ci_in_flight_alert_names_the_running_final_ci(tmp_path: Path) -> None:
+	"""An unlabelled head skipped for a running final CI names it as the blocker, with no ruleset read."""
+	runs = {_sha(1): {"workflow_runs": [{"path": ".github/workflows/ci.yml", "head_sha": _sha(1), "status": "in_progress",
+		"conclusion": None, "display_title": "CI [pr:1]"}]}}
+	meta = {1: {"gate": "SUCCESS", "gate_at": _iso(8)}}
+	result = _run(tmp_path, [_pr(1)], meta, final_ci=runs, env=TG)
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == []
+	assert "reason=verdict_wait detail=final_ci_in_flight" in result.stdout
+	assert "blocker=final CI queued or running outcome=sent" in result.stdout, result.stdout
+	assert not any("/rules/branches/" in line for line in _lines(tmp_path, "calls.log"))
+
+
 def test_failed_final_ci_read_dispatches_the_auto_merge_head(tmp_path: Path) -> None:
 	"""Fail-open: a runs read that cannot be decided dispatches, even when the snapshot names a wait."""
 	result = _run(tmp_path, [_pr(1)], {1: {"gate": "SUCCESS", "auto_at": _iso(1)}}, final_ci={_sha(1): "not json"})

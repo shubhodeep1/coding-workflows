@@ -84,6 +84,9 @@
 #   <skip reason> (optional): `auto_merge_waiting` reads the ruleset blocker
 #   even when FINAL_CI_MERGE_PENDING_LABEL is set (with the merge train off
 #   nothing removes that label, so it does not mean a final CI is running).
+#   `final_ci_in_flight` (the sweep's runs read saw the final CI queued or
+#   running) names `final CI queued or running` without the ruleset reads,
+#   unless the head waits for the merge lease.
 #   Sent with tg_send_msg (WARNING; delivered when it returns a message id,
 #   telegram_unconfigured when tg_alert_configured WARNING fails); only after
 #   a delivered send is the
@@ -451,6 +454,11 @@ review_sweep_verdict_wait_alert()
 	# A stale final-CI label on an auto-merge wait: name the ruleset blocker.
 	if [ "${vwa_reason}" = "auto_merge_waiting" ] && [ "${vwa_label}" = "final_ci" ]; then
 		vwa_label=checks
+	fi
+	# A final CI run the sweep saw queued or running is the blocker (no ruleset
+	# reads); a lease waiter keeps the holder lookup.
+	if [ "${vwa_reason}" = "final_ci_in_flight" ] && [ "${vwa_label}" != "lease" ]; then
+		vwa_label=final_ci
 	fi
 	[[ "${vwa_pr}" =~ ^[1-9][0-9]*$ ]] && [[ "${vwa_sha}" =~ ^[0-9a-f]{40}$ ]] || return 0
 	[[ "${vwa_since}" =~ ^[0-9]+$ ]] || return 0
