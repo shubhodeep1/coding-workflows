@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which part of the repository should this issue improve?\nChoices:\nA. One pipeline phase workflow, such as clarify, plan, implement, review/autofix or validate. Please name it in your `/answer`. (RECOMMENDED)\nB. The orchestrator: the poller, the judge, integration-sync or stall recovery.\nC. Documentation only, such as README.md, docs/ or agents.d fragments.\nD. Something else. Please name the file paths or the subsystem.\nQ2. What kind of improvement do you want?\nChoices:\nA. Fix a specific bug or failure you have seen. Please give the run ID, log lines or the steps to reproduce it. (RECOMMENDED)\nB. Make it faster or cheaper, for example fewer runner jobs, fewer GitHub API calls or fewer tokens. Please give the metric you want to improve.\nC. Add a new feature or change how something behaves. Please describe the behaviour you want.\nD. Make docs or logs clearer, with no change in behaviour.\nQ3. How will we know the work is done?\nChoices:\nA. A concrete check you state, such as a failing scenario that now passes, a number that goes down, or a test that is added. (RECOMMENDED)\nB. Use the planner's judgement: a minimal surgical change, paired with contract tests.",
+  "fingerprint": "6f86251367112c90c1dffb19ae2e3b80ccfb6475642bdcbef19fb005d417c3c7",
+  "lineage": {
+    "issue_number": 10231,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46089877602",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46089877602",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261128010055_7e428a2335",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10231,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46089877602"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10231 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-28T01:00:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
