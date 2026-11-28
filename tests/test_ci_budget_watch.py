@@ -7,7 +7,7 @@ import os
 import stat
 import subprocess
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -19,12 +19,14 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import ci_budget_watch as cbw  # noqa: E402
 
 
-def _tree(tmp_path: Path, sizes: dict[str, int], ci: dict) -> Path:
+def _tree(tmp_path: Path, sizes: dict[str, int], ci: dict, gate: dict | None = None) -> Path:
 	wf = tmp_path / ".github" / "workflows"
 	wf.mkdir(parents=True)
 	for name, size in sizes.items():
 		(wf / name).write_text("x" * size, encoding="utf-8")
 	(wf / "ci.yml").write_text(yaml.safe_dump(ci), encoding="utf-8")
+	if gate is not None:
+		(wf / "test-and-mark-stable.yml").write_text(yaml.safe_dump(gate), encoding="utf-8")
 	return tmp_path
 
 
@@ -144,7 +146,11 @@ def test_issue_text_names_the_fix_and_carries_the_marker() -> None:
 	assert "Do not raise `timeout-minutes`" in cbw.issue_body(dur, "u")
 
 
-def _fake_gh(tmp_path: Path, issues: list[dict], jobs: list[dict], closed: list[dict] | None = None) -> dict[str, str]:
+def _fake_gh(tmp_path: Path, issues: list[dict], jobs: list[dict], closed: list[dict] | None = None,
+		gate_runs: list | None = None, gate_jobs: list[dict] | None = None) -> dict[str, str]:
+	# gate_runs None: the release-gate runs listing fails (exit 1), like any
+	# unknown path. The gate jobs read answers for the first listed run id.
+	gate_id = gate_runs[0].get("id") if gate_runs and isinstance(gate_runs[0], dict) else None
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	log = tmp_path / "gh.log"
@@ -156,7 +162,11 @@ stdin = sys.stdin.read() if "--input" in args else ""
 with open({str(log)!r}, "a") as fh:
     fh.write(json.dumps({{"args": args, "stdin": stdin, "token": os.environ.get("GH_TOKEN", "")}}) + "\\n")
 path = args[1]
-if path.endswith("/jobs?per_page=100"):
+if {gate_runs is not None!r} and "actions/workflows/test-and-mark-stable.yml/runs" in path:
+    print(json.dumps({{"workflow_runs": {json.dumps(gate_runs)}}}))
+elif {gate_id is not None!r} and path.endswith("/runs/{gate_id}/jobs?per_page=100"):
+    print(json.dumps({{"jobs": {json.dumps(gate_jobs or [])}}}))
+elif path.endswith("/jobs?per_page=100"):
     print(json.dumps({{"jobs": {json.dumps(jobs)}}}))
 elif "issues?state=open" in path:
     print(json.dumps({json.dumps(issues)}))
@@ -296,3 +306,159 @@ def test_ci_wiring() -> None:
 	env = next(step["env"] for step in job["steps"] if "CI_BUDGET_JOB_WARN_RATIO" in (step.get("env") or {}))
 	assert env["CI_BUDGET_REFILE_COOLDOWN_DAYS"] == "${{ vars.CI_BUDGET_REFILE_COOLDOWN_DAYS || '7' }}"
 	assert env["CI_BUDGET_REFILE_URGENT_RATIO"] == "${{ vars.CI_BUDGET_REFILE_URGENT_RATIO || '0.9' }}"
+
+
+# ── Release gate (test-and-mark-stable.yml) job durations (#10220) ──
+
+GATE_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
+GATE = {"jobs": {"validate-scripts": {"timeout-minutes": 135}, "e2e-smoke-test": {"timeout-minutes": 360}}}
+GATE_RUN_ID = 45927857867
+
+
+def _job_at(name: str, minutes: float, *, start: str = "2026-11-27T02:34:00Z", step_offsets: tuple[float, ...] = (0,), conclusion: str = "success") -> dict:
+	"""A finished job of `minutes` whose steps start at the given minute offsets (works above 59 minutes)."""
+	begin = datetime.fromisoformat(start.replace("Z", "+00:00"))
+
+	def at(offset: float) -> str:
+		return (begin + timedelta(minutes=offset)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+	return {"name": name, "started_at": at(0), "completed_at": at(minutes), "conclusion": conclusion,
+		"steps": [{"name": f"step {i}", "started_at": at(offset)} for i, offset in enumerate(step_offsets)]}
+
+
+def _gate_run_45927857867_jobs() -> list[dict]:
+	# validate-scripts ran 125 minutes in one serial job: setup, the
+	# orchestrate-poll step (70.5 min) and the unit tests (51.1 min).
+	return [
+		_job_at("validate-scripts", 125, step_offsets=(0, 1, 2.4, 72.9, 124)),
+		_job_at("e2e-smoke-test", 150, step_offsets=(0, 1)),
+	]
+
+
+def test_gate_run_45927857867_reports_validate_scripts() -> None:
+	timeouts = cbw.job_timeouts(GATE_WORKFLOW_PATH)
+	findings = cbw.job_duration_findings(_gate_run_45927857867_jobs(), timeouts, 0.75, workflow="test-and-mark-stable.yml")
+	assert len(findings) == 1, findings
+	finding = findings[0]
+	assert (finding["subject"], finding["value"], finding["limit"]) == ("test-and-mark-stable.yml/validate-scripts", 7500, 8100)
+	assert finding["workflow"] == "test-and-mark-stable.yml" and finding["job"] == "validate-scripts"
+	# ci.yml findings keep the bare subject and carry no workflow key.
+	ci_finding = cbw.job_duration_findings([_job_at("validate-scripts", 125)], {"validate-scripts": 135}, 0.75)[0]
+	assert ci_finding["subject"] == "validate-scripts" and "workflow" not in ci_finding
+
+
+def test_gate_matrix_legs_under_the_ratio_report_nothing() -> None:
+	timeouts = cbw.job_timeouts(GATE_WORKFLOW_PATH)
+	legs = [_job_at("validate-scripts (orchestrate-poll)", 72), _job_at("validate-scripts (unit-tests)", 55)]
+	assert cbw.job_duration_findings(legs, timeouts, 0.75, workflow="test-and-mark-stable.yml") == []
+	# A leg at the ratio is reported under the base job's subject.
+	slow = cbw.job_duration_findings([_job_at("validate-scripts (orchestrate-poll)", 102)], timeouts, 0.75, workflow="test-and-mark-stable.yml")
+	assert [(f["subject"], f["job"]) for f in slow] == [("test-and-mark-stable.yml/validate-scripts", "validate-scripts (orchestrate-poll)")]
+
+
+def test_gate_issue_text_names_the_gate_workflow() -> None:
+	finding = {"kind": "job_duration", "subject": "test-and-mark-stable.yml/validate-scripts", "value": 7500, "limit": 8100,
+		"job": "validate-scripts", "workflow": "test-and-mark-stable.yml"}
+	assert cbw.issue_title(finding) == "CI budget: release gate job validate-scripts (test-and-mark-stable.yml) took 125m00s of its 135-minute timeout"
+	body = cbw.issue_body(finding, "u")
+	assert body.startswith("<!-- ai:ci-budget:v1 kind=job_duration subject=test-and-mark-stable.yml/validate-scripts -->\n")
+	assert "`.github/workflows/test-and-mark-stable.yml`" in body and "Do not raise `timeout-minutes`." in body
+	assert "Opened automatically by the `budget-watch` job" in body
+
+
+def test_gate_findings_go_through_the_issue_path(tmp_path: Path) -> None:
+	root = _tree(tmp_path, {}, CI, gate=GATE)
+	env = _fake_gh(tmp_path, [], [], gate_runs=[{"id": GATE_RUN_ID}], gate_jobs=_gate_run_45927857867_jobs())
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert "::warning::CI_BUDGET kind=job_duration subject=test-and-mark-stable.yml/validate-scripts value=7500 limit=8100" in result.stdout
+	assert f"CI_BUDGET_GATE outcome=read run_id={GATE_RUN_ID} jobs=2 findings=1" in result.stdout
+	created = _created(env)
+	assert len(created) == 1
+	payload = json.loads(created[0]["stdin"])
+	assert payload["title"].startswith("CI budget: release gate job validate-scripts (test-and-mark-stable.yml) took 125m00s")
+	assert payload["labels"] == ["ai:ci-budget"]
+	assert f"Measured run: https://github.com/o/r/actions/runs/{GATE_RUN_ID}" in payload["body"]
+	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
+	runs_reads = [c for c in calls if "actions/workflows/test-and-mark-stable.yml/runs" in c["args"][1]]
+	assert len(runs_reads) == 1 and "status=completed" in runs_reads[0]["args"][1] and "per_page=1" in runs_reads[0]["args"][1]
+	assert len([c for c in calls if c["args"][1].endswith(f"/runs/{GATE_RUN_ID}/jobs?per_page=100")]) == 1
+
+
+def test_gate_finding_with_an_open_issue_is_not_refiled(tmp_path: Path) -> None:
+	root = _tree(tmp_path, {}, CI, gate=GATE)
+	existing = [{"number": 5, "body": cbw.marker("job_duration", "test-and-mark-stable.yml/validate-scripts")}]
+	env = _fake_gh(tmp_path, existing, [], gate_runs=[{"id": GATE_RUN_ID}], gate_jobs=_gate_run_45927857867_jobs())
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert _created(env) == []
+	assert "subject=test-and-mark-stable.yml/validate-scripts action=exists" in result.stdout
+
+
+def test_gate_findings_skipped_when_gate_workflow_missing(tmp_path: Path) -> None:
+	root = _tree(tmp_path, {}, CI)
+	env = _fake_gh(tmp_path, [], [], gate_runs=[{"id": GATE_RUN_ID}], gate_jobs=_gate_run_45927857867_jobs())
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert "CI_BUDGET_GATE outcome=no_workflow" in result.stdout
+	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
+	assert not [c for c in calls if "actions/workflows/" in c["args"][1]]
+	assert not [c for c in calls if f"/runs/{GATE_RUN_ID}/" in c["args"][1]]
+
+
+@pytest.mark.parametrize("case", ["read_fails", "no_run", "bad_run_id"])
+def test_gate_read_problems_fail_open(tmp_path: Path, case: str) -> None:
+	root = _tree(tmp_path, {}, CI, gate=GATE)
+	gate_runs = {"read_fails": None, "no_run": [], "bad_run_id": [{"id": "1; rm -rf /"}]}[case]
+	env = _fake_gh(tmp_path, [], [], gate_runs=gate_runs, gate_jobs=_gate_run_45927857867_jobs())
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert _created(env) == []
+	if case == "no_run":
+		assert "CI_BUDGET_GATE outcome=no_run" in result.stdout
+	else:
+		assert "CI_BUDGET_GATE outcome=read_failed" in result.stdout
+		assert "could not read the latest test-and-mark-stable.yml run" in result.stdout
+		assert "gate job durations not checked." in result.stdout
+	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
+	# A non-integer run id never reaches an API path.
+	assert not [c for c in calls if "rm -rf" in c["args"][1]]
+
+
+def test_gate_serial_run_against_a_matrix_checkout_is_stale(tmp_path: Path) -> None:
+	# The push that merges the split still sees the serial pre-split run as
+	# the latest completed gate run; it must not file an issue for it.
+	gate = {"jobs": {"validate-scripts": {"timeout-minutes": 135, "strategy": {"matrix": {"leg": ["orchestrate-poll", "unit-tests"]}}},
+		"e2e-smoke-test": {"timeout-minutes": 360}}}
+	root = _tree(tmp_path, {}, CI, gate=gate)
+	env = _fake_gh(tmp_path, [], [], gate_runs=[{"id": GATE_RUN_ID}], gate_jobs=_gate_run_45927857867_jobs())
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert f"CI_BUDGET_GATE outcome=read run_id={GATE_RUN_ID} jobs=2 findings=0 stale_jobs=1" in result.stdout
+	assert "subject=test-and-mark-stable.yml/validate-scripts" not in result.stdout
+	assert _created(env) == []
+	# A leg of the split layout is still measured against the base timeout.
+	legs = [_job_at("validate-scripts (orchestrate-poll)", 110, step_offsets=(0, 1))]
+	env2_dir = tmp_path / "second"
+	env2_dir.mkdir()
+	root2 = _tree(env2_dir, {}, CI, gate=gate)
+	env2 = _fake_gh(env2_dir, [], [], gate_runs=[{"id": GATE_RUN_ID}], gate_jobs=legs)
+	result2 = _run(root2, env2)
+	assert "findings=1 stale_jobs=0" in result2.stdout
+	assert len(_created(env2)) == 1
+
+
+def test_gate_skipped_post_split_job_is_not_counted_as_stale(tmp_path: Path) -> None:
+	# A post-split validate-scripts skipped at job level (failed `needs:`) is
+	# listed under its bare name with conclusion `skipped`: not measured and
+	# not a pre-split job.
+	gate = {"jobs": {"validate-scripts": {"timeout-minutes": 135, "strategy": {"matrix": {"leg": ["orchestrate-poll", "unit-tests"]}}},
+		"e2e-smoke-test": {"timeout-minutes": 360}}}
+	root = _tree(tmp_path, {}, CI, gate=gate)
+	# No null fields: the fake gh pastes this JSON into Python source.
+	skipped = {"name": "validate-scripts", "conclusion": "skipped", "steps": []}
+	env = _fake_gh(tmp_path, [], [], gate_runs=[{"id": GATE_RUN_ID}], gate_jobs=[skipped])
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert f"CI_BUDGET_GATE outcome=read run_id={GATE_RUN_ID} jobs=1 findings=0 stale_jobs=0" in result.stdout
+	assert _created(env) == []

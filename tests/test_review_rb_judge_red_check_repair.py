@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,6 +29,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+STAGE_SUPPORT_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
 README = REPO_ROOT / "README.md"
@@ -625,3 +627,21 @@ def test_ten_verbose_jobs_fit_the_prompt_embed_cap(tmp_path: Path) -> None:
 	assert len(section.encode("utf-8")) < 12000, len(section.encode("utf-8"))
 	assert "job[10]: job 9 (conclusion: failure)" in section and "job[10].failing_tests:" in section
 	assert section.count("##[error]Process completed") == 10
+
+
+# ---------------------------------------------------------------------------
+# Staging: every support script the judge loads is staged (#10240)
+# ---------------------------------------------------------------------------
+
+
+def test_every_judge_support_script_is_staged() -> None:
+	judge = SCRIPT.read_text(encoding="utf-8")
+	referenced = set(re.findall(r"\$\{SUPPORT_SCRIPTS_DIR(?::-[^}]*)?\}/([A-Za-z0-9_.-]+)", judge))
+	assert referenced, "review_rb_judge.sh no longer refers to any ${SUPPORT_SCRIPTS_DIR} file"
+	stage = STAGE_SUPPORT_HELPER.read_text(encoding="utf-8")
+	staged: set[str] = set()
+	for match in re.finditer(r'^(REQUIRED|MAIN_PRIMARY|OPTIONAL)_BOOTSTRAP_SCRIPTS="(?:\$\{\1_BOOTSTRAP_SCRIPTS\} )?([^"]*)"', stage, re.MULTILINE):
+		staged.update(match.group(2).split())
+	assert "review_freshness_ci_failed.sh" in referenced
+	missing = sorted(referenced - staged)
+	assert not missing, f"{missing} must be staged by scripts/stage_workflow_support.sh"

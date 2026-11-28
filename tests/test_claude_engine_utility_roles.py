@@ -518,6 +518,8 @@ LOG_ANALYSIS_JOBS = {
 	"analyze-commit-notify": ("LOG_SUMMARY", "LOG_ANALYSIS"),
 	"deep-audit": ("LOG_AUDIT",),
 	"api-redundancy": ("LOG_ANALYSIS",),
+	# Daily issue/PR audit (#10153), gated to the 06:00 run and its dispatch.
+	"collect-logs": ("ISSUE_PR_AUDIT",),
 }
 
 
@@ -538,7 +540,10 @@ def test_log_analysis_jobs_gate_claude_steps_on_the_engine(job: str) -> None:
 	assert 'ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"' in run
 	for name, action in (("Install Claude Code CLI", "install-claude"), ("Resolve Claude credential", "claude-pool-token")):
 		step = steps[names.index(name)]
-		assert step["if"] == "steps.ai_engine.outputs.any_claude == 'true'"
+		# collect-logs runs the audit after earlier steps that may fail, so its
+		# setup steps also run then (`!cancelled()`), like the audit steps.
+		expected = "${{ !cancelled() && steps.ai_engine.outputs.any_claude == 'true' }}" if job == "collect-logs" else "steps.ai_engine.outputs.any_claude == 'true'"
+		assert step["if"] == expected
 		assert step["continue-on-error"] is True
 		assert step["uses"] == f"./.github/actions/{action}"
 	assert job_data["env"]["AI_ENGINE"] == "${{ vars.AI_ENGINE || '' }}"

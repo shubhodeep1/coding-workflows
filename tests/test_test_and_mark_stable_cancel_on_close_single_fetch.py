@@ -68,10 +68,13 @@ def _new_run_wait_loop(branch: str) -> str:
 def test_closed_pr_wait_loop_fetches_existing_run_once_per_iteration() -> None:
 	wf = _read_workflow()
 	loop = _existing_run_wait_loop(_closed_pr_existing_run_branch(wf))
-	fetch_fragment = 'gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}"'
+	# Issue #10225: the read goes through phase7_gh_api_read (gh_api_retry
+	# with a bounded rate-limit wait), still once per iteration.
+	fetch_fragment = 'phase7_gh_api_read "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}"'
 
 	assert loop.count(fetch_fragment) == 1
-	assert 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""' in loop
+	assert 'EXISTING_RUN_JSON=$(phase7_gh_api_read "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""' in loop
+	assert 'gh api "' not in loop
 	assert "--jq '.status // \"\"'" not in loop
 	assert "--jq '.conclusion // \"\"'" not in loop
 
@@ -79,7 +82,7 @@ def test_closed_pr_wait_loop_fetches_existing_run_once_per_iteration() -> None:
 def test_closed_pr_wait_loop_derives_status_and_conclusion_from_shared_payload() -> None:
 	wf = _read_workflow()
 	loop = _existing_run_wait_loop(_closed_pr_existing_run_branch(wf))
-	fetch_stmt = 'EXISTING_RUN_JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""'
+	fetch_stmt = 'EXISTING_RUN_JSON=$(phase7_gh_api_read "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" 2>/dev/null) || EXISTING_RUN_JSON=""'
 	status_stmt = "EXISTING_STATUS=$(printf '%s' \"${EXISTING_RUN_JSON}\" | jq -r '.status // \"\"' 2>/dev/null || echo \"\")"
 	conclusion_stmt = "EXISTING_CONCLUSION=$(printf '%s' \"${EXISTING_RUN_JSON}\" | jq -r '.conclusion // \"\"' 2>/dev/null || echo \"\")"
 
@@ -179,8 +182,9 @@ def test_no_run_diagnostic_makes_no_second_listing() -> None:
 	assert "phase7_list_cancel_runs" not in diag
 	assert "/runs?" not in diag
 	assert "${CANDIDATE_RUNS_JSON:-}" in diag
-	assert diag.count("gh api") == 1
-	state_read = 'gh api "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml" --jq \'.state // ""\''
+	assert diag.count("phase7_gh_api_read") == 1
+	assert "gh api " not in diag
+	state_read = 'phase7_gh_api_read "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml" --jq \'.state // ""\''
 	assert state_read in diag
 	assert diag.index("# \u00a715: the runs listing above carries no workflow state") < diag.index(state_read)
 	assert 'PHASE7_CANCEL_WORKFLOW_STATE="unknown"' in diag
@@ -232,6 +236,7 @@ def _run_phase7_wait(tmp: str, runs_json: str, state_reply: str | None) -> tuple
 			'sleep() { echo "$1" >> "$SLEEPS"; echo $(( $(cat "$CLOCK") + $1 )) > "$CLOCK"; }',
 			'phase7_list_cancel_runs() { PHASE7_CANCEL_RUNS_JSON="$(cat "$RUNS_FILE")"; return 0; }',
 			'gh() { if [ -n "${STATE_REPLY+x}" ]; then printf \'%s\\n\' "$STATE_REPLY"; return 0; fi; return 1; }',
+			'phase7_gh_api_read() { gh api "$@"; }',
 			"PR_NUMBER=42",
 			"PR_CLOSED_AT=2026-10-20T00:00:00Z",
 			"PRE_RUN_ID=100",

@@ -1367,6 +1367,10 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
         generated_chore_ref_kind="validation_selftest_status"
       elif [[ "${pr_head_ref}" =~ ^auto/workflow-log-analysis-report-[0-9]+-[0-9]+$ ]]; then
         generated_chore_ref_kind="workflow_log_analysis_report"
+      elif [[ "${pr_head_ref}" =~ ^auto/issue-pr-audit-report-[0-9]+-[0-9]+$ ]]; then
+        # Daily issue/PR audit report (#10153): the report, purged old
+        # reports and the audit cursor file only.
+        generated_chore_ref_kind="issue_pr_audit_report"
       fi
     fi
     if [ "${SMALL_DIFF}" = "true" ] || [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ] || [ -n "${generated_chore_ref_kind}" ]; then
@@ -1503,6 +1507,17 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             and (.status == "added" or .status == "modified" or .status == "removed")
             and .previous_filename == null)' >/dev/null 2>&1; then
           generated_chore_kind="workflow_log_analysis_report"
+        fi
+      elif [ "${generated_chore_ref_kind}" = "issue_pr_audit_report" ]; then
+        # The cursor file may be added or modified, never removed.
+        if printf '%s' "${pr_files_json}" | jq -e '
+          length > 0 and all(.[];
+            (((.filename | test("^analysis/issue-pr-audit-[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\\.md$"))
+              and (.status == "added" or .status == "modified" or .status == "removed"))
+            or (.filename == "analysis/issue_pr_audit_state.json"
+              and (.status == "added" or .status == "modified")))
+            and .previous_filename == null)' >/dev/null 2>&1; then
+          generated_chore_kind="issue_pr_audit_report"
         fi
       fi
       if [ -n "${generated_chore_kind}" ]; then
