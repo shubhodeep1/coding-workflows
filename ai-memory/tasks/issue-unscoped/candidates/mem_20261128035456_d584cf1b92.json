@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, which covers the selection and placement of the steps moved from tests-release-and-log-analysis and the comment blocks above \"Orchestrate lib unit tests\" and \"Implement post-Codex recovery unit tests\"; also changelog.d/10182-ci-release-job-budget-move.md\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The comment blocks at .github/workflows/ci.yml (cited as lines 4390-4400 / 4392-4396 / 4387-4396 / 4390-4396 and 4445-4455 / 4445-4450) and the changelog fragment say the step timings from run 45766722607 could not be read, and that the pick is an estimate from test and subprocess counts, not measured timings. The only weights cited (orchestrate lib about 72s, post-Codex recovery about 31s) are planning-sandbox numbers from the #9450 comment (ci.yml lines 4347-4350), not measurements from run 45766722607. The PR records no measured comparison showing that the orchestrate-poll job, with its 30-minute budget, had the most headroom; the diff itself calls the choice \"a proxy, not a measured comparison\". The last-run diff changes only comments and adds no new evidence. Reviewers disagree on severity: google_gemini-3_1-flash-lite and openai_gpt-6-luna say MAJOR; anthropic_claude-sonnet-5_5 and minimax_minimax-m3 say NIT and note that the gap is disclosed and was deferred by earlier editor passes. z-ai_glm-5_3-flash did not flag it and says it is already deferred as residual (ledger iss_6f88deae7c3dad45).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: the reasons for picking the steps, given in the .github/workflows/ci.yml comment blocks above \"Orchestrate lib unit tests\" (lines 4390-4400) and \"Implement post-Codex recovery unit tests\" (lines 4445-4455), and in changelog.d/10182-ci-release-job-budget-move.md.\n  Evidence of absence: The steps were not picked using measured durations from run 45766722607. Both comment blocks and the changelog say the timings could not be read and the pick is an estimate from test and subprocess counts. The only weights in the repo are planning-sandbox numbers in the #9450 comment (ci.yml lines 4347-4350: orchestrate lib about 72s, post-Codex recovery about 31s). No measured comparison of job headroom is recorded. The reviewer calls this a disclosed gap in evidence, not a code defect, and notes that earlier editor passes deferred it. The moves are correct and the contract tests cover them. The comment at line 4399 tells the next person to read the step timings first.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, selection and placement of the steps moved from tests-release-and-log-analysis.\n  Evidence of absence: The workflow comments at .github/workflows/ci.yml (lines 4392-4396 and 4445-4450) and the changelog fragment explicitly state that the step timings from run 45766722607 were not readable, and that the selection was based on estimates from test and subprocess counts, rather than the measured step timings required by the issue intent.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml` comment blocks above \"Orchestrate lib unit tests\" (line 4428) and \"Implement post-Codex recovery unit tests\" (line 4482), and `changelog.d/10182-ci-release-job-budget-move.md`.\n  Evidence of absence: The comment blocks (ci.yml lines 4387-4396 and 4445-4450) and the changelog say the step timings \"could not be read\" and that the pick is an estimate from test and subprocess counts. The weights cited (orchestrate lib about 72s, post-Codex recovery about 31s) come from the planning-sandbox #9450 comment, not from run 45766722607. The diff does not show that the chosen steps are the slowest or that orchestrate-poll had the most headroom; it calls the choice \"a proxy, not a measured comparison\". The last-run diff only updates comments. The reviewer notes the gap is openly disclosed and was deferred in earlier rounds. It also notes that the comment-only edits at ci.yml lines 4355-4374 are consistent with MovedRelease10182StepsContractTest and the test maps (MOVED_PROMOTE_8771_STEPS, MOVED_HEAL_8993_STEPS, MOVED_STATIC_8394_STEPS, MOVED_HOOKS_9078_STEPS, POLL_GROUP_THREE_8472_REMAINING_STEPS, GROUP_PINNED_STEPS).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of steps moved from `tests-release-and-log-analysis`; `changelog.d/10182-ci-release-job-budget-move.md`.\n  Evidence of absence: The new comments at `.github/workflows/ci.yml:4390-4396` and `:4445-4450`, and the changelog entry, state that run 45766722607's step timings were unavailable and that the choices are estimates based on test and subprocess counts. They identify a job with a 30-minute budget, but provide no comparison showing it had the most headroom. The requested timing-based selection and headroom comparison are therefore not reflected in the PR diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "54e2aadc86c946897bc713f2f19e13d3d9ab06575855a282257107e1c0d26e8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10184,
+    "run_id": "46101343441",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46101343441",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128035456_d584cf1b92",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10184,
+    "run_id": "46101343441"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T03:54:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
