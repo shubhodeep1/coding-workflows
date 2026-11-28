@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:line 5130 (approximate) | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The tests-main-delta job description has an out-of-date comment that still describes a \"newest successful\" base.\n  WHY: The comment contradicts the red-wins rule the code implements; the reviewer rated it NIT (mapped to low), and it is a comment-only issue with no runtime effect.\n- scripts/ci_main_delta.sh:ci_main_delta_select, read_err_file handling | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If the step is cancelled mid-read, the temp file that holds gh error output is not removed.\n  WHY: The reviewer rated it NIT (mapped to low): production is not affected, because the runner's throwaway temp directory is cleared after the job.\n- .github/workflows/ci.yml:tests-main-delta job dependencies | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: tests-main-delta does not install the Node setup that some gated test jobs use.\n  WHY: The reviewer rated it NIT (mapped to low): a selected test that needs Node would fail loudly rather than pass silently, and MAIN_PUSH_DELTA_CI_ENABLED=false rolls it back.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: D5 \"If project #10097 Phase 2 (scripts/ci_sync_quick.sh delta selection) has merged when this is implemented, call its selection code instead of writing a second one.\"\n  expected_change_site: the selector call in `ci_main_delta_select` in `scripts/ci_main_delta.sh`\n  confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The merge from main brought in `ci_sync_quick_delta_select`, defined at `scripts/ci_sync_quick.sh:261` with its selector path resolved at line 252. Even so, `scripts/ci_main_delta.sh` still calls `workflow-templates/.claude/hooks/prepush_affected_tests.py` directly and parses `affected_tests` itself. The reviewer rated this NIT, \"noted for traceability only\", and called the separate code defensible for three reasons: Phase 2 had not merged at implementation time, the main delta needs `git diff --name-status -M` input, and it must fail closed to `full_required=true` (Goal 4). z-ai_glm-5_3-flash said explicitly that this is not a gap, because the D5 condition was never triggered.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: D5 \"If project #10097 Phase 2 (scripts/ci_sync_quick.sh delta selection) has merged when this is implemented, call its selection code instead of writing a second one.\"\n  Expected change site: the selector call in `ci_main_delta_select` in `scripts/ci_main_delta.sh`.\n  Evidence of absence: the merge from main brought in `ci_sync_quick_delta_select`, defined at `scripts/ci_sync_quick.sh:261`, with its selector path resolved at line 252. `scripts/ci_main_delta.sh` still calls `workflow-templates/.claude/hooks/prepush_affected_tests.py` directly and parses `affected_tests` itself. Keeping its own code is defensible because Phase 2 had not merged, the main delta needs `git diff --name-status -M` input, and it must fail closed to `full_required=true` (Goal 4). Noted for traceability only.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:line 5130 (approximate) | severity=NIT | confidence=4\n  PROBLEM: Stale comment in tests-main-delta job description.\n  WHY: The comment describes a 'newest successful' base which is outdated and contradicts the red-wins rule implemented.\n- scripts/ci_main_delta.sh:ci_main_delta_select, read_err_file handling | severity=NIT | confidence=3\n  PROBLEM: Temp file holding gh error output is not removed if the step is cancelled mid-read.\n  WHY: Does not affect production; the runner's throwaway temp directory handles it after the job.\n- .github/workflows/ci.yml:tests-main-delta job dependencies | severity=NIT | confidence=3\n  PROBLEM: tests-main-delta does not install the Node setup used by some gated test jobs.\n  WHY: A selected test requiring Node would fail loudly; it would not pass silently. MAIN_PUSH_DELTA_CI_ENABLED=false rolls this back.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "25bab1bc7a037986b12ec264d9af7af4e3b1f3464f77ae1b5f1e0d3a02103c69",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10163,
+    "run_id": "46139526477",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46139526477",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128113947_be4073a14e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10163,
+    "run_id": "46139526477"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T11:39:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
