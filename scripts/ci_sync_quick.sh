@@ -41,6 +41,30 @@
 #       After verify, on the same checkout: runs the PR's changed
 #       tests/test_*.py files (pytest) and tests/test_*.sh files (bash) that
 #       exist in the tree, plus the CI-structure tests listed below.
+#   ci_sync_quick.sh delta-supported
+#       Prints `delta_supported` and exits 0: the capability probe the
+#       dispatcher (scripts/pr_checks_lib.sh _pr_base_sync_dispatch_final_ci)
+#       runs before it asks for a delta run. An older copy of this script has
+#       no such subcommand, so the probe fails and the full suite is dispatched.
+#
+# Delta overlap (merge-lease short critical section, Phase 2, decision D1 of
+# docs/plans/merge-lease-short-critical-section-plan.md): when the overlap has
+# a path that is not CI wiring, verify passes only when
+# MERGE_BASE_SYNC_DELTA_CI_ENABLED (default true; true/1/yes/on) is on, the
+# update head is a two-parent merge [approved head, base tip], the approved
+# head passed a full final CI run, and the pre-push selector
+# (workflow-templates/.claude/hooks/prepush_affected_tests.py select, resolved
+# next to this script) picks at most MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES
+# (default 60; 0-999, anything else means 60) test files for the overlap
+# paths. run-tests then also runs each selected test file not already in the
+# run, once (pytest for .py, bash for .sh); a selector error fails the job.
+# A wiring-only or empty overlap behaves exactly as before. The full suite
+# still runs on the base after the merge. Rollback:
+# MERGE_BASE_SYNC_DELTA_CI_ENABLED=false (verify then fails with
+# delta_disabled and the full final CI run follows).
+# Delta reasons: verify `outcome=ok reason=delta_overlap`, or `outcome=fail
+# reason=delta_disabled|approved_head_not_green|delta_selector_failed|delta_selection_too_large`;
+# run-tests `outcome=fail reason=diff_failed|selector_failed|delta_selection_too_large`.
 #
 # The CI-wiring list (paths whose change on the base cannot change what the
 # PR's own code does): .github/workflows/ci.yml and the tests that pin ci.yml
@@ -49,6 +73,7 @@
 # tests/test_ci_sync_quick.py).
 #
 # Log: `CI_SYNC_QUICK mode=classify|full_ci_green|verify|run_tests outcome=<word> reason=<token>`
+# (verify's delta pass logs outcome=ok reason=delta_overlap; see above).
 # (classify logs to stderr; stdout carries only the result line).
 
 set -uo pipefail
@@ -178,26 +203,149 @@ ci_sync_quick_read_merge()
 	return 0
 }
 
+# Delta switch: MERGE_BASE_SYNC_DELTA_CI_ENABLED, default true; whitespace is
+# stripped (like the merge-lease switches); on for
+# true/1/yes/on (any letter case), off for anything else.
+ci_sync_quick_delta_enabled()
+{
+	case "$(printf '%s' "${MERGE_BASE_SYNC_DELTA_CI_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) return 0 ;;
+	esac
+	return 1
+}
+
+# Prints the delta selection cap: MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES when it
+# is 1-3 decimal digits (0-999), else 60.
+ci_sync_quick_delta_cap()
+{
+	local cap_value="${MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES:-60}"
+	if [[ "${cap_value}" =~ ^[0-9]{1,3}$ ]]; then
+		printf '%s\n' "$((10#${cap_value}))"
+	else
+		printf '60\n'
+	fi
+}
+
+# Sets CI_SYNC_QUICK_OVERLAP to the paths both the PR (base tip..update head)
+# and the base (approved head..update head) changed, one per line, sorted.
+# Needs ci_sync_quick_read_merge first. Returns 1 (no log) when a diff fails.
+ci_sync_quick_overlap()
+{
+	local pr_paths base_paths
+	CI_SYNC_QUICK_OVERLAP=""
+	if ! pr_paths="$(git diff --no-renames --name-only "${CI_SYNC_QUICK_BASE_TIP}" "${CI_SYNC_QUICK_UPDATE_HEAD}" 2>/dev/null)" \
+		|| ! base_paths="$(git diff --no-renames --name-only "${CI_SYNC_QUICK_APPROVED_HEAD}" "${CI_SYNC_QUICK_UPDATE_HEAD}" 2>/dev/null)"; then
+		return 1
+	fi
+	CI_SYNC_QUICK_OVERLAP="$(comm -12 <(printf '%s\n' "${pr_paths}" | sed '/^$/d' | LC_ALL=C sort -u) <(printf '%s\n' "${base_paths}" | sed '/^$/d' | LC_ALL=C sort -u))"
+	return 0
+}
+
+# The pre-push selector, resolved next to this script (the same file as
+# workflow-templates/... from the repository root in CI).
+ci_sync_quick_selector_path()
+{
+	local script_dir="."
+	case "${BASH_SOURCE[0]}" in
+		*/*) script_dir="${BASH_SOURCE[0]%/*}" ;;
+	esac
+	printf '%s/../workflow-templates/.claude/hooks/prepush_affected_tests.py\n' "${script_dir}"
+}
+
+# Runs the selector over CI_SYNC_QUICK_OVERLAP with --repo-root . (the current
+# checkout). Sets CI_SYNC_QUICK_DELTA_COUNT to the number of unique selected
+# paths and CI_SYNC_QUICK_DELTA_TESTS to the ones that are safe to run:
+# relative, no `..`, not starting with `-`, ending in .py or .sh, and a file in
+# the tree. Returns 1 when the selector fails or its JSON is unreadable or has
+# the wrong shape.
+ci_sync_quick_delta_select()
+{
+	local delta_changed_file delta_selection_file delta_selector delta_paths="" delta_path delta_rc=0
+	local -A delta_seen=()
+	CI_SYNC_QUICK_DELTA_TESTS=()
+	CI_SYNC_QUICK_DELTA_COUNT=0
+	delta_selector="$(ci_sync_quick_selector_path)"
+	delta_changed_file="$(mktemp)" || return 1
+	if ! delta_selection_file="$(mktemp)"; then
+		rm -f "${delta_changed_file}"
+		return 1
+	fi
+	printf '%s\n' "${CI_SYNC_QUICK_OVERLAP:-}" | sed '/^$/d' > "${delta_changed_file}"
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 "${delta_selector}" select --repo-root . \
+		--changed-files-file "${delta_changed_file}" --out "${delta_selection_file}" >/dev/null 2>&1; then
+		delta_rc=1
+	elif ! delta_paths="$(jq -r '
+		if type == "object" and (.affected_tests | type) == "array"
+			and all(.affected_tests[]; type == "object" and (.path | type) == "string" and ((.path | contains("\n")) | not))
+		then .affected_tests[].path
+		else error("unexpected selection shape") end' "${delta_selection_file}" 2>/dev/null)"; then
+		delta_rc=1
+	fi
+	rm -f "${delta_changed_file}" "${delta_selection_file}"
+	[ "${delta_rc}" -eq 0 ] || return 1
+	while IFS= read -r delta_path; do
+		[ -n "${delta_path}" ] || continue
+		[ -z "${delta_seen[${delta_path}]:-}" ] || continue
+		delta_seen["${delta_path}"]=1
+		CI_SYNC_QUICK_DELTA_COUNT=$((CI_SYNC_QUICK_DELTA_COUNT + 1))
+		case "${delta_path}" in
+			/*|-*|*..*) continue ;;
+			*.py|*.sh) ;;
+			*) continue ;;
+		esac
+		[ -f "${delta_path}" ] || continue
+		CI_SYNC_QUICK_DELTA_TESTS+=("${delta_path}")
+	done <<< "${delta_paths}"
+	return 0
+}
+
+# verify's branch for an overlap with a path that is not CI wiring ($1, the
+# first such path). Needs ci_sync_quick_read_merge and ci_sync_quick_overlap.
+ci_sync_quick_verify_delta()
+{
+	local delta_first="$1" delta_cap
+	if ! ci_sync_quick_delta_enabled; then
+		ci_sync_quick_fail delta_disabled "first=${delta_first}" \
+			"the base and the PR both changed ${delta_first}, which is not a CI-wiring file, and delta final CI (MERGE_BASE_SYNC_DELTA_CI_ENABLED) is off."
+		return 1
+	fi
+	if ! ci_sync_quick_full_ci_green "${CI_SYNC_QUICK_REPOSITORY:-}" "${CI_SYNC_QUICK_PR_NUMBER:-}" "${CI_SYNC_QUICK_APPROVED_HEAD}"; then
+		ci_sync_quick_fail approved_head_not_green "approved_head=${CI_SYNC_QUICK_APPROVED_HEAD}" \
+			"the approved head ${CI_SYNC_QUICK_APPROVED_HEAD} has no successful full final CI run."
+		return 1
+	fi
+	if ! ci_sync_quick_delta_select; then
+		ci_sync_quick_fail delta_selector_failed "" "the pre-push test selector failed on the overlap paths."
+		return 1
+	fi
+	delta_cap="$(ci_sync_quick_delta_cap)"
+	if [ "${CI_SYNC_QUICK_DELTA_COUNT}" -gt "${delta_cap}" ]; then
+		ci_sync_quick_fail delta_selection_too_large "selected=${CI_SYNC_QUICK_DELTA_COUNT} cap=${delta_cap}" \
+			"the selector picked ${CI_SYNC_QUICK_DELTA_COUNT} test files for the overlap, more than MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES (${delta_cap})."
+		return 1
+	fi
+	echo "CI_SYNC_QUICK mode=verify outcome=ok reason=delta_overlap head=${CI_SYNC_QUICK_UPDATE_HEAD} approved_head=${CI_SYNC_QUICK_APPROVED_HEAD} selected=${CI_SYNC_QUICK_DELTA_COUNT} cap=${delta_cap} overlap=$(printf '%s' "${CI_SYNC_QUICK_OVERLAP}" | tr '\n' ',')"
+	return 0
+}
+
 ci_sync_quick_verify()
 {
-	local pr_paths base_paths overlap verdict
+	local overlap verdict
 	if [ "${CI_SYNC_QUICK_DOCS_ONLY:-false}" = "true" ]; then
 		ci_sync_quick_fail mixed_modes "" "docs_only and sync_quick were both requested."
 		return 1
 	fi
 	ci_sync_quick_read_merge || return 1
-	if ! pr_paths="$(git diff --no-renames --name-only "${CI_SYNC_QUICK_BASE_TIP}" "${CI_SYNC_QUICK_UPDATE_HEAD}" 2>/dev/null)" \
-		|| ! base_paths="$(git diff --no-renames --name-only "${CI_SYNC_QUICK_APPROVED_HEAD}" "${CI_SYNC_QUICK_UPDATE_HEAD}" 2>/dev/null)"; then
+	if ! ci_sync_quick_overlap; then
 		ci_sync_quick_fail diff_failed "" "git diff of the update head against its parents failed."
 		return 1
 	fi
-	overlap="$(comm -12 <(printf '%s\n' "${pr_paths}" | sed '/^$/d' | LC_ALL=C sort -u) <(printf '%s\n' "${base_paths}" | sed '/^$/d' | LC_ALL=C sort -u))"
+	overlap="${CI_SYNC_QUICK_OVERLAP}"
 	if [ -n "${overlap}" ]; then
 		verdict="$(printf '%s\n' "${overlap}" | ci_sync_quick_classify_stdin 2>/dev/null)"
 		if [ "${verdict}" != "ci_wiring_only" ]; then
-			ci_sync_quick_fail overlap_not_ci_wiring "first=${verdict#other }" \
-				"the base and the PR both changed ${verdict#other }, which is not a CI-wiring file."
-			return 1
+			ci_sync_quick_verify_delta "${verdict#other }"
+			return $?
 		fi
 	fi
 	if ! ci_sync_quick_full_ci_green "${CI_SYNC_QUICK_REPOSITORY:-}" "${CI_SYNC_QUICK_PR_NUMBER:-}" "${CI_SYNC_QUICK_APPROVED_HEAD}"; then
@@ -211,7 +359,7 @@ ci_sync_quick_verify()
 
 ci_sync_quick_run_tests()
 {
-	local changed_path listed_path rc=0
+	local changed_path listed_path rc=0 delta_added=0 delta_cap
 	local -a py_tests=() sh_tests=()
 	local -A seen_tests=()
 	ci_sync_quick_read_merge || return 1
@@ -236,7 +384,34 @@ ci_sync_quick_run_tests()
 		seen_tests["${listed_path}"]=1
 		py_tests+=("${listed_path}")
 	done
-	echo "CI_SYNC_QUICK mode=run_tests outcome=start reason=selected python=${#py_tests[@]} shell=${#sh_tests[@]}"
+	# Delta overlap: the selector's picks for the paths both sides changed,
+	# each file once. A wiring-only or empty overlap adds nothing (as before).
+	if ! ci_sync_quick_overlap; then
+		echo "CI_SYNC_QUICK mode=run_tests outcome=fail reason=diff_failed"
+		return 1
+	fi
+	if [ -n "${CI_SYNC_QUICK_OVERLAP}" ] && ci_sync_quick_delta_enabled \
+		&& [ "$(printf '%s\n' "${CI_SYNC_QUICK_OVERLAP}" | ci_sync_quick_classify_stdin 2>/dev/null)" != "ci_wiring_only" ]; then
+		if ! ci_sync_quick_delta_select; then
+			echo "CI_SYNC_QUICK mode=run_tests outcome=fail reason=selector_failed"
+			return 1
+		fi
+		delta_cap="$(ci_sync_quick_delta_cap)"
+		if [ "${CI_SYNC_QUICK_DELTA_COUNT}" -gt "${delta_cap}" ]; then
+			echo "CI_SYNC_QUICK mode=run_tests outcome=fail reason=delta_selection_too_large selected=${CI_SYNC_QUICK_DELTA_COUNT} cap=${delta_cap}"
+			return 1
+		fi
+		for listed_path in "${CI_SYNC_QUICK_DELTA_TESTS[@]}"; do
+			[ -z "${seen_tests[${listed_path}]:-}" ] || continue
+			seen_tests["${listed_path}"]=1
+			delta_added=$((delta_added + 1))
+			case "${listed_path}" in
+				*.py) py_tests+=("${listed_path}") ;;
+				*.sh) sh_tests+=("${listed_path}") ;;
+			esac
+		done
+	fi
+	echo "CI_SYNC_QUICK mode=run_tests outcome=start reason=selected python=${#py_tests[@]} shell=${#sh_tests[@]} delta=${delta_added}"
 	if [ "${#py_tests[@]}" -gt 0 ]; then
 		PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider "${py_tests[@]}" || rc=1
 	fi
@@ -254,11 +429,12 @@ ci_sync_quick_run_tests()
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	case "${1:-}" in
 		classify) ci_sync_quick_classify_stdin ;;
+		delta-supported) echo delta_supported ;;
 		full-ci-green) shift; ci_sync_quick_full_ci_green "$@" ;;
 		verify) ci_sync_quick_verify ;;
 		run-tests) ci_sync_quick_run_tests ;;
 		*)
-			echo "usage: ci_sync_quick.sh classify | full-ci-green <repo> <pr> <sha> | verify | run-tests" >&2
+			echo "usage: ci_sync_quick.sh classify | full-ci-green <repo> <pr> <sha> | verify | run-tests | delta-supported" >&2
 			exit 2
 			;;
 	esac
