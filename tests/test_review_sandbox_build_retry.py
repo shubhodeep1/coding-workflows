@@ -86,7 +86,8 @@ def _cleanup(tmp_path: Path) -> None:
 	github_env = tmp_path / "github_env"
 	if not github_env.exists():
 		return
-	root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+	# Only the REVIEW_SANDBOX_ROOT line: prepare appends more keys after it (#9920).
+	root = next(line.split("=", 1)[1].strip() for line in github_env.read_text().splitlines() if line.startswith("REVIEW_SANDBOX_ROOT="))
 	subprocess.run(["bash", str(SANDBOX), "cleanup"], env=dict(os.environ, REVIEW_SANDBOX_ROOT=root,
 		SUPPORT_SCRIPTS_DIR=str(ROOT / "scripts"), RUNNER_TEMP=str(tmp_path)), capture_output=True)
 
@@ -225,7 +226,7 @@ def test_failed_prepare_branch_writes_evidence_and_a_headline(tmp_path, stderr_t
 	if expected_error:
 		assert f"::error::Review sandbox prepare failed: {expected_error}" in evidence
 		assert "Review sandbox prepare failed: " in proc.stdout
-		assert f"error_present=1" in proc.stdout
+		assert "error_present=1" in proc.stdout
 	else:
 		assert evidence.endswith("::error::Review sandbox prepare failed\n")
 		assert "error_present=1" in proc.stdout

@@ -22,6 +22,10 @@ env:
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+  # Plan-granted .github/ai/<file> writes (issue #9920, plan Phase 5 / R3): default on;
+  # repo variable AI_PLAN_GRANT_WRITE_ENABLED=false rolls back (GitHub reserves the GITHUB_
+  # prefix for configuration variables). Scripts default to true too.
+  GITHUB_AI_PLAN_GRANT_WRITE_ENABLED: ${{ vars.AI_PLAN_GRANT_WRITE_ENABLED || 'true' }}
   # Done-check (issue #8427, P2): default off; see scripts/acceptance_check.py.
   PERSIST_ACCEPTANCE_ENABLED: ${{ vars.PERSIST_ACCEPTANCE_ENABLED || 'false' }}
   # Repair loop (issue #8427, P3): default off; see scripts/implement_step_prepush_test_gate.sh.
@@ -53,7 +57,7 @@ env:
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'high' }}
   # Codex version baked into the isolated agent image
   # (scripts/codex_isolated_exec.sh); matches the host install below.
-  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
   # Opt-in Solidity compilers for the isolated implement sandbox image
   # (scripts/codex_isolated_exec.sh validates it; empty = off, image unchanged).
   # Set at workflow level, not only on the prepare steps, because `run`,
@@ -325,7 +329,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       - name: Create runtime workspace
         if: env.SKIP_IMPLEMENT != 'true'
