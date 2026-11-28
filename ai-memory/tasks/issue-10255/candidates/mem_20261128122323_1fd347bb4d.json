@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan for issue #10255: set the smoke canary file's content\n\nPlanning ref: `main` @ `adc2f40651d20730e6f192adca66da179584d69e`. The \"Integration branch mismatch\" line reads `unknown`, not `true`, so the plan goes ahead.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check CI\nACCEPTANCE: post-merge none: this changes one data fixture and starts no workflow after merge\n\n## Functions or modules to implement\nNone. Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly these three lines, each ending in a newline (LF):\n```\nstatus: ok\nrun_id: alt-46140903455\nupdated-by: ai-pipeline\n```\nThe file currently holds `status: ok` and `decompose-run: 41445772297`. The second line goes away and the two new lines are added.\n\n## Data structures affected\nOnly the plain-text content of the canary file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: write the three lines as the file's full content, with one trailing newline.\n- Alternatives considered: edit the existing lines one at a time.\n- Why: the issue asks for the content to be exactly these lines, and a full overwrite guarantees that.\n\n## Security considerations\nThis touches no trust boundary, endpoint, secret or money path. The file is a static test fixture.\n\n## Potential risks or edge cases\n- Several tests mention the canary path, for example `tests/test_review_apply_fixes_smoke_deterministic.py`. They reference it as a smoke target path and do not appear to check its content. If one of them does check content, CI will show it. The issue limits the change to this one file, so no test is edited here.\n- The file must not gain extra blank lines or CRLF line endings.\n\n## Testing considerations\n- `cat tests/e2e_smoke_canary.txt` must show exactly the three lines.\n- `git diff --stat` must show only this file changed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a single-file content change, and the only edit is to the existing fixture file. No helpers, scripts or workflows are involved, and nothing further would be needed to finish the issue, so the plan keeps exactly the requested scope.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "f4767aec35908a1d89733a02acef8822be51d2005d2ba8b10bb1f3794ab7d664",
+  "lineage": {
+    "issue_number": 10255,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46142386976",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46142386976",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10255"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261128122323_1fd347bb4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10255,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46142386976"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10255",
+  "timestamps": {
+    "created_at": "2026-11-28T12:23:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
