@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #10156, D5: \"Use prepush_affected_tests.py select as it is on main. If project #10097 Phase 2 (scripts/ci_sync_quick.sh delta selection) has merged when this is implemented, call its selection code instead of writing a second one.\"\n  expected_change_site: scripts/ci_main_delta.sh `ci_main_delta_select`: the selector invocation (lines 254-272 per minimax; lines 284-285 per z-ai) and the `affected_tests` parsing (lines 274-291 per minimax; jq at lines 293-300 per z-ai)\n  confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: Phase 2's selection code reached this branch in the last merge commit (1e72f922). It added `ci_sync_quick_selector_path` (scripts/ci_sync_quick.sh:246) and `ci_sync_quick_delta_select` (scripts/ci_sync_quick.sh:261), grew ci_sync_quick.sh by +196 lines and added tests/test_ci_sync_quick_delta.py, but scripts/ci_main_delta.sh still calls workflow-templates/.claude/hooks/prepush_affected_tests.py select directly and parses the `affected_tests` JSON itself, so two delta-selection paths now exist. Mitigation (sonnet and z-ai): D5 was conditional, and Phase 2 had not merged when this PR was implemented. The two paths cannot simply be swapped. `ci_sync_quick_delta_select` reads `CI_SYNC_QUICK_OVERLAP` (ci_sync_quick.sh:273) as plain paths, skips unsafe paths without reporting them, and fails the job on a selector error (line 275). ci_main_delta.sh feeds `git diff --name-status -M` output and fails closed with `selection_invalid`. Both paths call the same `prepush_affected_tests.py select`, so only the surrounding code is duplicated. All three rated it SEVERITY: NIT, a follow-up cleanup and not a runtime defect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP\n- Requirement: Decision D5 says: \"Use prepush_affected_tests.py select as it is on main. If project #10097 Phase 2 (scripts/ci_sync_quick.sh delta selection) has merged when this is implemented, call its selection code instead of writing a second one.\"\n  Expected change site: the selector call and `affected_tests` parsing in `ci_main_delta_select` in scripts/ci_main_delta.sh.\n  Evidence of absence: Phase 2's selection code reached this branch in the last merge commit: `ci_sync_quick_selector_path` (scripts/ci_sync_quick.sh:246) and `ci_sync_quick_delta_select` (scripts/ci_sync_quick.sh:261). ci_main_delta.sh still runs the selector and parses `affected_tests` itself, so there are now two copies of the logic. D5 was conditional, and Phase 2 had not merged when this PR was implemented. The copies cannot simply be swapped: one reads the global `CI_SYNC_QUICK_OVERLAP` (plain paths) while the other uses `git diff --name-status -M` output, and one skips unsafe paths silently while ci_main_delta.sh fails closed with `selection_invalid`. Merging them is follow-up cleanup, not a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\n- Requirement: D5 in issue #10156 reads \"Use prepush_affected_tests.py select as it is on main. If project #10097 Phase 2 (scripts/ci_sync_quick.sh delta selection) has merged when this is implemented, call its selection code instead of writing a second one.\"\n  Expected change site: scripts/ci_main_delta.sh ci_main_delta_select \u2014 replace the inline selector invocation and the affected_tests parsing with the merged Phase 2 helper.\n  Evidence of absence: The last merge commit landed scripts/ci_sync_quick.sh with ci_sync_quick_selector_path and ci_sync_quick_delta_select plus tests/test_ci_sync_quick_delta.py (per last_commit_stat.txt, ci_sync_quick.sh +196 lines). scripts/ci_main_delta.sh still calls workflow-templates/.claude/hooks/prepush_affected_tests.py select directly (lines 254-272) and parses the JSON on its own (lines 274-291), so the repo has two parallel delta-selection paths. Phase 2 has merged, so D5's condition is met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\n- Requirement: Issue #10156, D5: \"If project #10097 Phase 2 (scripts/ci_sync_quick.sh delta selection) has merged when this is implemented, call its selection code instead of writing a second one.\" Phase 2 reached this branch through the ai-merge-resolve commit (1e72f922): `scripts/ci_sync_quick.sh` grew +196 lines and gained `ci_sync_quick_selector_path` (line 246) and `ci_sync_quick_delta_select` (line 261), and `tests/test_ci_sync_quick_delta.py` is new.\n  Expected change site: `scripts/ci_main_delta.sh`, `ci_main_delta_select` (the selector invocation at lines 284-285 and the `affected_tests` jq at lines 293-300).\n  Evidence of absence: `ci_main_delta.sh` still invokes the selector and parses `affected_tests` itself; it does not call `ci_sync_quick_delta_select`. Mitigation: the sync-quick helper depends on `CI_SYNC_QUICK_OVERLAP` (ci_sync_quick.sh:273) and fails the job on a selector error (line 275). The delta suite needs a base..head diff-range input and falls back to the full suite on failure. Both call `prepush_affected_tests.py select`, so only the surrounding code is duplicated. The condition became true mid-review; this is a duplication follow-up, not a runtime defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "51a4d86741514c780cd1540884b5e9281b2990619ee56ca86dc2e50c9b1befd5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10163,
+    "run_id": "46141804850",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46141804850",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128123301_bb011df915",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10163,
+    "run_id": "46141804850"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-28T12:33:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
