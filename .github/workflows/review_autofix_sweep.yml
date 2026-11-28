@@ -952,6 +952,11 @@ jobs:
             if [ "${verdict_wait_on}" = "true" ] && type review_sweep_verdict_wait_reason >/dev/null 2>&1; then
               verdict_wait_reason="$(review_sweep_verdict_wait_reason "${row}")"
             fi
+            # Only the merge train's release step removes ai:final-ci-merge-pending
+            # and merges the head; with the train off the sweep is the fallback.
+            if [ "${verdict_wait_reason}" = "final_ci_merge_pending" ] && [ "${merge_train_skip_active}" != "true" ]; then
+              verdict_wait_reason=""
+            fi
             approved_final_ci=""
             if [ "${verdict_wait_reason}" != "final_ci_merge_pending" ] \
               && { [ "${SWEEP_SKIP_APPROVED_FINAL_CI_FAILED:-true}" != "false" ] || [ "${verdict_wait_on}" = "true" ]; } \
@@ -968,7 +973,10 @@ jobs:
             if [ "${verdict_wait_on}" = "true" ] && [ "${approved_final_ci}" != "failure" ]; then
               # A final CI run queued or running on the approved head decides
               # the merge; a review run would not (issue #9991).
-              if [ -z "${verdict_wait_reason}" ] && [ "${approved_final_ci}" = "in_flight" ]; then
+              # Only a MERGEABLE head: a conflicted or not yet computed head is
+              # dispatched, as review_sweep_verdict_wait_reason does.
+              if [ -z "${verdict_wait_reason}" ] && [ "${approved_final_ci}" = "in_flight" ] \
+                && printf '%s' "${row}" | jq -e '.mergeable == "MERGEABLE"' >/dev/null 2>&1; then
                 verdict_wait_reason="final_ci_in_flight"
               fi
               if [ -n "${verdict_wait_reason}" ]; then

@@ -246,7 +246,7 @@ def write_gate_fake_gh(tmp: Path, prs: list[dict], gate: dict[int, str], final_c
 	(tmp / "pulls.json").write_text(json.dumps(prs), encoding="utf-8")
 	page = {"data": {"repository": {"pullRequests": {
 		"pageInfo": {"hasNextPage": False, "endCursor": None},
-		"nodes": [{"number": p["number"], "headRefOid": p["head"]["sha"], "commits": {"nodes": [{"commit": {
+		"nodes": [{"number": p["number"], "headRefOid": p["head"]["sha"], "mergeable": "MERGEABLE", "commits": {"nodes": [{"commit": {
 			"oid": p["head"]["sha"], "status": {"context": {"state": gate[p["number"]]}} if p["number"] in gate else None}}]}}
 			for p in prs],
 	}}}}

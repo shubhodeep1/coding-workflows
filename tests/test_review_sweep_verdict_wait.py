@@ -264,6 +264,25 @@ def test_final_ci_in_flight_is_not_dispatched(tmp_path: Path) -> None:
 	assert "reason=verdict_wait detail=final_ci_in_flight" in result.stdout
 
 
+@pytest.mark.parametrize("mergeable", ["CONFLICTING", "UNKNOWN", None])
+def test_final_ci_in_flight_on_a_conflicted_head_is_dispatched(tmp_path: Path, mergeable: str | None) -> None:
+	runs = {_sha(1): {"workflow_runs": [{"path": ".github/workflows/ci.yml", "head_sha": _sha(1), "status": "in_progress",
+		"conclusion": None, "display_title": "CI [pr:1]"}]}}
+	result = _run(tmp_path, [_pr(1)], {1: {"gate": "SUCCESS", "mergeable": mergeable}}, final_ci=runs)
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == ["1"]
+	assert "VERDICT_WAIT_SKIP" not in result.stdout
+
+
+def test_final_ci_merge_pending_label_is_swept_with_the_train_off(tmp_path: Path) -> None:
+	"""Only the merge train removes ai:final-ci-merge-pending; with it off the sweep is the fallback."""
+	result = _run(tmp_path, [_pr(1, ("ai:final-ci-merge-pending",))], {1: {"gate": "SUCCESS"}},
+		env={"MERGE_TRAIN_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == ["1"]
+	assert "VERDICT_WAIT_SKIP" not in result.stdout
+
+
 def test_lease_waiter_is_skipped_and_logged(tmp_path: Path) -> None:
 	result = _run(tmp_path, [_pr(1, ("ai:merge-lease-wait",))], {1: {"gate": "SUCCESS"}})
 	assert result.returncode == 0, result.stderr
@@ -338,6 +357,18 @@ def test_failed_send_posts_no_marker(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert "outcome=not_delivered" in result.stdout
 	assert not _lines(tmp_path, "statuses.log")
+
+
+def test_failed_marker_post_is_logged_and_retried_next_tick(tmp_path: Path) -> None:
+	"""Send first, then mark: a lost marker can repeat the alert, never lose it."""
+	meta = {1: {"gate": "SUCCESS", "gate_at": _iso(8), "auto_at": _iso(8)}}
+	result = _run(tmp_path, [_pr(1)], meta, flags=("status_post_fails",), env=TG)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=marker_failed" in result.stdout
+	assert _sends(tmp_path) == 1
+	# gh_retry is loaded here (GH_RETRY_MAX_ATTEMPTS=1), so one POST attempt.
+	assert len(_lines(tmp_path, "statuses.log")) >= 1
+	assert _dispatched(tmp_path) == []
 
 
 def test_unconfigured_telegram_posts_no_marker(tmp_path: Path) -> None:
