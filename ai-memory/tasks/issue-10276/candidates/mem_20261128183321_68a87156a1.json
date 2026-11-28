@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nThis plan replaces the contents of `tests/e2e_smoke_canary.txt` with the three lines the issue asks for. No other file changes.\n\nPlanning ref: `main` @ `f9b3ff877842fa8effe2e4c4eec3fc061b2efd5d` (integration branch mismatch: unknown, not `true`).\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check static-checks\nACCEPTANCE: post-merge none: data-only canary file change with no post-merge workflow dependency\n\n## Functions or modules to implement\nNone. Overwrite the file so its exact bytes are:\n`status: ok\\nrun_id: 46172020453\\nupdated-by: ai-pipeline\\n`\n\nThe file currently holds two lines: `status: ok` and `decompose-run: 41445772297`.\n\n## Data structures affected\nOnly the content of the canary text file.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the whole file\n- Chosen: overwrite the file with exactly the three lines, ending with a single trailing newline.\n- Alternatives considered: editing only line 2 and adding line 3; this could leave stray bytes behind.\n- Why: the issue says to replace the whole content.\n\n## Security considerations\nNo trust boundary, endpoint, secret or external input is involved. The run_id is a public number. There is no abuse case.\n\n## Potential risks or edge cases\n- Several test files mention the file by name. A search found no test that reads its content or the old `decompose-run` value, so nothing should depend on the line being replaced.\n- `tests/e2e_smoke_canary_b.txt` has the same old line. The issue rules out changing it, so it stays as it is.\n- The file must end with exactly one newline: no trailing blank line, no CRLF.\n\n## Testing considerations\nCheck the result with `cmp` against `printf 'status: ok\\nrun_id: 46172020453\\nupdated-by: ai-pipeline\\n'`. Running `git diff --stat` should show only this file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a single-file content replacement and forbids touching other files, so the scope is held exactly to that file and that content.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[{\"name\":\"static-checks\"}],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"data-only canary file change with no post-merge workflow dependency\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "675aa422ef293e95b0d7a4c9799de13f1b136885cc93d34aebff550ebf5843fe",
+  "lineage": {
+    "issue_number": 10276,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46175465679",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46175465679",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10276"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261128183321_68a87156a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10276,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46175465679"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10276",
+  "timestamps": {
+    "created_at": "2026-11-28T18:33:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
