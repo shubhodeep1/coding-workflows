@@ -292,6 +292,16 @@ def test_final_ci_merge_pending_label_with_auto_merge_keeps_the_skip_with_the_tr
 	assert f"VERDICT_WAIT_SKIP source=sweep pr=1 head={_sha(1)} reason=auto_merge_waiting" in result.stdout
 
 
+def test_train_off_auto_merge_alert_names_the_ruleset_blocker_not_the_stale_label(tmp_path: Path) -> None:
+	"""With the train off the ai:final-ci-merge-pending label is stale; the alert reads the ruleset blocker."""
+	meta = {1: {"gate": "SUCCESS", "gate_at": _iso(8), "auto_at": _iso(8)}}
+	result = _run(tmp_path, [_pr(1, ("ai:final-ci-merge-pending",))], meta, env={**TG, "MERGE_TRAIN_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == []
+	assert "blocker=ci/final (missing) outcome=sent" in result.stdout, result.stdout
+	assert "final CI queued or running" not in result.stdout
+
+
 def test_failed_final_ci_read_dispatches_the_auto_merge_head(tmp_path: Path) -> None:
 	"""Fail-open: a runs read that cannot be decided dispatches, even when the snapshot names a wait."""
 	result = _run(tmp_path, [_pr(1)], {1: {"gate": "SUCCESS", "auto_at": _iso(1)}}, final_ci={_sha(1): "not json"})

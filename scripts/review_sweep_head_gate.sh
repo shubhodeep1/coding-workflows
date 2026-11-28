@@ -73,7 +73,7 @@
 #           nothing, because a review run is what resolves conflicts.
 #   API:    none (pure jq over the annotated row).
 #
-# review_sweep_verdict_wait_alert <owner/repo> <row json> <dry_run>
+# review_sweep_verdict_wait_alert <owner/repo> <row json> <dry_run> [<skip reason>]
 #   One alert per head that has had a verdict for VERDICT_WAIT_ALERT_HOURS
 #   (default 6; 0 off) without merging. Waiting since: the earlier of
 #   head_gate_created_at and auto_merge_enabled_at for a head-gate success,
@@ -81,6 +81,9 @@
 #   (label MERGE_LEASE_WAIT_LABEL; one _merge_lease_read per base per tick),
 #   `final CI queued or running` (FINAL_CI_MERGE_PENDING_LABEL), or
 #   _pr_ruleset_required_check_blockers' summary (e.g. `ci/final (missing)`).
+#   <skip reason> (optional): `auto_merge_waiting` reads the ruleset blocker
+#   even when FINAL_CI_MERGE_PENDING_LABEL is set (with the merge train off
+#   nothing removes that label, so it does not mean a final CI is running).
 #   Sent with tg_send_msg (WARNING; delivered when it returns a message id,
 #   telegram_unconfigured when tg_alert_configured WARNING fails); only after
 #   a delivered send is the
@@ -424,7 +427,7 @@ review_sweep_verdict_wait_reason()
 
 review_sweep_verdict_wait_alert()
 {
-	local vwa_repo="${1:-}" vwa_row="${2:-}" vwa_dry="${3:-false}"
+	local vwa_repo="${1:-}" vwa_row="${2:-}" vwa_dry="${3:-false}" vwa_reason="${4:-}"
 	local vwa_threshold vwa_fields vwa_pr vwa_sha vwa_base vwa_since vwa_alerted vwa_label vwa_now vwa_waited
 	local vwa_blocker vwa_rc vwa_msg vwa_msg_id vwa_outcome
 	vwa_threshold="$(_pr_verdict_wait_alert_hours)"
@@ -445,6 +448,10 @@ review_sweep_verdict_wait_alert()
 		| map(if . == "" then "-" else . end) | @tsv' 2>/dev/null || true)"
 	[ -n "${vwa_fields}" ] || return 0
 	IFS=$'\t' read -r vwa_pr vwa_sha vwa_base vwa_since vwa_alerted vwa_label <<< "${vwa_fields}"
+	# A stale final-CI label on an auto-merge wait: name the ruleset blocker.
+	if [ "${vwa_reason}" = "auto_merge_waiting" ] && [ "${vwa_label}" = "final_ci" ]; then
+		vwa_label=checks
+	fi
 	[[ "${vwa_pr}" =~ ^[1-9][0-9]*$ ]] && [[ "${vwa_sha}" =~ ^[0-9a-f]{40}$ ]] || return 0
 	[[ "${vwa_since}" =~ ^[0-9]+$ ]] || return 0
 	[ "${vwa_base}" != "-" ] || vwa_base=""

@@ -992,7 +992,11 @@ jobs:
               if [ -n "${verdict_wait_reason}" ]; then
                 echo "VERDICT_WAIT_SKIP source=sweep pr=${pr_number} head=$(printf '%s' "${row}" | jq -r '.head_sha // ""') reason=${verdict_wait_reason}"
                 echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=verdict_wait detail=${verdict_wait_reason} head_ref=${head_ref}"
-                type review_sweep_verdict_wait_alert >/dev/null 2>&1 && { review_sweep_verdict_wait_alert "${REPOSITORY}" "${row}" "${DRY_RUN:-false}" || true; }
+                # A running final CI is the blocker; else an auto-merge wait names
+                # the ruleset blocker, not a stale ai:final-ci-merge-pending label.
+                vw_alert_reason="${verdict_wait_reason}"
+                [ "${approved_final_ci}" = "in_flight" ] && vw_alert_reason="final_ci_in_flight"
+                type review_sweep_verdict_wait_alert >/dev/null 2>&1 && { review_sweep_verdict_wait_alert "${REPOSITORY}" "${row}" "${DRY_RUN:-false}" "${vw_alert_reason}" || true; }
                 skipped_verdict_wait=$((skipped_verdict_wait + 1))
                 continue
               fi
