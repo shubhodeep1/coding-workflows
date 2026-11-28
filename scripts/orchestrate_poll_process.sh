@@ -33186,8 +33186,10 @@ _dispatch_integration_test_repair()
 #     the pipeline login: ai-review/judge-merge-pending success with the lease
 #     label, or ai-review/head-gate success with auto-merge or the final-CI
 #     label;
-#   - no check run completed and no non-ai-review/ status was posted after the
-#     verdict, and the rollup was not truncated;
+#   - no required check run (isRequired for this PR, read in the same query;
+#     an unknown flag counts as required) completed and no required
+#     non-ai-review/ status was posted after the verdict, and the rollup was
+#     not truncated;
 #   - for a judge verdict, the base recorded in its description (`base=<sha>`)
 #     is the current base, or the base moved only outside the PR's files.
 # A lease granted to the PR removes the label, so the judge runs again (G6).
@@ -33246,7 +33248,7 @@ _rb_judge_verdict_wait_check()
       baseRefOid
       commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 100) {
         pageInfo { hasNextPage }
-        nodes { __typename ... on CheckRun { completedAt } ... on StatusContext { context state createdAt description creator { login } } }
+        nodes { __typename ... on CheckRun { completedAt isRequired(pullRequestNumber: $number) } ... on StatusContext { context state createdAt description creator { login } isRequired(pullRequestNumber: $number) } }
       } } } } }
     }
   }
@@ -33267,7 +33269,8 @@ _rb_judge_verdict_wait_check()
 			| ($c.statusCheckRollup.contexts // {}) as $r
 			| ([($r.nodes // [])[] | select(type == "object" and .__typename == "StatusContext" and .context == $ctx)] | first) as $v
 			| ($v.createdAt | ep) as $vt
-			| ([($r.nodes // [])[] | select(type == "object")
+			# Only required checks count (G2); a missing isRequired counts (fail-open).
+			| ([($r.nodes // [])[] | select(type == "object" and .isRequired != false)
 				| if .__typename == "CheckRun" then (.completedAt | ep)
 					elif .__typename == "StatusContext" and (((.context // "") | startswith("ai-review/")) | not) then (.createdAt | ep)
 					else null end
@@ -33388,16 +33391,17 @@ _dispatch_rb_judge_for_pr()
 		return 2
 	fi
 
+	if ! phase_cap_can_dispatch "ai:review-blocked" "dispatch_rb_judge" "${issue_num}"; then
+		return 3
+	fi
+
 	# Verdict-wait skip (issue #9991): the head already has a deferred verdict
 	# and nothing relevant changed since; a judge run would decide the same.
+	# After the read-only cap check, so a cap-deferred PR pays no read.
 	if declare -F _rb_judge_verdict_wait_check >/dev/null 2>&1 \
 		&& _rb_judge_verdict_wait_check "${pr_number}" "${STALL_IMPL_PR_JSON:-}"; then
 		echo "  ${log_prefix} Head already has a verdict waiting to merge (${RB_JUDGE_VERDICT_WAIT_REASON}); not re-running the judge."
 		return 4
-	fi
-
-	if ! phase_cap_can_dispatch "ai:review-blocked" "dispatch_rb_judge" "${issue_num}"; then
-		return 3
 	fi
 
 	echo "  ${log_prefix} Dispatching review_rb_judge_dispatch.yml..."

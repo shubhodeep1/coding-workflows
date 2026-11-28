@@ -485,6 +485,7 @@ review_sweep_verdict_wait_alert()
 				case "${vwa_rc}" in
 					0) vwa_blocker="no ruleset blocker found" ;;
 					1) vwa_blocker="${PR_RULESET_BLOCKERS_SUMMARY:-unknown}" ;;
+					2) vwa_blocker="ruleset read failed" ;;
 				esac
 			fi
 			;;
@@ -499,13 +500,24 @@ review_sweep_verdict_wait_alert()
 		vwa_msg_id="$(tg_send_msg "${vwa_msg}" "WARNING" 2>/dev/null || true)"
 		if [ -n "${vwa_msg_id}" ]; then
 			# The once-per-head marker, read back by the next tick's query.
-			if gh api -X POST "repos/${vwa_repo}/statuses/${vwa_sha}" -f state=success \
-				-f "context=ai-review/verdict-wait-alert" \
-				-f "description=Verdict-wait alert sent (waited ${vwa_waited}h)" >/dev/null 2>&1; then
-				vwa_outcome=sent
-			else
-				vwa_outcome=marker_failed
-			fi
+			# Retried (gh_retry when loaded, else up to 3 plain attempts): a lost
+			# marker would re-send the alert on the next tick.
+			local -a vwa_post=(gh)
+			local vwa_try
+			declare -F gh_retry >/dev/null 2>&1 && vwa_post=(gh_retry gh)
+			vwa_outcome=marker_failed
+			for vwa_try in 1 2 3; do
+				if "${vwa_post[@]}" api -X POST "repos/${vwa_repo}/statuses/${vwa_sha}" -f state=success \
+					-f "context=ai-review/verdict-wait-alert" \
+					-f "description=Verdict-wait alert sent (waited ${vwa_waited}h)" >/dev/null 2>&1; then
+					vwa_outcome=sent
+					break
+				fi
+				if [ "${vwa_post[0]}" = "gh_retry" ] || [ "${vwa_try}" -ge 3 ]; then
+					break
+				fi
+				sleep "${vwa_try}"
+			done
 		else
 			vwa_outcome=not_delivered
 		fi

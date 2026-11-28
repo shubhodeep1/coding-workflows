@@ -610,8 +610,18 @@ def test_judge_decided_head_is_not_labelled_needs_human(tmp_path: Path) -> None:
 	(tmp_path / "judge.json").write_text(json.dumps({"5": "SUCCESS"}), encoding="utf-8")
 	result = _run_sweep(tmp_path, prs=[_pr(5)], rounds=_rounds(**{"5": 40}), gate={"5": "PENDING"})
 	assert result.returncode == 0, result.stderr
-	assert "reason=review_round_cap" not in result.stdout
+	# The cap still bounds the dispatches; only the label and comment are skipped.
+	assert "reason=review_round_cap" in result.stdout and "label=skipped_verdict" in result.stdout
+	assert _dispatched(tmp_path) == []
 	assert not _lines(tmp_path, "labels.log") and not _lines(tmp_path, "comments.log")
+
+
+def test_judge_decided_head_under_the_cap_is_dispatched(tmp_path: Path) -> None:
+	(tmp_path / "judge.json").write_text(json.dumps({"5": "SUCCESS"}), encoding="utf-8")
+	result = _run_sweep(tmp_path, prs=[_pr(5)], rounds=_rounds(**{"5": 2}), gate={"5": "PENDING"})
+	assert result.returncode == 0, result.stderr
+	assert "reason=review_round_cap" not in result.stdout
+	assert _dispatched(tmp_path) == ["5"]
 
 
 def test_judge_decided_head_is_capped_with_the_switch_off(tmp_path: Path) -> None:
@@ -620,4 +630,5 @@ def test_judge_decided_head_is_capped_with_the_switch_off(tmp_path: Path) -> Non
 		env={"VERDICT_WAIT_DISPATCH_SKIP_ENABLED": "false"})
 	assert result.returncode == 0, result.stderr
 	assert "reason=review_round_cap" in result.stdout
+	assert "label=skipped_verdict" not in result.stdout
 	assert _dispatched(tmp_path) == []

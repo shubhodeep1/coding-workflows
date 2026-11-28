@@ -893,22 +893,31 @@ jobs:
             # full rounds, and labelling it would also stop the merge train's
             # final-CI resume. Without the head-gate annotation nothing is
             # capped. No API call here: the counts were read once before the loop.
-            # review_sweep_round_cap_applies (issue #9991) also exempts a head
-            # the review-blocked judge already decided; the inline rule is the
-            # fallback when the helper is missing.
+            # The cap (skip and infra backoff) keeps the inline rule above.
+            # review_sweep_round_cap_applies (issue #9991) only decides whether
+            # the capped PR is escalated (ai:needs-human + comment): a head the
+            # review-blocked judge already decided is still not dispatched past
+            # the cap, but it is not labelled (`label=skipped_verdict`).
             round_cap_row_applies=false
-            if type review_sweep_round_cap_applies >/dev/null 2>&1; then
-              review_sweep_round_cap_applies "${row}" && round_cap_row_applies=true
-            elif printf '%s' "${row}" | jq -e '(.head_gate_state // "") as $s | $s != "" and $s != "success"' >/dev/null 2>&1; then
+            if printf '%s' "${row}" | jq -e '(.head_gate_state // "") as $s | $s != "" and $s != "success"' >/dev/null 2>&1; then
               round_cap_row_applies=true
+            fi
+            round_cap_may_label=true
+            if type review_sweep_round_cap_applies >/dev/null 2>&1 && ! review_sweep_round_cap_applies "${row}"; then
+              round_cap_may_label=false
             fi
             if [ -n "${round_cap_counts_json}" ] && [ "${round_cap_row_applies}" = "true" ]; then
               round_cap_rounds="$(printf '%s' "${round_cap_counts_json}" | jq -r --arg n "${pr_number}" '(.[$n] // 0) | if type == "number" then . else 0 end' 2>/dev/null || echo 0)"
               if [[ "${round_cap_rounds}" =~ ^[0-9]+$ ]] && [ "${round_cap_rounds}" -ge "${round_cap_max}" ]; then
-                review_sweep_round_cap_escalate "${REPOSITORY}" "${pr_number}" "${round_cap_rounds}" "${round_cap_max}" "${round_cap_window_hours}" \
-                  "$(printf '%s' "${row}" | jq -c '.labels // []' 2>/dev/null || echo '[]')" "${DRY_RUN:-false}" \
-                  "$(printf '%s' "${row}" | jq -r '.head_sha // ""' 2>/dev/null || true)" || true
-                echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=review_round_cap rounds=${round_cap_rounds} max=${round_cap_max} window_hours=${round_cap_window_hours} head_ref=${head_ref}"
+                round_cap_label_note=""
+                if [ "${round_cap_may_label}" = "true" ]; then
+                  review_sweep_round_cap_escalate "${REPOSITORY}" "${pr_number}" "${round_cap_rounds}" "${round_cap_max}" "${round_cap_window_hours}" \
+                    "$(printf '%s' "${row}" | jq -c '.labels // []' 2>/dev/null || echo '[]')" "${DRY_RUN:-false}" \
+                    "$(printf '%s' "${row}" | jq -r '.head_sha // ""' 2>/dev/null || true)" || true
+                else
+                  round_cap_label_note=" label=skipped_verdict"
+                fi
+                echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=review_round_cap rounds=${round_cap_rounds} max=${round_cap_max} window_hours=${round_cap_window_hours} head_ref=${head_ref}${round_cap_label_note}"
                 skipped_round_cap=$((skipped_round_cap + 1))
                 continue
               fi
@@ -932,35 +941,39 @@ jobs:
             # One runs read per approved head about to be dispatched; any other
             # answer (in flight, success, none, read_failed) dispatches as before.
             # Verdict-wait skip (issue #9991): an approved head that only waits
-            # to merge (auto-merge on, or final CI pending) is not re-reviewed.
-            # No API call: the reason comes from the annotated snapshot.
+            # to merge (auto-merge on, ai:final-ci-merge-pending, or a final CI
+            # run in flight) is not re-reviewed. The label and auto-merge state
+            # come from the annotated snapshot; a labelled head needs no read.
+            # Any other approved head gets the one runs read first, so a failed
+            # final CI keeps its own skip and token (or, with
+            # SWEEP_SKIP_APPROVED_FINAL_CI_FAILED=false, its re-review) and is
+            # never logged as a verdict wait. Each skip follows its own switch.
             verdict_wait_reason=""
             if [ "${verdict_wait_on}" = "true" ] && type review_sweep_verdict_wait_reason >/dev/null 2>&1; then
               verdict_wait_reason="$(review_sweep_verdict_wait_reason "${row}")"
             fi
-            if [ -n "${verdict_wait_reason}" ]; then
-              echo "VERDICT_WAIT_SKIP source=sweep pr=${pr_number} head=$(printf '%s' "${row}" | jq -r '.head_sha // ""') reason=${verdict_wait_reason}"
-              echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=verdict_wait detail=${verdict_wait_reason} head_ref=${head_ref}"
-              type review_sweep_verdict_wait_alert >/dev/null 2>&1 && { review_sweep_verdict_wait_alert "${REPOSITORY}" "${row}" "${DRY_RUN:-false}" || true; }
-              skipped_verdict_wait=$((skipped_verdict_wait + 1))
-              continue
-            fi
-
-            if [ "${SWEEP_SKIP_APPROVED_FINAL_CI_FAILED:-true}" != "false" ] \
+            approved_final_ci=""
+            if [ "${verdict_wait_reason}" != "final_ci_merge_pending" ] \
+              && { [ "${SWEEP_SKIP_APPROVED_FINAL_CI_FAILED:-true}" != "false" ] || [ "${verdict_wait_on}" = "true" ]; } \
               && type review_sweep_final_ci_state >/dev/null 2>&1 \
               && printf '%s' "${row}" | jq -e '.head_gate_state == "success"' >/dev/null 2>&1; then
               approved_head_sha="$(printf '%s' "${row}" | jq -r '.head_sha // ""')"
               approved_final_ci="$(GH_TOKEN="${READ_TOKEN}" review_sweep_final_ci_state "${REPOSITORY}" "${approved_head_sha}" ci.yml)"
-              if [ "${approved_final_ci}" = "failure" ]; then
+              if [ "${approved_final_ci}" = "failure" ] && [ "${SWEEP_SKIP_APPROVED_FINAL_CI_FAILED:-true}" != "false" ]; then
                 echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=approved_head_final_ci_failed head_ref=${head_ref} head_sha=${approved_head_sha}"
                 skipped_approved_final_ci_failed=$((skipped_approved_final_ci_failed + 1))
                 continue
               fi
+            fi
+            if [ "${verdict_wait_on}" = "true" ] && [ "${approved_final_ci}" != "failure" ]; then
               # A final CI run queued or running on the approved head decides
               # the merge; a review run would not (issue #9991).
-              if [ "${approved_final_ci}" = "in_flight" ] && [ "${verdict_wait_on}" = "true" ]; then
-                echo "VERDICT_WAIT_SKIP source=sweep pr=${pr_number} head=${approved_head_sha} reason=final_ci_in_flight"
-                echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=verdict_wait detail=final_ci_in_flight head_ref=${head_ref}"
+              if [ -z "${verdict_wait_reason}" ] && [ "${approved_final_ci}" = "in_flight" ]; then
+                verdict_wait_reason="final_ci_in_flight"
+              fi
+              if [ -n "${verdict_wait_reason}" ]; then
+                echo "VERDICT_WAIT_SKIP source=sweep pr=${pr_number} head=$(printf '%s' "${row}" | jq -r '.head_sha // ""') reason=${verdict_wait_reason}"
+                echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=verdict_wait detail=${verdict_wait_reason} head_ref=${head_ref}"
                 type review_sweep_verdict_wait_alert >/dev/null 2>&1 && { review_sweep_verdict_wait_alert "${REPOSITORY}" "${row}" "${DRY_RUN:-false}" || true; }
                 skipped_verdict_wait=$((skipped_verdict_wait + 1))
                 continue

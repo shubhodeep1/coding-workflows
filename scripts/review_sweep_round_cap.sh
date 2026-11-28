@@ -135,12 +135,14 @@
 #   editor output keeps counting. No API call.
 
 # review_sweep_round_cap_applies <row json> (issue #9991)
-#   Returns 0 when the sweep may cap the row's PR: its head_gate_state is
-#   present and not `success` (the rule the sweep applied inline before) and
-#   its head carries no review-blocked judge verdict
-#   (judge_merge_pending_state != success, scripts/review_sweep_head_gate.sh).
-#   A judge-decided head waiting for the merge lease is not capped, so the
-#   wait cannot label it ai:needs-human (#9515, #9839). With
+#   Returns 0 when the sweep may escalate (label ai:needs-human + comment) a
+#   capped row's PR: its head_gate_state is present and not `success` (the
+#   rule the sweep caps by) and its head carries no review-blocked judge
+#   verdict (judge_merge_pending_state != success,
+#   scripts/review_sweep_head_gate.sh). The sweep still applies the cap's
+#   dispatch skip and infra backoff by the head-gate rule alone, so a
+#   judge-decided head waiting for the merge lease stays bounded but is not
+#   labelled ai:needs-human (#9515, #9839; logged `label=skipped_verdict`). With
 #   VERDICT_WAIT_DISPATCH_SKIP_ENABLED=false only the old rule applies.
 #   Dispatches the sweep skips for a verdict-wait reason create no run, so
 #   they never count as rounds. No API call.

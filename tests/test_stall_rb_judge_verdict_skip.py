@@ -196,6 +196,29 @@ def test_older_pipeline_checks_do_not_count_as_a_change(tmp_path: Path) -> None:
 	assert dispatches == []
 
 
+def test_non_required_checks_after_the_verdict_do_not_count(tmp_path: Path) -> None:
+	contexts = [_verdict(age=3600), {"__typename": "CheckRun", "completedAt": _iso(60), "isRequired": False},
+		{"__typename": "StatusContext", "context": "optional/lint", "state": "SUCCESS", "createdAt": _iso(60),
+		"description": "", "creator": {"login": "x"}, "isRequired": False}]
+	result, _, dispatches = _run(tmp_path, _pr_json(), graphql=_graphql(contexts))
+	assert "RC=4 REASON=lease_wait" in result.stdout, result.stdout + result.stderr
+	assert dispatches == []
+
+
+def test_required_check_after_the_verdict_dispatches(tmp_path: Path) -> None:
+	contexts = [_verdict(age=3600), {"__typename": "CheckRun", "completedAt": _iso(60), "isRequired": True}]
+	result, _, dispatches = _run(tmp_path, _pr_json(), graphql=_graphql(contexts))
+	assert "RC=0 REASON=checks_changed" in result.stdout, result.stdout + result.stderr
+	assert len(dispatches) == 1
+
+
+def test_cap_deferred_pr_pays_no_read(tmp_path: Path) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	body = _extract("_dispatch_rb_judge_for_pr")
+	assert body.index("phase_cap_can_dispatch") < body.index("_rb_judge_verdict_wait_check")
+	assert text.count("isRequired(pullRequestNumber: $number)") == 2
+
+
 def test_lease_granted_label_removed_dispatches_without_a_read(tmp_path: Path) -> None:
 	result, calls, dispatches = _run(tmp_path, _pr_json(labels=()), graphql=_graphql([_verdict()]))
 	assert "RC=0" in result.stdout, result.stdout + result.stderr

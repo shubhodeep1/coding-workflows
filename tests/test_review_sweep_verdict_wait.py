@@ -211,8 +211,41 @@ def test_approved_head_with_auto_merge_is_not_dispatched(tmp_path: Path) -> None
 	assert f"VERDICT_WAIT_SKIP source=sweep pr=1 head={_sha(1)} reason=auto_merge_waiting" in result.stdout
 	assert "AUTOFIX_SWEEP_SKIP pr=#1 reason=verdict_wait detail=auto_merge_waiting head_ref=feature/1" in result.stdout
 	assert "skipped_verdict_wait=1" in result.stdout
-	# The skip saves the final-CI runs read too.
-	assert not any(f"head_sha={_sha(1)}" in line for line in _lines(tmp_path, "calls.log"))
+	# The approved head's one final-CI runs read still runs, so a failed final
+	# CI keeps its own skip (no extra read: the head was read before as well).
+	assert sum(1 for line in _lines(tmp_path, "calls.log") if f"head_sha={_sha(1)}" in line) == 1
+
+
+def _failed_final_ci(n: int) -> dict:
+	return {_sha(n): {"workflow_runs": [{"path": ".github/workflows/ci.yml", "head_sha": _sha(n), "status": "completed",
+		"conclusion": "failure", "display_title": f"CI [pr:{n}]"}]}}
+
+
+def test_auto_merge_head_with_failed_final_ci_keeps_its_own_skip(tmp_path: Path) -> None:
+	result = _run(tmp_path, [_pr(1)], {1: {"gate": "SUCCESS", "auto_at": _iso(1)}}, final_ci=_failed_final_ci(1))
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == []
+	assert f"AUTOFIX_SWEEP_SKIP pr=#1 reason=approved_head_final_ci_failed head_ref=feature/1 head_sha={_sha(1)}" in result.stdout
+	assert "skipped_approved_final_ci_failed=1" in result.stdout
+	assert "VERDICT_WAIT_SKIP" not in result.stdout
+
+
+def test_failed_final_ci_switch_off_re_reviews_the_auto_merge_head(tmp_path: Path) -> None:
+	result = _run(tmp_path, [_pr(1)], {1: {"gate": "SUCCESS", "auto_at": _iso(1)}}, final_ci=_failed_final_ci(1),
+		env={"SWEEP_SKIP_APPROVED_FINAL_CI_FAILED": "false"})
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == ["1"]
+	assert "VERDICT_WAIT_SKIP" not in result.stdout
+
+
+def test_final_ci_in_flight_skip_does_not_depend_on_the_failed_ci_switch(tmp_path: Path) -> None:
+	runs = {_sha(1): {"workflow_runs": [{"path": ".github/workflows/ci.yml", "head_sha": _sha(1), "status": "in_progress",
+		"conclusion": None, "display_title": "CI [pr:1]"}]}}
+	result = _run(tmp_path, [_pr(1)], {1: {"gate": "SUCCESS"}}, final_ci=runs,
+		env={"SWEEP_SKIP_APPROVED_FINAL_CI_FAILED": "false"})
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == []
+	assert "reason=verdict_wait detail=final_ci_in_flight" in result.stdout
 
 
 def test_final_ci_merge_pending_label_is_not_dispatched(tmp_path: Path) -> None:
