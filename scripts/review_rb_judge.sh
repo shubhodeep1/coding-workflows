@@ -3195,6 +3195,9 @@ rb_judge_sync_merge_guard() {
 # (scripts/pr_checks_lib.sh; 1 GET). A closed PR gives back the merge lease
 # it holds. Returns 1 with PR_MERGE_OPEN_GUARD_REASON set on a refusal;
 # fails closed (pr_state_unavailable) when the library did not load.
+# Optional: $1 phase (default pre_merge); $2 the PR JSON the judge already
+# read (no call; used for the start check before the first freshness/lease
+# call and for the not-open exits).
 rb_judge_merge_open_guard() {
   if ! declare -F _pr_merge_open_guard >/dev/null 2>&1; then
     PR_MERGE_OPEN_GUARD_REASON="pr_state_unavailable"
@@ -3202,7 +3205,7 @@ rb_judge_merge_open_guard() {
     echo "::warning::scripts/pr_checks_lib.sh is not loaded; the merge of PR #${PR_NUMBER:-unknown} is refused (its live state cannot be verified)."
     return 1
   fi
-  if PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_open_guard "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" pre_merge; then
+  if PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_open_guard "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${1:-pre_merge}" "${2:-}"; then
     return 0
   fi
   if [ "${PR_MERGE_OPEN_GUARD_REASON:-}" = "pr_closed" ] && declare -F _pr_merge_open_guard_release_lease >/dev/null 2>&1; then
@@ -3531,7 +3534,11 @@ case "${RB_ACTION}" in
         # instead; other failures still fall through at once.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
-        if ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
+        if ! rb_judge_merge_open_guard start "${_pr_json:-}"; then
+          # Issue #10260: start check on the judge's own PR read (no call):
+          # a draft or moved head asks for no lease and gets no branch update.
+          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
+        elif ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
@@ -3629,6 +3636,10 @@ case "${RB_ACTION}" in
       if [ -z "${PR_STATE}" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Issue #10260: the PR read failed (rate limit, 5xx); nothing merges.
         echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} reason=pr_state_unavailable"
+      elif [ "${PR_STATE}" = "closed" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
+        # Issue #10260: closed before the judge's read; the guard on that read
+        # (no call) logs pr_closed/pr_merged and gives back a held lease.
+        rb_judge_merge_open_guard start "${_pr_json:-}" || true
       fi
       RB_MERGE_STATUS="not_open"
     fi
@@ -3670,7 +3681,11 @@ case "${RB_ACTION}" in
         # Best-effort merge — see note above re: gh_retry.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
-        if ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
+        if ! rb_judge_merge_open_guard start "${_rb_terminal_pr_json:-}"; then
+          # Issue #10260: start check on the judge's own PR read (no call):
+          # a draft or moved head asks for no lease and gets no branch update.
+          RB_MERGE_STATUS="$(rb_judge_merge_open_guard_status)"
+        elif ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
@@ -3758,6 +3773,10 @@ case "${RB_ACTION}" in
         if [ -z "${PR_STATE}" ]; then
           # Issue #10260: the PR read failed (rate limit, 5xx); nothing merges.
           echo "AUTOFIX_MERGE_SKIPPED pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} reason=pr_state_unavailable"
+        elif [ "${PR_STATE}" = "closed" ]; then
+          # Issue #10260: closed before the judge's read; the guard on that read
+          # (no call) logs pr_closed/pr_merged and gives back a held lease.
+          rb_judge_merge_open_guard start "${_rb_terminal_pr_json:-}" || true
         fi
         RB_MERGE_STATUS="not_open"
       fi

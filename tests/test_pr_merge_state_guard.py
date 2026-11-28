@@ -503,6 +503,17 @@ def test_rb_judge_guard_precedes_every_merge() -> None:
 		assert site < text.index('success "review-blocked judge approved"', site) < text.index("gh pr merge", site)
 		# The guard precedes the post-wait freshness/lease re-check (#10260).
 		assert site < text.index("_pr_base_fresh_for_merge", site) < text.index("gh pr merge", site)
+	# Start check on the judge's own read (no call) before the first
+	# freshness/lease call in the merge and terminal arms (#10260).
+	for var in ("_pr_json", "_rb_terminal_pr_json"):
+		start = text.index(f'if ! rb_judge_merge_open_guard start "${{{var}:-}}"; then')
+		first_fresh = text.index("PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge", start)
+		assert first_fresh < text.index("_pr_wait_for_required_checks", start)
+		assert start < first_fresh < text.index("elif ! rb_judge_merge_open_guard; then", start)
+	# A PR already closed at the judge's read logs pr_closed/pr_merged on
+	# that read (no call) in both not-open exits.
+	assert text.count('rb_judge_merge_open_guard start "${_pr_json:-}" || true') == 1
+	assert text.count('rb_judge_merge_open_guard start "${_rb_terminal_pr_json:-}" || true') == 1
 	sync = text.index('[ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_merge_open_guard; then')
 	assert sync < text.index("rb_judge_followup_merge_guard sync", sync) < text.index("_match_head_arg=(--match-head-commit", sync)
 	assert "judge_skip_reason=pr_not_open" in text[sync:sync + 1500]

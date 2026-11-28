@@ -6,7 +6,9 @@ at the moment of the request, so after the close the list is empty and the
 linked-only filter cancelled nothing. tele-funtoken-msg-scoring PR #5800's
 review run (gate done, merge job queued) kept going and merged the closed PR.
 The step now also matches unlinked runs on the closed head branch that ran on
-the PR's head repository and started at or after the PR was opened.
+the PR's head repository and started at or after the PR was opened and before
+it was closed (runs the close itself starts are left alone). A merged close
+keeps the linked-only match, so the run that merged finishes its work.
 """
 
 from __future__ import annotations
