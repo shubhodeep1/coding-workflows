@@ -215,6 +215,35 @@ def test_cache_unavailable_falls_back_to_live_reads(tmp_path: Path) -> None:
 	assert res.returncode == 0 and json.loads(res.stdout)["number"] == 7, res.stderr
 
 
+def test_cached_read_records_which_path_served_it(tmp_path: Path) -> None:
+	"""Issue #10176: GH_PR_CACHED_READ_SOURCE_FILE names the serving path."""
+	env = _setup(tmp_path)
+	note = tmp_path / "note"
+	script = f'GH_PR_CACHED_READ_SOURCE_FILE="{note}" gh_pr_cached_read issue_comments o/r 7 {SHA_A} >/dev/null'
+	assert _run(env, script).returncode == 0
+	miss_token, miss_epoch = note.read_text().split()
+	assert miss_token == "cache_miss" and miss_epoch.isdigit()
+	assert _run(env, script).returncode == 0
+	# A hit carries the epoch the cached entry was fetched at.
+	assert note.read_text().split() == ["cache_hit", miss_epoch]
+	assert _run({**env, "REVIEW_RUN_READ_CACHE_ENABLED": "false"}, script).returncode == 0
+	assert note.read_text().split()[0] == "fallback"
+	# Unset: nothing is written.
+	note.unlink()
+	assert _run(env, f"gh_pr_cached_read issue_comments o/r 7 {SHA_A} >/dev/null").returncode == 0
+	assert not note.exists()
+
+
+def test_unwritable_source_note_is_silent_and_fail_open(tmp_path: Path) -> None:
+	"""Issue #10176: a sidecar path that cannot be opened leaves no stderr line."""
+	env = _setup(tmp_path)
+	note = tmp_path / "missing_dir" / "note"
+	res = _run(env, f'GH_PR_CACHED_READ_SOURCE_FILE="{note}" gh_pr_cached_read issue_comments o/r 7 {SHA_A}')
+	assert res.returncode == 0 and res.stderr == "", res.stderr
+	assert json.loads(res.stdout) == [{"id": 1}, {"id": 2}]
+	assert not note.exists()
+
+
 def test_failed_live_fetch_returns_1_with_no_stdout_and_caches_nothing(tmp_path: Path) -> None:
 	env = _setup(tmp_path)
 	(Path(env["FAKE_DIR"]) / "fail").write_text("")
@@ -340,6 +369,9 @@ def test_workflow_wires_cache_env_eviction_and_summary(tmp_path: Path) -> None:
 	check_step = text.split("- name: Check PR state (defense-in-depth)", 1)[1].split("- name:", 1)[0]
 	assert 'pr_meta="$(gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" || echo \'null\')"' in check_step
 	push_step = text.split("- name: Push all pending commits", 1)[1].split("\n      - name:", 1)[0]
+	# The step body lives in its step script (moved for the workflow size guard).
+	assert "review_autofix_step_push_pending_commits.sh" in push_step
+	push_step = (REPO_ROOT / "scripts" / "review_autofix_step_push_pending_commits.sh").read_text()
 	assert 'gh_pr_cache_evict "${GITHUB_REPOSITORY}" "${PR_NUMBER:-}"' in push_step
 	end_step = text.split("- name: Record GH_PAT budget at codex-agent end", 1)[1].split("\n      - name:", 1)[0]
 	summary = next(line.strip() for line in end_step.splitlines() if "GH_PR_READ_CACHE hits=" in line)

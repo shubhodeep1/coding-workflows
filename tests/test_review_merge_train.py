@@ -3380,8 +3380,9 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 	calls = [line.strip() for line in body.splitlines() if "_merge_lease_metric " in line and "declare -F" not in line]
 	# 9 Phase 1 calls plus Phase 2's skipped (skip_head_unchanged, ineligible)
 	# and no_waiter reason=no_eligible_waiter, plus #9983's skipped
-	# skip_head_unchanged for a candidate still held by a soft skip entry.
-	assert len(calls) == 13, calls
+	# skip_head_unchanged for a candidate still held by a soft skip entry,
+	# plus #10098's skipped final_ci_pending|not_mergeable (ready-first grant).
+	assert len(calls) == 14, calls
 	for call in calls:
 		assert call.startswith('[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric '), call
 		assert call.endswith("|| true"), call
@@ -3393,7 +3394,7 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 		# queue_len= to the grant lines; the existing fields are unchanged.
 		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason} held_s=${tick_rel_held:--} merged=${tick_merged}"',
 		'_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"',
-		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}${tick_gate_field}"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=${tick_grant_reason:-first_in_queue}${tick_queue_len_field}${tick_gate_field}"',
 		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}${tick_gate_field}"',
 		'_mt_warn "MERGE_LEASE mode=tick outcome=unavailable reason=refs_list_failed (no lease freed or granted this tick)"',
 		'_mt_warn "MERGE_LEASE base=${tick_base} mode=tick outcome=unavailable reason=read_failed"',
@@ -3508,12 +3509,12 @@ def test_merge_lease_tick_phase_5_is_guarded_and_keeps_the_single_holder_lines()
 	assert ('if [ "${tick_p5_lib}" = 1 ] && { [ "${tick_max_holders}" -gt 1 ] || [ "${MERGE_LEASE_HOLDER_COUNT:-0}" -gt 1 ]; }; then'
 		in body)
 	assert body.index("_mt_merge_lease_tick_multi ") < body.index('if [ "${MERGE_LEASE_STATE}" = "held" ]; then')
-	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}${tick_gate_field}"' in body
+	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=${tick_grant_reason:-first_in_queue}${tick_queue_len_field}${tick_gate_field}"' in body
 	assert " holders=" not in body
 	multi_start = text.index("_mt_merge_lease_tick_multi()\n{")
 	multi = text[multi_start:text.index("\n}\n", multi_start)]
 	assert "outcome=skipped reason=holder_shares_paths blocker=${tm_blocker}" in multi
-	assert "outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}" in multi
+	assert "outcome=granted reason=${tm_grant_reason:-first_in_queue}${tm_queue_len_field} holders=${tm_count}" in multi
 	assert multi.count("gh_retry _safe_gh_jq") == 1
 
 
